@@ -3,8 +3,11 @@
 //! Most types are re-exported at the crate root for convenience. See the
 //! [crate-level documentation](crate) for usage examples.
 
+pub mod bytecode;
+pub mod compiler;
 pub(crate) mod control;
 pub(crate) mod executor;
+pub mod flat_executor;
 pub(crate) mod frame;
 pub mod host;
 pub mod imports;

@@ -233,6 +233,47 @@ fn bench_primes(c: &mut Criterion) {
     group.finish();
 }
 
+// -- Flat bytecode executor benchmarks --
+
+fn compile_func(module: &Module, func_index: usize) -> krasm::runtime::bytecode::CompiledFunction {
+    let func = &module.code.code[func_index];
+    let ftype_idx = module.functions.functions[func_index].ftype_index;
+    let ftype = module.types.get(ftype_idx).unwrap();
+    krasm::runtime::compiler::compile(&func.body, ftype.parameters.len() as u32)
+}
+
+fn bench_flat_noop_loop(c: &mut Criterion) {
+    let module = load_module("noop_loop");
+    let compiled = compile_func(&module, 0);
+
+    let mut group = c.benchmark_group("flat_dispatch");
+    for iterations in [1_000, 10_000, 100_000, 1_000_000] {
+        group.bench_with_input(BenchmarkId::new("noop_loop", iterations), &iterations, |b, &n| {
+            b.iter(|| {
+                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)]).unwrap();
+                black_box(result)
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_flat_fib_iterative(c: &mut Criterion) {
+    let module = load_module("fib_iterative");
+    let compiled = compile_func(&module, 0);
+
+    let mut group = c.benchmark_group("flat_compute");
+    for n in [10, 20, 30, 40, 46] {
+        group.bench_with_input(BenchmarkId::new("fib_iterative", n), &n, |b, &n| {
+            b.iter(|| {
+                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)]).unwrap();
+                black_box(result)
+            });
+        });
+    }
+    group.finish();
+}
+
 // Run verification before benchmarks
 fn verify_and_bench(c: &mut Criterion) {
     verify_modules();
@@ -241,6 +282,8 @@ fn verify_and_bench(c: &mut Criterion) {
     bench_fib_recursive(c);
     bench_memcpy(c);
     bench_primes(c);
+    bench_flat_noop_loop(c);
+    bench_flat_fib_iterative(c);
 }
 
 criterion_group!(benches, verify_and_bench);
