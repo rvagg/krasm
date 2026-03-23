@@ -1,6 +1,6 @@
 [package]
 name = "krasm"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Rod Vagg <r@va.gg>"]
 edition = "2024"
 description = "WebAssembly 2.0 runtime, parser, and toolkit with SIMD and WASI support"
