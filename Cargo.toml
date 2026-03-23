@@ -26,7 +26,7 @@ default = ["cli"]
 cli = ["clap"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"], optional = true }
+clap = { version = "4.6", features = ["derive"], optional = true }
 byteorder = "1.5"
 hex = "0.4"
 once_cell = "1.21"
