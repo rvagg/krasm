@@ -355,6 +355,13 @@ impl<'a> CompileContext<'a> {
                 self.emit(Op::LocalTee { index: *local_idx });
             }
 
+            InstructionKind::GlobalGet { global_idx } => {
+                self.emit(Op::GlobalGet { index: *global_idx });
+            }
+            InstructionKind::GlobalSet { global_idx } => {
+                self.emit(Op::GlobalSet { index: *global_idx });
+            }
+
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
             InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),

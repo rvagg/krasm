@@ -59,6 +59,16 @@ pub enum Op {
         index: u32,
     },
 
+    // -- Global variables --
+    /// Push the value of global at `index` (module-local) onto the stack.
+    GlobalGet {
+        index: u32,
+    },
+    /// Pop the stack and store into global at `index` (module-local).
+    GlobalSet {
+        index: u32,
+    },
+
     // -- Control flow --
     // Branch ops carry stack cleanup metadata: `arity` is the number of
     // values to keep (block results or loop params), `stack_depth` is
@@ -121,8 +131,10 @@ impl Op {
             Op::LocalGet { .. } => 1,
             Op::LocalSet { .. } => -1,
             Op::LocalTee { .. } => 0,
-            Op::Br { .. } => 0,      // unreachable after, depth irrelevant
-            Op::BrIf { .. } => -1,   // pops condition
+            Op::GlobalGet { .. } => 1,
+            Op::GlobalSet { .. } => -1,
+            Op::Br { .. } => 0,       // unreachable after, depth irrelevant
+            Op::BrIf { .. } => -1,    // pops condition
             Op::BrTable { .. } => -1, // pops index
             Op::Return | Op::End | Op::Unreachable => 0,
             Op::Nop | Op::Label { .. } => 0,
@@ -181,6 +193,8 @@ impl fmt::Display for Op {
             Op::LocalGet { index } => write!(f, "local.get {index}"),
             Op::LocalSet { index } => write!(f, "local.set {index}"),
             Op::LocalTee { index } => write!(f, "local.tee {index}"),
+            Op::GlobalGet { index } => write!(f, "global.get {index}"),
+            Op::GlobalSet { index } => write!(f, "global.set {index}"),
             Op::Br {
                 target,
                 arity,

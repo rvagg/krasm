@@ -12,6 +12,7 @@ use super::RuntimeError;
 use super::bytecode::{CompiledFunction, Op};
 use super::ops;
 use super::stack::Stack;
+use super::store::{GlobalAddr, Resources};
 use super::value::Value;
 
 /// Perform stack cleanup for a branch: keep `arity` values from the top,
@@ -33,10 +34,22 @@ fn branch_cleanup(stack: &mut Stack, arity: u16, stack_depth: u32) -> Result<(),
     Ok(())
 }
 
+/// Execution context providing access to store resources and address maps.
+/// Passed to `execute_flat` when the function uses globals or memory.
+pub struct ExecContext<'a> {
+    pub resources: &'a mut Resources,
+    pub global_addrs: &'a [GlobalAddr],
+}
+
 /// Execute a compiled function with the given arguments.
 ///
-/// Returns the function's result values.
-pub fn execute_flat(func: &CompiledFunction, args: &[Value]) -> Result<Vec<Value>, RuntimeError> {
+/// `ctx` provides access to globals and memory. Pass `None` for pure
+/// computation that only uses locals and the operand stack.
+pub fn execute_flat(
+    func: &CompiledFunction,
+    args: &[Value],
+    mut ctx: Option<&mut ExecContext<'_>>,
+) -> Result<Vec<Value>, RuntimeError> {
     let mut stack = Stack::new();
 
     // Initialise locals: parameters first, then zero-initialised locals.
@@ -154,6 +167,42 @@ pub fn execute_flat(func: &CompiledFunction, args: &[Value]) -> Result<Vec<Value
                 pc += 1;
             }
 
+            // -- Global variables --
+            Op::GlobalGet { index } => {
+                let c = ctx.as_mut().ok_or(RuntimeError::Trap(
+                    "global access requires execution context".to_string(),
+                ))?;
+                let addr = c
+                    .global_addrs
+                    .get(*index as usize)
+                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
+                let value = c
+                    .resources
+                    .globals
+                    .get(addr.0)
+                    .copied()
+                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
+                stack.push(value);
+                pc += 1;
+            }
+            Op::GlobalSet { index } => {
+                let val = stack.pop()?;
+                let c = ctx.as_mut().ok_or(RuntimeError::Trap(
+                    "global access requires execution context".to_string(),
+                ))?;
+                let addr = c
+                    .global_addrs
+                    .get(*index as usize)
+                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
+                let slot = c
+                    .resources
+                    .globals
+                    .get_mut(addr.0)
+                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
+                *slot = val;
+                pc += 1;
+            }
+
             // -- Control flow --
             // These mutate pc directly; no ops function.
             Op::Br {
@@ -224,7 +273,7 @@ mod tests {
         let ftype_idx = module.functions.functions[0].ftype_index;
         let ftype = module.types.get(ftype_idx).expect("type not found");
         let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
-        execute_flat(&compiled, args).expect("execution failed")
+        execute_flat(&compiled, args, None).expect("execution failed")
     }
 
     #[test]
@@ -429,5 +478,36 @@ mod tests {
         );
         // index 99 out of bounds -> default (label 0, inner block)
         assert_eq!(result, vec![Value::I32(10)]);
+    }
+
+    #[test]
+    fn global_get_set() {
+        let source = "(module
+            (global $g (mut i32) (i32.const 10))
+            (func (result i32)
+                (global.set $g (i32.add (global.get $g) (i32.const 5)))
+                (global.get $g)))";
+        let module = wat::parse(source).expect("WAT parse failed");
+        let func = &module.code.code[0];
+        let ftype_idx = module.functions.functions[0].ftype_index;
+        let ftype = module.types.get(ftype_idx).expect("type not found");
+        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+
+        // Set up resources with one global initialised to 10
+        let mut resources = Resources {
+            memories: Vec::new(),
+            tables: Vec::new(),
+            globals: vec![Value::I32(10)],
+        };
+        let global_addrs = vec![GlobalAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &global_addrs,
+        };
+
+        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(15)]);
+        // Global should be mutated in resources
+        assert_eq!(ctx.resources.globals[0], Value::I32(15));
     }
 }

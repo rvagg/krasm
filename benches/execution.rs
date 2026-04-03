@@ -250,7 +250,7 @@ fn bench_flat_noop_loop(c: &mut Criterion) {
     for iterations in [1_000, 10_000, 100_000, 1_000_000] {
         group.bench_with_input(BenchmarkId::new("noop_loop", iterations), &iterations, |b, &n| {
             b.iter(|| {
-                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)]).unwrap();
+                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)], None).unwrap();
                 black_box(result)
             });
         });
@@ -266,7 +266,7 @@ fn bench_flat_fib_iterative(c: &mut Criterion) {
     for n in [10, 20, 30, 40, 46] {
         group.bench_with_input(BenchmarkId::new("fib_iterative", n), &n, |b, &n| {
             b.iter(|| {
-                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)]).unwrap();
+                let result = krasm::runtime::flat_executor::execute_flat(&compiled, &[Value::I32(n)], None).unwrap();
                 black_box(result)
             });
         });
