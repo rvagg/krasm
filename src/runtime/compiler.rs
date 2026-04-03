@@ -362,6 +362,89 @@ impl<'a> CompileContext<'a> {
                 self.emit(Op::GlobalSet { index: *global_idx });
             }
 
+            // Memory
+            InstructionKind::I32Load { memarg } => {
+                self.emit(Op::I32Load(*memarg));
+            }
+            InstructionKind::I32Load8S { memarg } => {
+                self.emit(Op::I32Load8S(*memarg));
+            }
+            InstructionKind::I32Load8U { memarg } => {
+                self.emit(Op::I32Load8U(*memarg));
+            }
+            InstructionKind::I32Load16S { memarg } => {
+                self.emit(Op::I32Load16S(*memarg));
+            }
+            InstructionKind::I32Load16U { memarg } => {
+                self.emit(Op::I32Load16U(*memarg));
+            }
+            InstructionKind::I64Load { memarg } => {
+                self.emit(Op::I64Load(*memarg));
+            }
+            InstructionKind::I64Load8S { memarg } => {
+                self.emit(Op::I64Load8S(*memarg));
+            }
+            InstructionKind::I64Load8U { memarg } => {
+                self.emit(Op::I64Load8U(*memarg));
+            }
+            InstructionKind::I64Load16S { memarg } => {
+                self.emit(Op::I64Load16S(*memarg));
+            }
+            InstructionKind::I64Load16U { memarg } => {
+                self.emit(Op::I64Load16U(*memarg));
+            }
+            InstructionKind::I64Load32S { memarg } => {
+                self.emit(Op::I64Load32S(*memarg));
+            }
+            InstructionKind::I64Load32U { memarg } => {
+                self.emit(Op::I64Load32U(*memarg));
+            }
+            InstructionKind::F32Load { memarg } => {
+                self.emit(Op::F32Load(*memarg));
+            }
+            InstructionKind::F64Load { memarg } => {
+                self.emit(Op::F64Load(*memarg));
+            }
+            InstructionKind::I32Store { memarg } => {
+                self.emit(Op::I32Store(*memarg));
+            }
+            InstructionKind::I32Store8 { memarg } => {
+                self.emit(Op::I32Store8(*memarg));
+            }
+            InstructionKind::I32Store16 { memarg } => {
+                self.emit(Op::I32Store16(*memarg));
+            }
+            InstructionKind::I64Store { memarg } => {
+                self.emit(Op::I64Store(*memarg));
+            }
+            InstructionKind::I64Store8 { memarg } => {
+                self.emit(Op::I64Store8(*memarg));
+            }
+            InstructionKind::I64Store16 { memarg } => {
+                self.emit(Op::I64Store16(*memarg));
+            }
+            InstructionKind::I64Store32 { memarg } => {
+                self.emit(Op::I64Store32(*memarg));
+            }
+            InstructionKind::F32Store { memarg } => {
+                self.emit(Op::F32Store(*memarg));
+            }
+            InstructionKind::F64Store { memarg } => {
+                self.emit(Op::F64Store(*memarg));
+            }
+            InstructionKind::MemorySize => {
+                self.emit(Op::MemorySize);
+            }
+            InstructionKind::MemoryGrow => {
+                self.emit(Op::MemoryGrow);
+            }
+            InstructionKind::MemoryCopy => {
+                self.emit(Op::MemoryCopy);
+            }
+            InstructionKind::MemoryFill => {
+                self.emit(Op::MemoryFill);
+            }
+
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
             InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),

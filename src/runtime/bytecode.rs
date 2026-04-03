@@ -5,6 +5,7 @@
 //! flat executor (`flat_executor.rs`) walks with a program counter. Branch
 //! targets are absolute indices into the bytecode array.
 
+use crate::parser::instruction::MemArg;
 use std::fmt;
 
 /// Branch target with stack cleanup metadata.
@@ -68,6 +69,37 @@ pub enum Op {
     GlobalSet {
         index: u32,
     },
+
+    // -- Memory --
+    // Load ops pop an i32 address, apply offset from MemArg, push the loaded value.
+    I32Load(MemArg),
+    I32Load8S(MemArg),
+    I32Load8U(MemArg),
+    I32Load16S(MemArg),
+    I32Load16U(MemArg),
+    I64Load(MemArg),
+    I64Load8S(MemArg),
+    I64Load8U(MemArg),
+    I64Load16S(MemArg),
+    I64Load16U(MemArg),
+    I64Load32S(MemArg),
+    I64Load32U(MemArg),
+    F32Load(MemArg),
+    F64Load(MemArg),
+    // Store ops pop a value and an i32 address, apply offset, write to memory.
+    I32Store(MemArg),
+    I32Store8(MemArg),
+    I32Store16(MemArg),
+    I64Store(MemArg),
+    I64Store8(MemArg),
+    I64Store16(MemArg),
+    I64Store32(MemArg),
+    F32Store(MemArg),
+    F64Store(MemArg),
+    MemorySize,
+    MemoryGrow,
+    MemoryCopy,
+    MemoryFill,
 
     // -- Control flow --
     // Branch ops carry stack cleanup metadata: `arity` is the number of
@@ -133,6 +165,21 @@ impl Op {
             Op::LocalTee { .. } => 0,
             Op::GlobalGet { .. } => 1,
             Op::GlobalSet { .. } => -1,
+            // Loads: pop addr, push value = 0
+            Op::I32Load(_) | Op::I32Load8S(_) | Op::I32Load8U(_) => 0,
+            Op::I32Load16S(_) | Op::I32Load16U(_) => 0,
+            Op::I64Load(_) | Op::I64Load8S(_) | Op::I64Load8U(_) => 0,
+            Op::I64Load16S(_) | Op::I64Load16U(_) => 0,
+            Op::I64Load32S(_) | Op::I64Load32U(_) => 0,
+            Op::F32Load(_) | Op::F64Load(_) => 0,
+            // Stores: pop value + addr = -2
+            Op::I32Store(_) | Op::I32Store8(_) | Op::I32Store16(_) => -2,
+            Op::I64Store(_) | Op::I64Store8(_) | Op::I64Store16(_) | Op::I64Store32(_) => -2,
+            Op::F32Store(_) | Op::F64Store(_) => -2,
+            Op::MemorySize => 1,      // push page count
+            Op::MemoryGrow => 0,      // pop pages, push old size
+            Op::MemoryCopy => -3,     // pop dest, src, len
+            Op::MemoryFill => -3,     // pop dest, val, len
             Op::Br { .. } => 0,       // unreachable after, depth irrelevant
             Op::BrIf { .. } => -1,    // pops condition
             Op::BrTable { .. } => -1, // pops index
@@ -195,6 +242,33 @@ impl fmt::Display for Op {
             Op::LocalTee { index } => write!(f, "local.tee {index}"),
             Op::GlobalGet { index } => write!(f, "global.get {index}"),
             Op::GlobalSet { index } => write!(f, "global.set {index}"),
+            Op::I32Load(m) => write!(f, "i32.load offset={}", m.offset),
+            Op::I32Load8S(m) => write!(f, "i32.load8_s offset={}", m.offset),
+            Op::I32Load8U(m) => write!(f, "i32.load8_u offset={}", m.offset),
+            Op::I32Load16S(m) => write!(f, "i32.load16_s offset={}", m.offset),
+            Op::I32Load16U(m) => write!(f, "i32.load16_u offset={}", m.offset),
+            Op::I64Load(m) => write!(f, "i64.load offset={}", m.offset),
+            Op::I64Load8S(m) => write!(f, "i64.load8_s offset={}", m.offset),
+            Op::I64Load8U(m) => write!(f, "i64.load8_u offset={}", m.offset),
+            Op::I64Load16S(m) => write!(f, "i64.load16_s offset={}", m.offset),
+            Op::I64Load16U(m) => write!(f, "i64.load16_u offset={}", m.offset),
+            Op::I64Load32S(m) => write!(f, "i64.load32_s offset={}", m.offset),
+            Op::I64Load32U(m) => write!(f, "i64.load32_u offset={}", m.offset),
+            Op::F32Load(m) => write!(f, "f32.load offset={}", m.offset),
+            Op::F64Load(m) => write!(f, "f64.load offset={}", m.offset),
+            Op::I32Store(m) => write!(f, "i32.store offset={}", m.offset),
+            Op::I32Store8(m) => write!(f, "i32.store8 offset={}", m.offset),
+            Op::I32Store16(m) => write!(f, "i32.store16 offset={}", m.offset),
+            Op::I64Store(m) => write!(f, "i64.store offset={}", m.offset),
+            Op::I64Store8(m) => write!(f, "i64.store8 offset={}", m.offset),
+            Op::I64Store16(m) => write!(f, "i64.store16 offset={}", m.offset),
+            Op::I64Store32(m) => write!(f, "i64.store32 offset={}", m.offset),
+            Op::F32Store(m) => write!(f, "f32.store offset={}", m.offset),
+            Op::F64Store(m) => write!(f, "f64.store offset={}", m.offset),
+            Op::MemorySize => write!(f, "memory.size"),
+            Op::MemoryGrow => write!(f, "memory.grow"),
+            Op::MemoryCopy => write!(f, "memory.copy"),
+            Op::MemoryFill => write!(f, "memory.fill"),
             Op::Br {
                 target,
                 arity,
