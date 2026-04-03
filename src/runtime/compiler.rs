@@ -11,43 +11,106 @@
 //!   (forward jump, patched after the body is emitted)
 //! - For loops: the target is the loop's first body instruction
 //!   (backward jump, known at entry)
+//!
+//! Branch ops carry stack cleanup metadata (arity + stack_depth) so the flat
+//! executor can properly handle multi-value blocks without a runtime label
+//! stack. The compiler tracks stack depth during emission to compute these
+//! values.
 
-use super::bytecode::{CompiledFunction, Op};
-use crate::parser::instruction::InstructionKind;
+use super::bytecode::{BrTarget, CompiledFunction, Op};
+use crate::parser::instruction::{BlockType, InstructionKind};
+use crate::parser::module::FunctionType;
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
 
-/// A label on the compile-time stack, tracking where branches should go.
+/// A forward branch whose target is not yet known at the time of emission.
+///
+/// When the compiler emits a branch into a block, the block's end position
+/// hasn't been determined yet. The branch is emitted with `target: 0` as a
+/// placeholder, and a Fixup is recorded in the block's label. When the block
+/// ends and we know the target position, all accumulated fixups are applied
+/// to write the real target into the emitted ops.
+///
+/// Loop labels don't need fixups because their target (the loop start) is
+/// already known when the branch is emitted.
+enum Fixup {
+    /// A Br, BrIf, or Label op at this position needs its target patched.
+    Branch(usize),
+    /// A BrTable op at `op_pos` needs one of its entries patched.
+    /// `Some(i)` patches `targets[i].pc`, `None` patches `default.pc`.
+    TableEntry { op_pos: usize, index: Option<usize> },
+}
+
+/// A label on the compile-time stack, tracking where branches should go
+/// and how to clean up the stack on branch.
 enum Label {
     /// Block/if: branch goes to end (forward). Target unknown until body is
     /// emitted, so we record the positions that need patching.
-    Block { fixups: Vec<usize> },
+    Block {
+        fixups: Vec<Fixup>,
+        stack_depth: u32,
+        arity: u16,
+    },
     /// Loop: branch goes to start (backward). Target is known at entry.
-    Loop { start: u32 },
+    Loop { start: u32, stack_depth: u32, arity: u16 },
+}
+
+impl Label {
+    fn stack_depth(&self) -> u32 {
+        match self {
+            Label::Block { stack_depth, .. } | Label::Loop { stack_depth, .. } => *stack_depth,
+        }
+    }
+
+    fn arity(&self) -> u16 {
+        match self {
+            Label::Block { arity, .. } | Label::Loop { arity, .. } => *arity,
+        }
+    }
+}
+
+/// Resolve a BlockType to (param_count, result_count).
+fn block_signature(block_type: &BlockType, types: &[FunctionType]) -> (u16, u16) {
+    match block_type {
+        BlockType::Empty => (0, 0),
+        BlockType::Value(_) => (0, 1),
+        BlockType::FuncType(idx) => {
+            if let Some(ft) = types.get(*idx as usize) {
+                (ft.parameters.len() as u16, ft.return_types.len() as u16)
+            } else {
+                (0, 0)
+            }
+        }
+    }
 }
 
 /// Compile a structured function into flat bytecode.
-pub fn compile(func: &StructuredFunction, param_count: u32) -> CompiledFunction {
+///
+/// `types` is the module's type section, needed to resolve `BlockType::FuncType`
+/// for multi-value blocks.
+pub fn compile(func: &StructuredFunction, param_count: u32, types: &[FunctionType]) -> CompiledFunction {
     let mut ctx = CompileContext {
         ops: Vec::new(),
         labels: Vec::new(),
+        depth: 0,
+        types,
     };
 
-    // The function body itself acts as an implicit block: `br` at depth equal
-    // to the full label stack depth means return. We model this as a Block
-    // label whose fixups would target the End instruction, but since it's the
-    // outermost scope, branches to it become Return ops instead. We handle
-    // this specially in emit_br.
-    ctx.labels.push(Label::Block { fixups: Vec::new() });
+    // The function body itself acts as an implicit block. Branches at full
+    // depth become Return ops (handled in emit_br). The function label's
+    // arity is the result count, and stack_depth is 0 (nothing below it).
+    ctx.labels.push(Label::Block {
+        fixups: Vec::new(),
+        stack_depth: 0,
+        arity: func.return_types.len() as u16,
+    });
 
     ctx.emit_body(&func.body);
 
-    // Any fixups on the implicit function block point past the end.
-    // These should have been emitted as Return, so there shouldn't be
-    // pending fixups, but patch them to the End just in case.
+    // Patch any fixups on the implicit function block.
     let end_pos = ctx.ops.len() as u32;
-    if let Some(Label::Block { fixups }) = ctx.labels.pop() {
-        for pos in fixups {
-            ctx.patch_target(pos, end_pos);
+    if let Some(Label::Block { fixups, .. }) = ctx.labels.pop() {
+        for fixup in &fixups {
+            ctx.apply_fixup(fixup, end_pos);
         }
     }
 
@@ -61,31 +124,55 @@ pub fn compile(func: &StructuredFunction, param_count: u32) -> CompiledFunction 
     }
 }
 
-struct CompileContext {
+struct CompileContext<'a> {
     ops: Vec<Op>,
     /// Compile-time label stack. Innermost label is last.
     labels: Vec<Label>,
+    /// Tracked stack depth (number of values on the operand stack).
+    depth: u32,
+    /// Module type section for resolving BlockType::FuncType.
+    types: &'a [FunctionType],
 }
 
-impl CompileContext {
+impl<'a> CompileContext<'a> {
     /// Current emit position (index of the next op to be pushed).
     fn pos(&self) -> u32 {
         self.ops.len() as u32
     }
 
-    /// Emit an op and return its position.
+    /// Emit an op, adjust stack depth, and return its position.
     fn emit(&mut self, op: Op) -> usize {
         let pos = self.ops.len();
+        self.depth = (self.depth as i32 + op.stack_delta()) as u32;
         self.ops.push(op);
         pos
     }
 
-    /// Patch the target of a branch op at the given position.
+    /// Patch the target pc of a Br, BrIf, or Label at a known position.
     fn patch_target(&mut self, pos: usize, target: u32) {
         match &mut self.ops[pos] {
-            Op::Br { target: t } | Op::BrIf { target: t } => *t = target,
+            Op::Br { target: t, .. } | Op::BrIf { target: t, .. } => *t = target,
             Op::Label { end_target } => *end_target = target,
             _ => {}
+        }
+    }
+
+    /// Apply a fixup, setting the target pc to `target`.
+    fn apply_fixup(&mut self, fixup: &Fixup, target: u32) {
+        match fixup {
+            Fixup::Branch(pos) => match &mut self.ops[*pos] {
+                Op::Br { target: t, .. } | Op::BrIf { target: t, .. } => *t = target,
+                Op::Label { end_target } => *end_target = target,
+                _ => {}
+            },
+            Fixup::TableEntry { op_pos, index } => {
+                if let Op::BrTable { targets, default } = &mut self.ops[*op_pos] {
+                    match index {
+                        Some(i) => targets[*i].pc = target,
+                        None => default.pc = target,
+                    }
+                }
+            }
         }
     }
 
@@ -101,88 +188,107 @@ impl CompileContext {
         match inst {
             StructuredInstruction::Plain(i) => self.emit_plain(i),
 
-            StructuredInstruction::Block { body, .. } => {
-                // Label marks block start; end_target will be patched.
+            StructuredInstruction::Block { block_type, body, .. } => {
+                let (params, results) = block_signature(block_type, self.types);
+
+                // stack_depth is below the parameters (params are "inside" the block)
+                let sd = self.depth - params as u32;
+
                 let label_pos = self.emit(Op::Label { end_target: 0 });
                 self.labels.push(Label::Block {
-                    fixups: vec![label_pos],
+                    fixups: vec![Fixup::Branch(label_pos)],
+                    stack_depth: sd,
+                    arity: results,
                 });
 
                 self.emit_body(body);
 
-                // Patch: all fixups (including the Label) point here.
                 let end_pos = self.pos();
-                if let Some(Label::Block { fixups }) = self.labels.pop() {
-                    for pos in fixups {
-                        self.patch_target(pos, end_pos);
+                if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
+                    for fixup in &fixups {
+                        self.apply_fixup(fixup, end_pos);
                     }
                 }
             }
 
-            StructuredInstruction::Loop { body, .. } => {
-                // Loop label: branches jump back to the first body instruction.
+            StructuredInstruction::Loop { block_type, body, .. } => {
+                let (params, _results) = block_signature(block_type, self.types);
+
+                // For loops, branch arity is the param count (restart with params)
+                let sd = self.depth - params as u32;
+
                 let loop_start = self.pos();
-                self.emit(Op::Label { end_target: 0 }); // patched below
-                self.labels.push(Label::Loop { start: loop_start + 1 });
+                self.emit(Op::Label { end_target: 0 });
+                self.labels.push(Label::Loop {
+                    start: loop_start + 1,
+                    stack_depth: sd,
+                    arity: params,
+                });
 
                 self.emit_body(body);
 
-                // Patch the Label's end_target to point past the loop
-                // (used by Label display, not by branch resolution).
                 let end_pos = self.pos();
                 self.patch_target(loop_start as usize, end_pos);
 
-                if let Some(Label::Loop { .. }) = self.labels.pop() {
-                    // Loop labels have no fixups; branches resolve immediately.
-                }
+                self.labels.pop();
             }
 
             StructuredInstruction::If {
+                block_type,
                 then_branch,
                 else_branch,
                 ..
             } => {
-                // Compile as: BrIf(else_or_end) + then_body [+ Br(end) + else_body]
-                //
-                // Note: wasm `if` pops an i32 condition. The condition is
-                // already on the stack from preceding instructions. We emit a
-                // conditional branch that skips the then-body when the
-                // condition is zero (i.e. branch on eqz).
+                let (params, results) = block_signature(block_type, self.types);
 
-                // Emit i32.eqz + br_if to skip then-body when condition is 0
+                // The condition has been consumed by the i32.eqz + br_if below.
+                // stack_depth is below the block params (after condition is popped).
+                // At this point, depth includes the condition. After eqz (no net
+                // change) and br_if (pops 1), depth = depth - 1. The block params
+                // are the next `params` values below the condition.
+                let sd = self.depth - 1 - params as u32;
+
+                // Invert condition: skip then-body when condition is 0
                 self.emit(Op::I32Eqz);
-                let skip_then = self.emit(Op::BrIf { target: 0 });
+                let skip_then = self.emit(Op::BrIf {
+                    target: 0,
+                    arity: 0,
+                    stack_depth: self.depth,
+                });
 
-                // Push block label for `br` inside the if body
-                self.labels.push(Label::Block { fixups: Vec::new() });
+                self.labels.push(Label::Block {
+                    fixups: Vec::new(),
+                    stack_depth: sd,
+                    arity: results,
+                });
 
                 self.emit_body(then_branch);
 
                 if let Some(else_body) = else_branch {
-                    // Jump past else at end of then-body
-                    let skip_else = self.emit(Op::Br { target: 0 });
+                    let skip_else = self.emit(Op::Br {
+                        target: 0,
+                        arity: 0,
+                        stack_depth: self.depth,
+                    });
 
-                    // Patch: skip_then jumps to start of else
                     let else_start = self.pos();
                     self.patch_target(skip_then, else_start);
 
                     self.emit_body(else_body);
 
-                    // Patch: skip_else and any br fixups jump here
                     let end_pos = self.pos();
                     self.patch_target(skip_else, end_pos);
-                    if let Some(Label::Block { fixups }) = self.labels.pop() {
-                        for pos in fixups {
-                            self.patch_target(pos, end_pos);
+                    if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
+                        for fixup in &fixups {
+                            self.apply_fixup(fixup, end_pos);
                         }
                     }
                 } else {
-                    // No else: skip_then jumps past the then-body
                     let end_pos = self.pos();
                     self.patch_target(skip_then, end_pos);
-                    if let Some(Label::Block { fixups }) = self.labels.pop() {
-                        for pos in fixups {
-                            self.patch_target(pos, end_pos);
+                    if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
+                        for fixup in &fixups {
+                            self.apply_fixup(fixup, end_pos);
                         }
                     }
                 }
@@ -251,6 +357,7 @@ impl CompileContext {
 
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
+            InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),
             InstructionKind::Return => {
                 self.emit(Op::Return);
             }
@@ -276,24 +383,33 @@ impl CompileContext {
     fn emit_br(&mut self, depth: u32) {
         let label_index = self.labels.len() - 1 - depth as usize;
 
-        // Depth 0 = innermost label, depth N = outermost.
-        // If this targets the implicit function block (label_index == 0),
-        // emit Return instead of a branch.
+        // label_index 0 is the implicit function block. A branch targeting
+        // it is a return from the function.
         if label_index == 0 {
             self.emit(Op::Return);
             return;
         }
 
+        let arity = self.labels[label_index].arity();
+        let stack_depth = self.labels[label_index].stack_depth();
+
         match &mut self.labels[label_index] {
-            Label::Loop { start } => {
+            Label::Loop { start, .. } => {
                 let target = *start;
-                self.emit(Op::Br { target });
+                self.emit(Op::Br {
+                    target,
+                    arity,
+                    stack_depth,
+                });
             }
-            Label::Block { fixups } => {
-                // Forward branch: target unknown, record for patching.
+            Label::Block { fixups, .. } => {
                 let pos = self.ops.len();
-                fixups.push(pos);
-                self.emit(Op::Br { target: 0 });
+                fixups.push(Fixup::Branch(pos));
+                self.emit(Op::Br {
+                    target: 0,
+                    arity,
+                    stack_depth,
+                });
             }
         }
     }
@@ -302,30 +418,90 @@ impl CompileContext {
     fn emit_br_if(&mut self, depth: u32) {
         let label_index = self.labels.len() - 1 - depth as usize;
 
-        // br_if to function-level block: conditional return.
-        // We handle this by branching to the End instruction.
-        // (A real conditional return would need special handling, but
-        // for the spike this works because End is at the end of ops.)
+        // br_if to function-level block: conditional branch to End.
         if label_index == 0 {
-            if let Label::Block { fixups } = &mut self.labels[label_index] {
+            let arity = self.labels[0].arity();
+            let stack_depth = self.labels[0].stack_depth();
+            if let Label::Block { fixups, .. } = &mut self.labels[label_index] {
                 let pos = self.ops.len();
-                fixups.push(pos);
-                self.emit(Op::BrIf { target: 0 });
+                fixups.push(Fixup::Branch(pos));
+                self.emit(Op::BrIf {
+                    target: 0,
+                    arity,
+                    stack_depth,
+                });
             }
             return;
         }
 
+        let arity = self.labels[label_index].arity();
+        let stack_depth = self.labels[label_index].stack_depth();
+
         match &mut self.labels[label_index] {
-            Label::Loop { start } => {
+            Label::Loop { start, .. } => {
                 let target = *start;
-                self.emit(Op::BrIf { target });
+                self.emit(Op::BrIf {
+                    target,
+                    arity,
+                    stack_depth,
+                });
             }
-            Label::Block { fixups } => {
+            Label::Block { fixups, .. } => {
                 let pos = self.ops.len();
-                fixups.push(pos);
-                self.emit(Op::BrIf { target: 0 });
+                fixups.push(Fixup::Branch(pos));
+                self.emit(Op::BrIf {
+                    target: 0,
+                    arity,
+                    stack_depth,
+                });
             }
         }
+    }
+
+    /// Emit a table branch (br_table).
+    fn emit_br_table(&mut self, labels: &[u32], default: u32) {
+        let resolve = |depth: u32, ctx: &Self| -> BrTarget {
+            let label_index = ctx.labels.len() - 1 - depth as usize;
+            let arity = ctx.labels[label_index].arity();
+            let stack_depth = ctx.labels[label_index].stack_depth();
+            let pc = match &ctx.labels[label_index] {
+                Label::Loop { start, .. } => *start,
+                Label::Block { .. } => 0, // patched later
+            };
+            BrTarget { pc, arity, stack_depth }
+        };
+
+        let targets: Vec<BrTarget> = labels.iter().map(|d| resolve(*d, self)).collect();
+        let default_target = resolve(default, self);
+
+        let pos = self.ops.len();
+
+        // Record fixups for forward (Block) targets
+        for (i, depth) in labels.iter().enumerate() {
+            let label_index = self.labels.len() - 1 - *depth as usize;
+            if let Label::Block { fixups, .. } = &mut self.labels[label_index] {
+                fixups.push(Fixup::TableEntry {
+                    op_pos: pos,
+                    index: Some(i),
+                });
+            }
+        }
+        {
+            let label_index = self.labels.len() - 1 - default as usize;
+            if let Label::Block { fixups, .. } = &mut self.labels[label_index] {
+                fixups.push(Fixup::TableEntry {
+                    op_pos: pos,
+                    index: None,
+                });
+            }
+        }
+
+        self.ops.push(Op::BrTable {
+            targets,
+            default: default_target,
+        });
+        // br_table pops an i32 index
+        self.depth -= 1;
     }
 }
 
@@ -340,7 +516,7 @@ mod tests {
         let func = &module.code.code[0];
         let ftype_idx = module.functions.functions[0].ftype_index;
         let ftype = module.types.get(ftype_idx).expect("function type not found");
-        compile(&func.body, ftype.parameters.len() as u32)
+        compile(&func.body, ftype.parameters.len() as u32, &module.types.types)
     }
 
     #[test]
@@ -348,15 +524,13 @@ mod tests {
         let cf = compile_first_func(include_str!("../../benches/modules/noop_loop.wat"));
         println!("{cf}");
 
-        // Verify structure: should have Label, Label (loop), branch ops, End
         assert!(matches!(cf.ops.last().unwrap(), Op::End));
 
-        // Loop should have a backward branch
         let has_backward_br = cf
             .ops
             .iter()
             .enumerate()
-            .any(|(i, op)| matches!(op, Op::Br { target } if (*target as usize) < i));
+            .any(|(i, op)| matches!(op, Op::Br { target, .. } if (*target as usize) < i));
         assert!(has_backward_br, "loop should have a backward branch");
     }
 
@@ -367,7 +541,6 @@ mod tests {
 
         assert_eq!(cf.param_count, 1);
         assert_eq!(cf.result_count, 1);
-        // 5 locals: $n (param), $a, $b, $tmp, $i
         assert_eq!(cf.local_count, 5);
         assert!(matches!(cf.ops.last().unwrap(), Op::End));
     }
@@ -378,7 +551,7 @@ mod tests {
         println!("{cf}");
 
         assert_eq!(cf.param_count, 2);
-        assert_eq!(cf.ops.len(), 4); // local.get, local.get, i32.add, end
+        assert_eq!(cf.ops.len(), 4);
         assert!(matches!(cf.ops[0], Op::LocalGet { index: 0 }));
         assert!(matches!(cf.ops[1], Op::LocalGet { index: 1 }));
         assert!(matches!(cf.ops[2], Op::I32Add));
@@ -387,26 +560,22 @@ mod tests {
 
     #[test]
     fn compile_block_br() {
-        // (block (br 0)) -- branch should jump past the block
         let cf = compile_first_func("(module (func (block (br 0))))");
         println!("{cf}");
 
-        // Find the Br and check it targets past the block
         let br_pos = cf.ops.iter().position(|op| matches!(op, Op::Br { .. })).unwrap();
-        if let Op::Br { target } = &cf.ops[br_pos] {
+        if let Op::Br { target, .. } = &cf.ops[br_pos] {
             assert!(*target as usize > br_pos, "block br should jump forward");
         }
     }
 
     #[test]
     fn compile_loop_br() {
-        // (loop (br 0)) -- branch should jump back to loop start
         let cf = compile_first_func("(module (func (loop (br 0))))");
         println!("{cf}");
 
         let br_pos = cf.ops.iter().position(|op| matches!(op, Op::Br { .. })).unwrap();
-        if let Op::Br { target } = &cf.ops[br_pos] {
-            // br 0 in a bare loop is a self-loop (target == position)
+        if let Op::Br { target, .. } = &cf.ops[br_pos] {
             assert!(
                 (*target as usize) <= br_pos,
                 "loop br should jump backward or self-loop"
@@ -419,7 +588,6 @@ mod tests {
         let cf = compile_first_func("(module (func (param i32) (if (local.get 0) (then (nop)))))");
         println!("{cf}");
 
-        // Should have: local.get, i32.eqz, br_if(skip), nop, end
         assert!(cf.ops.iter().any(|op| matches!(op, Op::I32Eqz)));
         assert!(cf.ops.iter().any(|op| matches!(op, Op::BrIf { .. })));
     }
@@ -434,7 +602,6 @@ mod tests {
         );
         println!("{cf}");
 
-        // Should have both i32.const 1 and i32.const 2
         let consts: Vec<_> = cf
             .ops
             .iter()
@@ -446,7 +613,6 @@ mod tests {
 
     #[test]
     fn compile_return_from_if() {
-        // The fib pattern: (if (i32.eqz (local.get 0)) (then (return (i32.const 0))))
         let cf = compile_first_func(
             "(module (func (param i32) (result i32)
                 (if (i32.eqz (local.get 0))
@@ -456,5 +622,37 @@ mod tests {
         println!("{cf}");
 
         assert!(cf.ops.iter().any(|op| matches!(op, Op::Return)));
+    }
+
+    #[test]
+    fn compile_block_result_arity() {
+        // Block with result -- br should carry arity=1
+        let cf = compile_first_func(
+            "(module (func (result i32)
+                (block (result i32)
+                    (i32.const 42)
+                    (br 0))))",
+        );
+        println!("{cf}");
+
+        let br = cf.ops.iter().find(|op| matches!(op, Op::Br { .. })).unwrap();
+        if let Op::Br { arity, .. } = br {
+            assert_eq!(*arity, 1, "block result branch should have arity 1");
+        }
+    }
+
+    #[test]
+    fn compile_br_table() {
+        let cf = compile_first_func(
+            "(module (func (param i32) (result i32)
+                (block $a (result i32)
+                    (block $b (result i32)
+                        (i32.const 10)
+                        (local.get 0)
+                        (br_table 0 1 0)))))",
+        );
+        println!("{cf}");
+
+        assert!(cf.ops.iter().any(|op| matches!(op, Op::BrTable { .. })));
     }
 }

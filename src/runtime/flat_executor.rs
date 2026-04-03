@@ -8,11 +8,30 @@
 //! Instruction implementations are delegated to the `ops` module where
 //! possible, keeping the dispatch loop thin.
 
+use super::RuntimeError;
 use super::bytecode::{CompiledFunction, Op};
 use super::ops;
 use super::stack::Stack;
 use super::value::Value;
-use super::RuntimeError;
+
+/// Perform stack cleanup for a branch: keep `arity` values from the top,
+/// discard everything down to `stack_depth`, push the kept values back.
+/// When arity is 0, this is a simple truncate.
+fn branch_cleanup(stack: &mut Stack, arity: u16, stack_depth: u32) -> Result<(), RuntimeError> {
+    if arity == 0 {
+        stack.truncate(stack_depth as usize);
+        return Ok(());
+    }
+    let mut kept = Vec::with_capacity(arity as usize);
+    for _ in 0..arity {
+        kept.push(stack.pop()?);
+    }
+    stack.truncate(stack_depth as usize);
+    for v in kept.into_iter().rev() {
+        stack.push(v);
+    }
+    Ok(())
+}
 
 /// Execute a compiled function with the given arguments.
 ///
@@ -137,16 +156,36 @@ pub fn execute_flat(func: &CompiledFunction, args: &[Value]) -> Result<Vec<Value
 
             // -- Control flow --
             // These mutate pc directly; no ops function.
-            Op::Br { target } => {
+            Op::Br {
+                target,
+                arity,
+                stack_depth,
+            } => {
+                branch_cleanup(&mut stack, *arity, *stack_depth)?;
                 pc = *target as usize;
             }
-            Op::BrIf { target } => {
+            Op::BrIf {
+                target,
+                arity,
+                stack_depth,
+            } => {
                 let cond = stack.pop_i32()?;
                 if cond != 0 {
+                    branch_cleanup(&mut stack, *arity, *stack_depth)?;
                     pc = *target as usize;
                 } else {
                     pc += 1;
                 }
+            }
+            Op::BrTable { targets, default } => {
+                let index = stack.pop_i32()? as u32;
+                let target = if (index as usize) < targets.len() {
+                    &targets[index as usize]
+                } else {
+                    default
+                };
+                branch_cleanup(&mut stack, target.arity, target.stack_depth)?;
+                pc = target.pc as usize;
             }
             Op::Return | Op::End => {
                 break;
@@ -184,7 +223,7 @@ mod tests {
         let func = &module.code.code[0];
         let ftype_idx = module.functions.functions[0].ftype_index;
         let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32);
+        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
         execute_flat(&compiled, args).expect("execution failed")
     }
 
@@ -217,31 +256,46 @@ mod tests {
 
     #[test]
     fn fib_0() {
-        let result = compile_and_run(include_str!("../../benches/modules/fib_iterative.wat"), &[Value::I32(0)]);
+        let result = compile_and_run(
+            include_str!("../../benches/modules/fib_iterative.wat"),
+            &[Value::I32(0)],
+        );
         assert_eq!(result, vec![Value::I32(0)]);
     }
 
     #[test]
     fn fib_1() {
-        let result = compile_and_run(include_str!("../../benches/modules/fib_iterative.wat"), &[Value::I32(1)]);
+        let result = compile_and_run(
+            include_str!("../../benches/modules/fib_iterative.wat"),
+            &[Value::I32(1)],
+        );
         assert_eq!(result, vec![Value::I32(1)]);
     }
 
     #[test]
     fn fib_10() {
-        let result = compile_and_run(include_str!("../../benches/modules/fib_iterative.wat"), &[Value::I32(10)]);
+        let result = compile_and_run(
+            include_str!("../../benches/modules/fib_iterative.wat"),
+            &[Value::I32(10)],
+        );
         assert_eq!(result, vec![Value::I32(55)]);
     }
 
     #[test]
     fn fib_20() {
-        let result = compile_and_run(include_str!("../../benches/modules/fib_iterative.wat"), &[Value::I32(20)]);
+        let result = compile_and_run(
+            include_str!("../../benches/modules/fib_iterative.wat"),
+            &[Value::I32(20)],
+        );
         assert_eq!(result, vec![Value::I32(6765)]);
     }
 
     #[test]
     fn fib_46() {
-        let result = compile_and_run(include_str!("../../benches/modules/fib_iterative.wat"), &[Value::I32(46)]);
+        let result = compile_and_run(
+            include_str!("../../benches/modules/fib_iterative.wat"),
+            &[Value::I32(46)],
+        );
         assert_eq!(result, vec![Value::I32(1836311903)]);
     }
 
@@ -302,5 +356,78 @@ mod tests {
             &[],
         );
         assert_eq!(result, vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn block_result_br() {
+        // Block with result: br carries the value
+        let result = compile_and_run(
+            "(module (func (result i32)
+                (block (result i32)
+                    (i32.const 42)
+                    (br 0))))",
+            &[],
+        );
+        assert_eq!(result, vec![Value::I32(42)]);
+    }
+
+    #[test]
+    fn block_result_br_with_garbage() {
+        // Branch must keep 1 result, discard extra values
+        let result = compile_and_run(
+            "(module (func (result i32)
+                (block (result i32)
+                    (i32.const 99)
+                    (i32.const 42)
+                    (br 0))))",
+            &[],
+        );
+        // br 0 keeps top 1 (42), discards 99
+        assert_eq!(result, vec![Value::I32(42)]);
+    }
+
+    #[test]
+    fn br_table_first() {
+        let result = compile_and_run(
+            "(module (func (param i32) (result i32)
+                (block $a (result i32)
+                    (block $b (result i32)
+                        (i32.const 10)
+                        (local.get 0)
+                        (br_table 0 1 0)))))",
+            &[Value::I32(0)],
+        );
+        // index 0 -> label 0 (inner block $b), exits with 10
+        assert_eq!(result, vec![Value::I32(10)]);
+    }
+
+    #[test]
+    fn br_table_second() {
+        let result = compile_and_run(
+            "(module (func (param i32) (result i32)
+                (block $a (result i32)
+                    (block $b (result i32)
+                        (i32.const 10)
+                        (local.get 0)
+                        (br_table 0 1 0)))))",
+            &[Value::I32(1)],
+        );
+        // index 1 -> label 1 (outer block $a), exits with 10
+        assert_eq!(result, vec![Value::I32(10)]);
+    }
+
+    #[test]
+    fn br_table_default() {
+        let result = compile_and_run(
+            "(module (func (param i32) (result i32)
+                (block $a (result i32)
+                    (block $b (result i32)
+                        (i32.const 10)
+                        (local.get 0)
+                        (br_table 0 1 0)))))",
+            &[Value::I32(99)],
+        );
+        // index 99 out of bounds -> default (label 0, inner block)
+        assert_eq!(result, vec![Value::I32(10)]);
     }
 }

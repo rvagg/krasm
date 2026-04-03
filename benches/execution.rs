@@ -239,7 +239,7 @@ fn compile_func(module: &Module, func_index: usize) -> krasm::runtime::bytecode:
     let func = &module.code.code[func_index];
     let ftype_idx = module.functions.functions[func_index].ftype_index;
     let ftype = module.types.get(ftype_idx).unwrap();
-    krasm::runtime::compiler::compile(&func.body, ftype.parameters.len() as u32)
+    krasm::runtime::compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types)
 }
 
 fn bench_flat_noop_loop(c: &mut Criterion) {

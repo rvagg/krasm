@@ -83,6 +83,10 @@ impl Stack {
         self.values.len()
     }
 
+    pub fn truncate(&mut self, len: usize) {
+        self.values.truncate(len);
+    }
+
     pub fn clear(&mut self) {
         self.values.clear();
     }

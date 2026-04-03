@@ -7,6 +7,17 @@
 
 use std::fmt;
 
+/// Branch target with stack cleanup metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct BrTarget {
+    /// Absolute index in the bytecode array.
+    pub pc: u32,
+    /// Number of values to keep across the branch.
+    pub arity: u16,
+    /// Stack depth to restore to (below the kept values).
+    pub stack_depth: u32,
+}
+
 /// A single operation in the flat bytecode.
 ///
 /// Each variant carries its immediates inline. Branch targets are absolute
@@ -49,13 +60,28 @@ pub enum Op {
     },
 
     // -- Control flow --
+    // Branch ops carry stack cleanup metadata: `arity` is the number of
+    // values to keep (block results or loop params), `stack_depth` is
+    // the stack depth to restore to before pushing kept values back.
+    // For branches that don't cross block boundaries (e.g. compiler-internal
+    // skip-then jumps), arity=0 and the cleanup is a no-op.
     /// Unconditional jump to `target` (absolute index in bytecode).
     Br {
         target: u32,
+        arity: u16,
+        stack_depth: u32,
     },
     /// Pop i32; if non-zero, jump to `target`.
     BrIf {
         target: u32,
+        arity: u16,
+        stack_depth: u32,
+    },
+    /// Pop i32 index; jump to `targets[index]` or `default` if out of bounds.
+    /// All targets share the same arity (spec validation ensures this).
+    BrTable {
+        targets: Vec<BrTarget>,
+        default: BrTarget,
     },
     /// Return from the current function.
     Return,
@@ -79,6 +105,30 @@ pub enum Op {
 
     /// Drop top of stack.
     Drop,
+}
+
+impl Op {
+    /// Net stack effect: how many values this op pushes minus how many it pops.
+    /// Used by the compiler to track stack depth during emission.
+    pub fn stack_delta(&self) -> i32 {
+        match self {
+            Op::I32Const(_) => 1,
+            Op::I32Add | Op::I32Sub | Op::I32Mul => -1,
+            Op::I32Eqz => 0,
+            Op::I32Eq | Op::I32Ne => -1,
+            Op::I32LtS | Op::I32LtU | Op::I32GtS | Op::I32GtU => -1,
+            Op::I32LeS | Op::I32LeU | Op::I32GeS | Op::I32GeU => -1,
+            Op::LocalGet { .. } => 1,
+            Op::LocalSet { .. } => -1,
+            Op::LocalTee { .. } => 0,
+            Op::Br { .. } => 0,      // unreachable after, depth irrelevant
+            Op::BrIf { .. } => -1,   // pops condition
+            Op::BrTable { .. } => -1, // pops index
+            Op::Return | Op::End | Op::Unreachable => 0,
+            Op::Nop | Op::Label { .. } => 0,
+            Op::Drop => -1,
+        }
+    }
 }
 
 /// A compiled function ready for flat execution.
@@ -131,8 +181,38 @@ impl fmt::Display for Op {
             Op::LocalGet { index } => write!(f, "local.get {index}"),
             Op::LocalSet { index } => write!(f, "local.set {index}"),
             Op::LocalTee { index } => write!(f, "local.tee {index}"),
-            Op::Br { target } => write!(f, "br -> {target}"),
-            Op::BrIf { target } => write!(f, "br_if -> {target}"),
+            Op::Br {
+                target,
+                arity,
+                stack_depth,
+            } => {
+                if *arity == 0 {
+                    write!(f, "br -> {target}")
+                } else {
+                    write!(f, "br -> {target} (stack {stack_depth}, keep {arity} values)")
+                }
+            }
+            Op::BrIf {
+                target,
+                arity,
+                stack_depth,
+            } => {
+                if *arity == 0 {
+                    write!(f, "br_if -> {target}")
+                } else {
+                    write!(f, "br_if -> {target} (stack {stack_depth}, keep {arity} values)")
+                }
+            }
+            Op::BrTable { targets, default } => {
+                write!(f, "br_table [")?;
+                for (i, t) in targets.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t.pc)?;
+                }
+                write!(f, "] default -> {}", default.pc)
+            }
             Op::Return => write!(f, "return"),
             Op::Nop => write!(f, "nop"),
             Op::End => write!(f, "end"),
