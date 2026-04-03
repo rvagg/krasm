@@ -41,6 +41,46 @@ pub struct ExecContext<'a> {
     pub global_addrs: &'a [GlobalAddr],
 }
 
+impl ExecContext<'_> {
+    fn global_get(&self, stack: &mut Stack, index: u32) -> Result<(), RuntimeError> {
+        let addr = self
+            .global_addrs
+            .get(index as usize)
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(index))?;
+        let value = self
+            .resources
+            .globals
+            .get(addr.0)
+            .copied()
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(index))?;
+        stack.push(value);
+        Ok(())
+    }
+
+    fn global_set(&mut self, stack: &mut Stack, index: u32) -> Result<(), RuntimeError> {
+        let val = stack.pop()?;
+        let addr = self
+            .global_addrs
+            .get(index as usize)
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(index))?;
+        let slot = self
+            .resources
+            .globals
+            .get_mut(addr.0)
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(index))?;
+        *slot = val;
+        Ok(())
+    }
+}
+
+/// Require a mutable reference to the execution context, or trap.
+macro_rules! require_ctx {
+    ($ctx:expr) => {
+        $ctx.as_mut()
+            .ok_or_else(|| RuntimeError::Trap("operation requires execution context".to_string()))?
+    };
+}
+
 /// Execute a compiled function with the given arguments.
 ///
 /// `ctx` provides access to globals and memory. Pass `None` for pure
@@ -169,37 +209,11 @@ pub fn execute_flat(
 
             // -- Global variables --
             Op::GlobalGet { index } => {
-                let c = ctx.as_mut().ok_or(RuntimeError::Trap(
-                    "global access requires execution context".to_string(),
-                ))?;
-                let addr = c
-                    .global_addrs
-                    .get(*index as usize)
-                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
-                let value = c
-                    .resources
-                    .globals
-                    .get(addr.0)
-                    .copied()
-                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
-                stack.push(value);
+                require_ctx!(ctx).global_get(&mut stack, *index)?;
                 pc += 1;
             }
             Op::GlobalSet { index } => {
-                let val = stack.pop()?;
-                let c = ctx.as_mut().ok_or(RuntimeError::Trap(
-                    "global access requires execution context".to_string(),
-                ))?;
-                let addr = c
-                    .global_addrs
-                    .get(*index as usize)
-                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
-                let slot = c
-                    .resources
-                    .globals
-                    .get_mut(addr.0)
-                    .ok_or(RuntimeError::GlobalIndexOutOfBounds(*index))?;
-                *slot = val;
+                require_ctx!(ctx).global_set(&mut stack, *index)?;
                 pc += 1;
             }
 
