@@ -125,6 +125,11 @@ pub enum Op {
         targets: Vec<BrTarget>,
         default: BrTarget,
     },
+    /// Call function at module-level `func_idx`. The flat executor adjusts
+    /// by import count to index into the compiled functions slice.
+    Call {
+        func_idx: u32,
+    },
     /// Return from the current function.
     Return,
     /// No operation. Used as a placeholder (e.g. after block/loop markers
@@ -180,6 +185,7 @@ impl Op {
             Op::MemoryGrow => 0,      // pop pages, push old size
             Op::MemoryCopy => -3,     // pop dest, src, len
             Op::MemoryFill => -3,     // pop dest, val, len
+            Op::Call { .. } => 0,     // variable: handled separately in compiler
             Op::Br { .. } => 0,       // unreachable after, depth irrelevant
             Op::BrIf { .. } => -1,    // pops condition
             Op::BrTable { .. } => -1, // pops index
@@ -301,6 +307,7 @@ impl fmt::Display for Op {
                 }
                 write!(f, "] default -> {}", default.pc)
             }
+            Op::Call { func_idx } => write!(f, "call {func_idx}"),
             Op::Return => write!(f, "return"),
             Op::Nop => write!(f, "nop"),
             Op::End => write!(f, "end"),

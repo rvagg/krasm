@@ -18,16 +18,16 @@ use super::value::Value;
 /// Perform stack cleanup for a branch: keep `arity` values from the top,
 /// discard everything down to `stack_depth`, push the kept values back.
 /// When arity is 0, this is a simple truncate.
-fn branch_cleanup(stack: &mut Stack, arity: u16, stack_depth: u32) -> Result<(), RuntimeError> {
+fn branch_cleanup(stack: &mut Stack, arity: u16, abs_depth: usize) -> Result<(), RuntimeError> {
     if arity == 0 {
-        stack.truncate(stack_depth as usize);
+        stack.truncate(abs_depth);
         return Ok(());
     }
     let mut kept = Vec::with_capacity(arity as usize);
     for _ in 0..arity {
         kept.push(stack.pop()?);
     }
-    stack.truncate(stack_depth as usize);
+    stack.truncate(abs_depth);
     for v in kept.into_iter().rev() {
         stack.push(v);
     }
@@ -40,6 +40,24 @@ pub struct ExecContext<'a> {
     pub resources: &'a mut Resources,
     pub global_addrs: &'a [GlobalAddr],
     pub memory_addrs: &'a [MemoryAddr],
+    /// Number of imported functions. `Op::Call { func_idx }` values below
+    /// this are imports (not yet supported); values at or above index into
+    /// the `funcs` slice passed to `execute_flat`.
+    pub num_imported: u32,
+}
+
+const MAX_CALL_DEPTH: usize = 1000;
+
+/// Saved caller state for the call stack.
+struct CallFrame {
+    /// Index into the `funcs` slice (the function to resume).
+    func_idx: usize,
+    /// Program counter to resume at in the caller.
+    pc: usize,
+    /// Caller's stack base (for resolving branch stack_depth).
+    stack_base: usize,
+    /// Caller's local variables.
+    locals: Vec<Value>,
 }
 
 impl ExecContext<'_> {
@@ -106,33 +124,55 @@ macro_rules! require_ctx {
     };
 }
 
+/// Build locals for the entry function from explicit arguments.
+fn init_locals(func: &CompiledFunction, args: &[Value]) -> Vec<Value> {
+    let mut locals = Vec::with_capacity(func.local_count as usize);
+    locals.extend_from_slice(args);
+    locals.resize(func.local_count as usize, Value::I32(0));
+    locals
+}
+
+/// Build locals for a callee by popping arguments from the stack.
+fn init_locals_from_stack(callee: &CompiledFunction, stack: &mut Stack) -> Result<Vec<Value>, RuntimeError> {
+    let mut args = Vec::with_capacity(callee.param_count as usize);
+    for _ in 0..callee.param_count {
+        args.push(stack.pop()?);
+    }
+    args.reverse();
+    let mut locals = Vec::with_capacity(callee.local_count as usize);
+    locals.extend(args);
+    locals.resize(callee.local_count as usize, Value::I32(0));
+    Ok(locals)
+}
+
 /// Execute a compiled function with the given arguments.
 ///
-/// `ctx` provides access to globals and memory. Pass `None` for pure
-/// computation that only uses locals and the operand stack.
+/// `funcs` is the slice of all compiled local functions for the module.
+/// `func_idx` is the index into `funcs` of the entry function.
+/// `ctx` provides access to globals, memory, and import count. Pass `None`
+/// for pure computation with no calls, globals, or memory.
 pub fn execute_flat(
-    func: &CompiledFunction,
+    funcs: &[CompiledFunction],
+    func_idx: usize,
     args: &[Value],
     mut ctx: Option<&mut ExecContext<'_>>,
 ) -> Result<Vec<Value>, RuntimeError> {
+    let func = &funcs[func_idx];
     let mut stack = Stack::new();
 
     // Initialise locals: parameters first, then zero-initialised locals.
-    let mut locals = Vec::with_capacity(func.local_count as usize);
-    for arg in args {
-        locals.push(*arg);
-    }
-    // Remaining locals default to i32(0). A full implementation would use
-    // the declared local types; for the spike, i32(0) covers all cases
-    // since the benchmarks only use i32 locals.
-    while locals.len() < func.local_count as usize {
-        locals.push(Value::I32(0));
-    }
+    let mut locals = init_locals(func, args);
 
-    let ops_slice = &func.ops;
+    let mut current_func_idx: usize = func_idx;
     let mut pc: usize = 0;
+    let mut call_stack: Vec<CallFrame> = Vec::new();
+    // Stack base for the current function. Branch stack_depth values are
+    // offsets from this base, since the physical stack is shared across
+    // all active call frames.
+    let mut stack_base: usize = 0;
 
     loop {
+        let ops_slice = &funcs[current_func_idx].ops;
         if pc >= ops_slice.len() {
             break;
         }
@@ -359,7 +399,7 @@ pub fn execute_flat(
                 arity,
                 stack_depth,
             } => {
-                branch_cleanup(&mut stack, *arity, *stack_depth)?;
+                branch_cleanup(&mut stack, *arity, stack_base + *stack_depth as usize)?;
                 pc = *target as usize;
             }
             Op::BrIf {
@@ -369,7 +409,7 @@ pub fn execute_flat(
             } => {
                 let cond = stack.pop_i32()?;
                 if cond != 0 {
-                    branch_cleanup(&mut stack, *arity, *stack_depth)?;
+                    branch_cleanup(&mut stack, *arity, stack_base + *stack_depth as usize)?;
                     pc = *target as usize;
                 } else {
                     pc += 1;
@@ -382,11 +422,44 @@ pub fn execute_flat(
                 } else {
                     default
                 };
-                branch_cleanup(&mut stack, target.arity, target.stack_depth)?;
+                branch_cleanup(&mut stack, target.arity, stack_base + target.stack_depth as usize)?;
                 pc = target.pc as usize;
             }
+            Op::Call { func_idx } => {
+                let num_imported = ctx.as_ref().map(|c| c.num_imported).unwrap_or(0);
+                let local_idx = (*func_idx as usize)
+                    .checked_sub(num_imported as usize)
+                    .ok_or_else(|| RuntimeError::Trap("imported function calls not yet supported".to_string()))?;
+                if local_idx >= funcs.len() {
+                    return Err(RuntimeError::FunctionIndexOutOfBounds(*func_idx));
+                }
+                if call_stack.len() >= MAX_CALL_DEPTH {
+                    return Err(RuntimeError::CallStackOverflow);
+                }
+
+                let callee = &funcs[local_idx];
+                let callee_locals = init_locals_from_stack(callee, &mut stack)?;
+
+                let new_stack_base = stack.len();
+                call_stack.push(CallFrame {
+                    func_idx: current_func_idx,
+                    pc: pc + 1,
+                    stack_base,
+                    locals: std::mem::replace(&mut locals, callee_locals),
+                });
+                current_func_idx = local_idx;
+                stack_base = new_stack_base;
+                pc = 0;
+            }
             Op::Return | Op::End => {
-                break;
+                if let Some(frame) = call_stack.pop() {
+                    current_func_idx = frame.func_idx;
+                    pc = frame.pc;
+                    stack_base = frame.stack_base;
+                    locals = frame.locals;
+                } else {
+                    break;
+                }
             }
             Op::Nop | Op::Label { .. } => {
                 pc += 1;
@@ -416,22 +489,19 @@ mod tests {
     use crate::runtime::compiler;
     use crate::wat;
 
-    fn compile_and_run(source: &str, args: &[Value]) -> Vec<Value> {
+    fn compile_wat(source: &str) -> Vec<CompiledFunction> {
         let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
-        execute_flat(&compiled, args, None).expect("execution failed")
+        compiler::compile_module(&module)
+    }
+
+    fn compile_and_run(source: &str, args: &[Value]) -> Vec<Value> {
+        let funcs = compile_wat(source);
+        execute_flat(&funcs, 0, args, None).expect("execution failed")
     }
 
     fn expect_trap(source: &str, expected_msg: &str) {
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
-        let err = execute_flat(&compiled, &[], None).unwrap_err();
+        let funcs = compile_wat(source);
+        let err = execute_flat(&funcs, 0, &[], None).unwrap_err();
         assert!(
             err.to_string().contains(expected_msg),
             "expected '{expected_msg}', got: {err}"
@@ -643,11 +713,8 @@ mod tests {
             (func (result i32)
                 (global.set $g (i32.add (global.get $g) (i32.const 5)))
                 (global.get $g)))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         // Set up resources with one global initialised to 10
         let mut resources = Resources {
@@ -660,9 +727,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &global_addrs,
             memory_addrs: &[],
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         assert_eq!(result, vec![Value::I32(15)]);
         // Global should be mutated in resources
         assert_eq!(ctx.resources.globals[0], Value::I32(15));
@@ -675,11 +743,8 @@ mod tests {
             (func (result i32)
                 (i32.store (i32.const 0) (i32.const 42))
                 (i32.load (i32.const 0))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, Some(1)).unwrap()],
@@ -691,9 +756,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         assert_eq!(result, vec![Value::I32(42)]);
     }
 
@@ -704,11 +770,8 @@ mod tests {
             (func (result i32)
                 (i32.store8 (i32.const 0) (i32.const 255))
                 (i32.load8_u (i32.const 0))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, Some(1)).unwrap()],
@@ -720,9 +783,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         assert_eq!(result, vec![Value::I32(255)]);
     }
 
@@ -733,11 +797,8 @@ mod tests {
             (func (result i32 i32)
                 (memory.grow (i32.const 2))
                 (memory.size)))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, None).unwrap()],
@@ -749,9 +810,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         // memory.grow returns old size (1), memory.size returns new size (3)
         assert_eq!(result, vec![Value::I32(1), Value::I32(3)]);
     }
@@ -1198,11 +1260,8 @@ mod tests {
             (func (result i32)
                 (i32.store (i32.const 4) (i32.const 99))
                 (i32.load offset=4 (i32.const 0))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, Some(1)).unwrap()],
@@ -1214,9 +1273,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         assert_eq!(result, vec![Value::I32(99)]);
     }
 
@@ -1227,11 +1287,8 @@ mod tests {
             (func (result i32)
                 (memory.fill (i32.const 0) (i32.const 0xAB) (i32.const 4))
                 (i32.load (i32.const 0))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, Some(1)).unwrap()],
@@ -1243,9 +1300,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         // 4 bytes of 0xAB = 0xABABABAB
         assert_eq!(result, vec![Value::I32(0xABABABABu32 as i32)]);
     }
@@ -1258,11 +1316,8 @@ mod tests {
                 (i32.store (i32.const 0) (i32.const 12345))
                 (memory.copy (i32.const 100) (i32.const 0) (i32.const 4))
                 (i32.load (i32.const 100))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = funcs.into_iter().next().unwrap();
 
         let mut resources = Resources {
             memories: vec![crate::runtime::memory::Memory::new(1, Some(1)).unwrap()],
@@ -1274,9 +1329,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
+            num_imported: 0,
         };
 
-        let result = execute_flat(&compiled, &[], Some(&mut ctx)).expect("execution failed");
+        let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
         assert_eq!(result, vec![Value::I32(12345)]);
     }
 
@@ -1298,11 +1354,8 @@ mod tests {
             (block (result i32)
                 (i32.const 42)
                 (br 0))))";
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("type not found");
-        let compiled = compiler::compile(&func.body, ftype.parameters.len() as u32, &module.types.types);
+        let funcs = compile_wat(source);
+        let compiled = &funcs[0];
 
         // Find the Br op and check its metadata
         let br = compiled
@@ -1315,5 +1368,143 @@ mod tests {
             // After i32.const 0 + drop, stack depth is 0 at block entry
             assert_eq!(*stack_depth, 0, "stack depth at block entry");
         }
+    }
+
+    // ================================================================
+    // Function call tests
+    // ================================================================
+
+    #[test]
+    fn call_simple() {
+        // $add is func 0, $main is func 1
+        let funcs = compile_wat(
+            "(module
+                (func $add (param i32 i32) (result i32)
+                    (i32.add (local.get 0) (local.get 1)))
+                (func $main (result i32)
+                    (call $add (i32.const 3) (i32.const 4))))",
+        );
+        let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn call_recursive_fib() {
+        let funcs = compile_wat(include_str!("../../benches/modules/fib_recursive.wat"));
+        for (n, expected) in [(0, 0), (1, 1), (2, 1), (10, 55), (20, 6765)] {
+            let result = execute_flat(&funcs, 0, &[Value::I32(n)], None).expect("execution failed");
+            assert_eq!(result, vec![Value::I32(expected)], "fib({n})");
+        }
+    }
+
+    #[test]
+    fn call_multiple_functions() {
+        // $double=0, $inc=1, $main=2
+        let funcs = compile_wat(
+            "(module
+                (func $double (param i32) (result i32)
+                    (i32.mul (local.get 0) (i32.const 2)))
+                (func $inc (param i32) (result i32)
+                    (i32.add (local.get 0) (i32.const 1)))
+                (func $main (result i32)
+                    (call $inc (call $double (i32.const 5)))))",
+        );
+        // double(5) = 10, inc(10) = 11
+        let result = execute_flat(&funcs, 2, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(11)]);
+    }
+
+    #[test]
+    fn call_stack_overflow() {
+        let funcs = compile_wat("(module (func $inf (call $inf)))");
+        let err = execute_flat(&funcs, 0, &[], None).unwrap_err();
+        assert!(
+            err.to_string().contains("call stack"),
+            "expected call stack overflow, got: {err}"
+        );
+    }
+
+    #[test]
+    fn call_preserves_caller_locals() {
+        let funcs = compile_wat(
+            "(module
+                (func $noop)
+                (func $main (result i32)
+                    (local $x i32)
+                    (local.set $x (i32.const 42))
+                    (call $noop)
+                    (local.get $x)))",
+        );
+        let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(42)]);
+    }
+
+    #[test]
+    fn call_multiple_return_values() {
+        let (funcs, result) = {
+            let funcs = compile_wat(
+                "(module
+                    (func $pair (result i32 i32)
+                        (i32.const 10) (i32.const 20))
+                    (func $main (result i32)
+                        (call $pair)
+                        (i32.add)))",
+            );
+            let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+            (funcs, result)
+        };
+        let _ = funcs;
+        assert_eq!(result, vec![Value::I32(30)]);
+    }
+
+    #[test]
+    fn call_results_survive_on_stack() {
+        // Two calls in an expression: first call's result must survive
+        // while the second call executes (tests stack_base correctness)
+        let funcs = compile_wat(
+            "(module
+                (func $id (param i32) (result i32) (local.get 0))
+                (func $main (result i32)
+                    (i32.add
+                        (call $id (i32.const 100))
+                        (call $id (i32.const 7)))))",
+        );
+        let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(107)]);
+    }
+
+    #[test]
+    fn call_inside_loop() {
+        // Call inside a loop with a branch -- stack_base and branch cleanup
+        // must coexist correctly
+        let funcs = compile_wat(
+            "(module
+                (func $inc (param i32) (result i32)
+                    (i32.add (local.get 0) (i32.const 1)))
+                (func $main (result i32)
+                    (local $i i32)
+                    (loop $l
+                        (local.set $i (call $inc (local.get $i)))
+                        (br_if $l (i32.lt_u (local.get $i) (i32.const 5))))
+                    (local.get $i)))",
+        );
+        let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(5)]);
+    }
+
+    #[test]
+    fn call_inside_block_with_br() {
+        // Call result used as block result via br
+        let funcs = compile_wat(
+            "(module
+                (func $const42 (result i32) (i32.const 42))
+                (func $main (result i32)
+                    (block (result i32)
+                        (call $const42)
+                        (br 0)
+                        (unreachable))))",
+        );
+        let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(42)]);
     }
 }

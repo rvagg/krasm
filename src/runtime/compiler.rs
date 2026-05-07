@@ -18,8 +18,8 @@
 //! values.
 
 use super::bytecode::{BrTarget, CompiledFunction, Op};
-use crate::parser::instruction::{BlockType, InstructionKind};
-use crate::parser::module::FunctionType;
+use crate::parser::instruction::{BlockType, Instruction, InstructionKind};
+use crate::parser::module::{ExternalKind, FunctionType, Module};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
 
 /// A forward branch whose target is not yet known at the time of emission.
@@ -83,16 +83,65 @@ fn block_signature(block_type: &BlockType, types: &[FunctionType]) -> (u16, u16)
     }
 }
 
+/// Build a `(param_count, result_count)` table for all functions in a module,
+/// indexed by module-level function index (imports first, then locals).
+pub fn build_func_sigs(module: &Module) -> Vec<(u16, u16)> {
+    let mut sigs = Vec::new();
+    // Imported functions
+    for imp in &module.imports.imports {
+        if let ExternalKind::Function(type_idx) = imp.external_kind
+            && let Some(ft) = module.types.get(type_idx)
+        {
+            sigs.push((ft.parameters.len() as u16, ft.return_types.len() as u16));
+        }
+    }
+    // Local functions
+    for func in &module.functions.functions {
+        if let Some(ft) = module.types.get(func.ftype_index) {
+            sigs.push((ft.parameters.len() as u16, ft.return_types.len() as u16));
+        }
+    }
+    sigs
+}
+
+/// Compile all local functions in a module to flat bytecode.
+pub fn compile_module(module: &Module) -> Vec<CompiledFunction> {
+    let func_sigs = build_func_sigs(module);
+    module
+        .code
+        .code
+        .iter()
+        .enumerate()
+        .map(|(i, func)| {
+            let ftype_idx = module.functions.functions[i].ftype_index;
+            let ftype = module.types.get(ftype_idx).expect("function type not found");
+            compile(
+                &func.body,
+                ftype.parameters.len() as u32,
+                &module.types.types,
+                &func_sigs,
+            )
+        })
+        .collect()
+}
+
 /// Compile a structured function into flat bytecode.
 ///
-/// `types` is the module's type section, needed to resolve `BlockType::FuncType`
-/// for multi-value blocks.
-pub fn compile(func: &StructuredFunction, param_count: u32, types: &[FunctionType]) -> CompiledFunction {
+/// `types` is the module's type section, needed to resolve `BlockType::FuncType`.
+/// `func_sigs` maps module-level function index to `(param_count, result_count)`,
+/// needed to compute the stack effect of `call` instructions.
+pub fn compile(
+    func: &StructuredFunction,
+    param_count: u32,
+    types: &[FunctionType],
+    func_sigs: &[(u16, u16)],
+) -> CompiledFunction {
     let mut ctx = CompileContext {
         ops: Vec::new(),
         labels: Vec::new(),
         depth: 0,
         types,
+        func_sigs,
     };
 
     // The function body itself acts as an implicit block. Branches at full
@@ -132,6 +181,8 @@ struct CompileContext<'a> {
     depth: u32,
     /// Module type section for resolving BlockType::FuncType.
     types: &'a [FunctionType],
+    /// (param_count, result_count) per module-level function index.
+    func_sigs: &'a [(u16, u16)],
 }
 
 impl<'a> CompileContext<'a> {
@@ -265,10 +316,12 @@ impl<'a> CompileContext<'a> {
                 self.emit_body(then_branch);
 
                 if let Some(else_body) = else_branch {
+                    // Jump past else at end of then-body. If the block has
+                    // results, this branch carries them.
                     let skip_else = self.emit(Op::Br {
                         target: 0,
-                        arity: 0,
-                        stack_depth: self.depth,
+                        arity: results,
+                        stack_depth: sd,
                     });
 
                     let else_start = self.pos();
@@ -297,7 +350,7 @@ impl<'a> CompileContext<'a> {
     }
 
     /// Emit a plain (non-control-flow-structure) instruction.
-    fn emit_plain(&mut self, inst: &crate::parser::instruction::Instruction) {
+    fn emit_plain(&mut self, inst: &Instruction) {
         match &inst.kind {
             InstructionKind::I32Const { value } => {
                 self.emit(Op::I32Const(*value));
@@ -443,6 +496,14 @@ impl<'a> CompileContext<'a> {
             }
             InstructionKind::MemoryFill => {
                 self.emit(Op::MemoryFill);
+            }
+
+            InstructionKind::Call { func_idx } => {
+                // Stack effect depends on callee's signature: pops params, pushes results.
+                // We bypass self.emit() and adjust depth manually.
+                let (params, results) = self.func_sigs.get(*func_idx as usize).copied().unwrap_or((0, 0));
+                self.ops.push(Op::Call { func_idx: *func_idx });
+                self.depth = (self.depth as i32 - params as i32 + results as i32) as u32;
             }
 
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
@@ -603,10 +664,16 @@ mod tests {
     /// Helper: parse WAT, extract first function, compile it.
     fn compile_first_func(source: &str) -> CompiledFunction {
         let module = wat::parse(source).expect("WAT parse failed");
+        let func_sigs = build_func_sigs(&module);
         let func = &module.code.code[0];
         let ftype_idx = module.functions.functions[0].ftype_index;
         let ftype = module.types.get(ftype_idx).expect("function type not found");
-        compile(&func.body, ftype.parameters.len() as u32, &module.types.types)
+        compile(
+            &func.body,
+            ftype.parameters.len() as u32,
+            &module.types.types,
+            &func_sigs,
+        )
     }
 
     #[test]
