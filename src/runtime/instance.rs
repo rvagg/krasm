@@ -1,7 +1,10 @@
 //! WebAssembly module instance
 
+use super::bytecode::CompiledFunction;
+use super::compiler::compile_module;
+use super::flat_executor::{ExecContext, FlatExecutor, FuncEntry, build_func_entries};
 use super::{
-    ExecutionOutcome, FuncAddr, GlobalAddr, MemoryAddr, RuntimeError, TableAddr, Value, executor::Executor,
+    EngineKind, ExecutionOutcome, FuncAddr, GlobalAddr, MemoryAddr, RuntimeError, TableAddr, Value, executor::Executor,
     store::Resources,
 };
 use crate::parser::module::{ExportIndex, Module, Positional};
@@ -31,6 +34,21 @@ pub struct Instance {
     /// Maps local global index to global GlobalAddr
     global_addresses: Vec<GlobalAddr>,
     executor: Executor,
+    /// Flat bytecode engine, present when the instance was created with
+    /// `EngineKind::Flat`. Instantiation (globals, element segments, data,
+    /// start) always runs on the structured executor; the flat engine takes
+    /// over `invoke_by_index` and `resume_with_results`.
+    flat: Option<FlatEngine>,
+}
+
+/// Flat-bytecode execution state for an instance.
+struct FlatEngine {
+    /// Compiled local functions, indexed by local function index.
+    funcs: Vec<CompiledFunction>,
+    /// FuncEntry per module-level function; built at link time when
+    /// function addresses become known.
+    entries: Vec<FuncEntry>,
+    executor: FlatExecutor,
 }
 
 impl Instance {
@@ -44,6 +62,7 @@ impl Instance {
         memory_addresses: Vec<MemoryAddr>,
         table_addresses: Vec<TableAddr>,
         global_addresses: Vec<GlobalAddr>,
+        engine: EngineKind,
     ) -> Result<Self, RuntimeError> {
         let mut exports = HashMap::new();
 
@@ -60,6 +79,15 @@ impl Instance {
             global_addresses.clone(),
         )?;
 
+        let flat = match engine {
+            EngineKind::Structured => None,
+            EngineKind::Flat => Some(FlatEngine {
+                funcs: compile_module(&module),
+                entries: Vec::new(),
+                executor: FlatExecutor::new(),
+            }),
+        };
+
         Ok(Instance {
             module,
             exports,
@@ -68,6 +96,7 @@ impl Instance {
             table_addresses,
             global_addresses,
             executor,
+            flat,
         })
     }
 
@@ -82,6 +111,9 @@ impl Instance {
         resources: &mut Resources,
     ) -> Result<(), RuntimeError> {
         self.executor.link_function_addresses(function_addresses.clone());
+        if let Some(flat) = &mut self.flat {
+            flat.entries = build_func_entries(&self.module, &function_addresses);
+        }
         self.function_addresses = function_addresses;
 
         // Initialise in dependency order: globals first (element segments may
@@ -183,6 +215,19 @@ impl Instance {
             }
         }
 
+        if let Some(flat) = &mut self.flat {
+            let mut ctx = ExecContext {
+                resources,
+                global_addrs: &self.global_addresses,
+                memory_addrs: &self.memory_addresses,
+                table_addrs: &self.table_addresses,
+                types: &self.module.types.types,
+                functions: &flat.entries,
+                num_imported: num_imported_functions,
+            };
+            return flat.executor.invoke(&flat.funcs, code_idx, &args, Some(&mut ctx));
+        }
+
         let body = self
             .module
             .code
@@ -206,6 +251,18 @@ impl Instance {
         results: Vec<Value>,
         resources: &mut Resources,
     ) -> Result<ExecutionOutcome, RuntimeError> {
+        if let Some(flat) = &mut self.flat {
+            let mut ctx = ExecContext {
+                resources,
+                global_addrs: &self.global_addresses,
+                memory_addrs: &self.memory_addresses,
+                table_addrs: &self.table_addresses,
+                types: &self.module.types.types,
+                functions: &flat.entries,
+                num_imported: self.module.imports.function_count(),
+            };
+            return flat.executor.resume_with_results(&flat.funcs, results, Some(&mut ctx));
+        }
         self.executor.resume_with_results(results, resources)
     }
 

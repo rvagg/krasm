@@ -29,6 +29,22 @@ pub use store::{Caller, FuncAddr, GlobalAddr, MemoryAddr, Store, TableAddr};
 pub use table::Table;
 pub use value::Value;
 
+/// Which interpreter drives a module instance's execution.
+///
+/// Selected per Store via [`Store::set_engine`]; instances capture the
+/// engine at creation time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EngineKind {
+    /// Structured-tree interpreter: full instruction coverage, the default.
+    #[default]
+    Structured,
+    /// Flat bytecode interpreter: faster dispatch, partial instruction
+    /// coverage while under development. Instructions the flat compiler
+    /// does not yet support trap with `unreachable` at execution time.
+    /// Instruction budgets are not yet enforced on this engine.
+    Flat,
+}
+
 /// Outcome of executing a function — either complete or needs an external call
 #[derive(Debug)]
 pub(crate) enum ExecutionOutcome {

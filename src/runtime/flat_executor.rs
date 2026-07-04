@@ -97,6 +97,31 @@ pub struct FuncEntry {
     pub type_idx: u32,
 }
 
+/// Build a `FuncEntry` per module-level function (imports first), pairing
+/// each function's Store address with its type index.
+pub(crate) fn build_func_entries(
+    module: &crate::parser::module::Module,
+    function_addresses: &[FuncAddr],
+) -> Vec<FuncEntry> {
+    use crate::parser::module::ExternalKind;
+
+    let mut type_indices = Vec::with_capacity(function_addresses.len());
+    for imp in &module.imports.imports {
+        if let ExternalKind::Function(type_idx) = imp.external_kind {
+            type_indices.push(type_idx);
+        }
+    }
+    for func in &module.functions.functions {
+        type_indices.push(func.ftype_index);
+    }
+
+    type_indices
+        .into_iter()
+        .zip(function_addresses)
+        .map(|(type_idx, &addr)| FuncEntry { addr, type_idx })
+        .collect()
+}
+
 const MAX_CALL_DEPTH: usize = 1000;
 
 /// Saved caller state for the call stack.
@@ -361,9 +386,6 @@ impl FlatExecutor {
 
     /// Resume execution after an external call completes, pushing its
     /// results onto the operand stack and continuing from the saved frame.
-    // Called only from tests until the Store drives the flat executor; the
-    // expectation flags itself for removal once that integration lands.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn resume_with_results(
         &mut self,
         funcs: &[CompiledFunction],

@@ -88,7 +88,7 @@ pub mod wat;
 // Core runtime types
 pub use runtime::store::{Caller, FuncAddr, GlobalAddr, MemoryAddr, Store, TableAddr};
 pub use runtime::value::Value;
-pub use runtime::{ImportObject, Memory, RuntimeError, Table};
+pub use runtime::{EngineKind, ImportObject, Memory, RuntimeError, Table};
 
 // Typed host function traits
 pub use runtime::host::{WasmResult, WasmType};

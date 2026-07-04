@@ -57,7 +57,7 @@
 //! where each module can perform computation before/after its external calls.
 
 use super::imports::{global_value_type, is_global_mutable};
-use super::{ExecutionOutcome, Instance, Memory, RuntimeError, Table, Value};
+use super::{EngineKind, ExecutionOutcome, Instance, Memory, RuntimeError, Table, Value};
 use crate::parser::module::{ExportIndex, ExternalKind, FunctionType, Limits};
 use std::sync::Arc;
 
@@ -240,6 +240,9 @@ pub struct Store<T = ()> {
 
     /// Embedder-defined user data, accessible via `Caller<T>` in host functions
     data: T,
+
+    /// Interpreter used by instances created in this store
+    engine: EngineKind,
 }
 
 impl Default for Store<()> {
@@ -249,6 +252,7 @@ impl Default for Store<()> {
             instances: Vec::new(),
             resources: Resources::new(),
             data: (),
+            engine: EngineKind::default(),
         }
     }
 }
@@ -272,7 +276,15 @@ impl<T> Store<T> {
             instances: Vec::new(),
             resources: Resources::new(),
             data,
+            engine: EngineKind::default(),
         }
+    }
+
+    /// Select the interpreter for instances created after this call.
+    ///
+    /// Existing instances keep the engine they were created with.
+    pub fn set_engine(&mut self, engine: EngineKind) {
+        self.engine = engine;
     }
 
     /// Access the embedder's user data (read-only)
@@ -414,8 +426,13 @@ impl<T> Store<T> {
 
         let (memory_addresses, table_addresses, global_addresses) = self.resolve_resources(&module, imports)?;
 
-        let mut instance =
-            Instance::new_unlinked(Arc::clone(&module), memory_addresses, table_addresses, global_addresses)?;
+        let mut instance = Instance::new_unlinked(
+            Arc::clone(&module),
+            memory_addresses,
+            table_addresses,
+            global_addresses,
+            self.engine,
+        )?;
 
         let function_addresses = self.resolve_functions(&module, imports, instance_id)?;
 
@@ -1629,5 +1646,144 @@ mod tests {
         assert_eq!(store.execute(addr, vec![Value::I32(10)]).unwrap(), vec![Value::I32(0)]);
         assert_eq!(store.execute(addr, vec![Value::I32(5)]).unwrap(), vec![Value::I32(10)]);
         assert_eq!(*store.data(), 15);
+    }
+
+    // -- Flat engine dispatch --
+
+    /// Parse WAT and instantiate it in a flat-engine store.
+    fn flat_instance(wat: &str, imports: Option<&ImportObject>) -> (Store, usize) {
+        let module = crate::wat::parse(wat).expect("WAT parse failed");
+        let mut store = Store::new();
+        store.set_engine(EngineKind::Flat);
+        let id = store
+            .create_instance(Arc::new(module), imports)
+            .expect("instantiation failed");
+        (store, id)
+    }
+
+    #[test]
+    fn flat_engine_invoke_export() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"add\") (param i32 i32) (result i32)
+                (i32.add (local.get 0) (local.get 1))))",
+            None,
+        );
+        let result = store.invoke_export(id, "add", vec![Value::I32(3), Value::I32(4)], None);
+        assert_eq!(result.unwrap(), vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn flat_engine_host_call_round_trip() {
+        // wasm (flat) -> host -> resume wasm, through Store::execute
+        let mut store = Store::new();
+        store.set_engine(EngineKind::Flat);
+        let double = store.wrap(|x: i32| x * 2);
+
+        let mut imports = ImportObject::new();
+        imports.add_function("env", "double", double);
+
+        let module = crate::wat::parse(
+            "(module
+                (import \"env\" \"double\" (func $double (param i32) (result i32)))
+                (func (export \"run\") (param i32) (result i32)
+                    (i32.add (call $double (local.get 0)) (i32.const 1))))",
+        )
+        .expect("WAT parse failed");
+        let id = store
+            .create_instance(Arc::new(module), Some(&imports))
+            .expect("instantiation failed");
+
+        let result = store.invoke_export(id, "run", vec![Value::I32(21)], None);
+        assert_eq!(result.unwrap(), vec![Value::I32(43)]);
+    }
+
+    #[test]
+    fn flat_engine_cross_module_call() {
+        // Callee instantiated on the structured engine, caller on the flat
+        // engine: the Store's dispatch loop bridges the two.
+        let mut store = Store::new();
+
+        let callee = crate::wat::parse("(module (func (export \"ten\") (result i32) (i32.const 10)))")
+            .expect("WAT parse failed");
+        let callee_id = store.create_instance(Arc::new(callee), None).unwrap();
+        let ten_addr = store.get_instance(callee_id).unwrap().get_function_addr("ten").unwrap();
+
+        store.set_engine(EngineKind::Flat);
+        let mut imports = ImportObject::new();
+        imports.add_function("m", "ten", ten_addr);
+        let caller = crate::wat::parse(
+            "(module
+                (import \"m\" \"ten\" (func $ten (result i32)))
+                (func (export \"run\") (result i32)
+                    (i32.add (call $ten) (i32.const 100))))",
+        )
+        .expect("WAT parse failed");
+        let caller_id = store.create_instance(Arc::new(caller), Some(&imports)).unwrap();
+
+        let result = store.invoke_export(caller_id, "run", vec![], None);
+        assert_eq!(result.unwrap(), vec![Value::I32(110)]);
+    }
+
+    #[test]
+    fn flat_engine_call_indirect_via_element_segment() {
+        // Element segments are initialised by the structured machinery at
+        // instantiation; the flat engine then dispatches through the table.
+        let (mut store, id) = flat_instance(
+            "(module
+                (type $binop (func (param i32 i32) (result i32)))
+                (table 2 funcref)
+                (elem (i32.const 0) $add $sub)
+                (func $add (type $binop) (i32.add (local.get 0) (local.get 1)))
+                (func $sub (type $binop) (i32.sub (local.get 0) (local.get 1)))
+                (func (export \"dispatch\") (param i32 i32 i32) (result i32)
+                    (call_indirect (type $binop) (local.get 1) (local.get 2) (local.get 0))))",
+            None,
+        );
+
+        let args = vec![Value::I32(0), Value::I32(10), Value::I32(4)];
+        assert_eq!(
+            store.invoke_export(id, "dispatch", args, None).unwrap(),
+            vec![Value::I32(14)]
+        );
+        let args = vec![Value::I32(1), Value::I32(10), Value::I32(4)];
+        assert_eq!(
+            store.invoke_export(id, "dispatch", args, None).unwrap(),
+            vec![Value::I32(6)]
+        );
+    }
+
+    #[test]
+    fn flat_engine_unsupported_instruction_traps() {
+        // i64.add is not yet compiled; the placeholder op must trap loudly
+        // rather than compute anything.
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result i64)
+                (i64.add (i64.const 1) (i64.const 2))))",
+            None,
+        );
+        let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
+        assert!(err.to_string().contains("unreachable"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn flat_engine_selection_is_per_instance() {
+        // Instances keep the engine they were created with; the unsupported
+        // instruction runs fine on the structured instance created first.
+        let mut store = Store::new();
+        let wat = "(module (func (export \"run\") (result i64)
+            (i64.add (i64.const 1) (i64.const 2))))";
+
+        let structured = crate::wat::parse(wat).expect("WAT parse failed");
+        let structured_id = store.create_instance(Arc::new(structured), None).unwrap();
+
+        store.set_engine(EngineKind::Flat);
+        let flat = crate::wat::parse(wat).expect("WAT parse failed");
+        let flat_id = store.create_instance(Arc::new(flat), None).unwrap();
+
+        assert_eq!(
+            store.invoke_export(structured_id, "run", vec![], None).unwrap(),
+            vec![Value::I64(3)]
+        );
+        assert!(store.invoke_export(flat_id, "run", vec![], None).is_err());
     }
 }
