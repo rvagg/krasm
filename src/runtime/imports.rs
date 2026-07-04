@@ -167,9 +167,9 @@ pub fn validate_type(value: &Value, expected_type: ValueType) -> bool {
     )
 }
 
-/// Get the default value for a type
-pub fn default_value_for_type(value_type: ValueType) -> Result<Value, RuntimeError> {
-    Ok(match value_type {
+/// Get the default (zero) value for a type
+pub fn default_value_for_type(value_type: ValueType) -> Value {
+    match value_type {
         ValueType::I32 => Value::I32(0),
         ValueType::I64 => Value::I64(0),
         ValueType::F32 => Value::F32(0.0),
@@ -177,7 +177,7 @@ pub fn default_value_for_type(value_type: ValueType) -> Result<Value, RuntimeErr
         ValueType::FuncRef => Value::FuncRef(None),
         ValueType::ExternRef => Value::ExternRef(None),
         ValueType::V128 => Value::V128([0u8; 16]),
-    })
+    }
 }
 
 /// Count the number of imported globals in a module

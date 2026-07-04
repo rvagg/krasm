@@ -256,14 +256,14 @@ impl Executor {
         let mut global_addresses = Vec::new();
         for import in &module.imports.imports {
             if let ExternalKind::Global(global_type) = &import.external_kind {
-                let initial = default_value_for_type(global_type.value_type)?;
+                let initial = default_value_for_type(global_type.value_type);
                 let addr = GlobalAddr(resources.globals.len());
                 resources.globals.push(initial);
                 global_addresses.push(addr);
             }
         }
         for global in &module.globals.globals {
-            let default = default_value_for_type(global.global_type.value_type)?;
+            let default = default_value_for_type(global.global_type.value_type);
             let addr = GlobalAddr(resources.globals.len());
             resources.globals.push(default);
             global_addresses.push(addr);
@@ -535,7 +535,7 @@ impl Executor {
         let mut locals = args;
         for (count, local_type) in body.locals.iter() {
             for _ in 0..*count {
-                locals.push(default_value_for_type(*local_type)?);
+                locals.push(default_value_for_type(*local_type));
             }
         }
 
@@ -711,7 +711,7 @@ impl Executor {
         if let Some(locals_info) = locals_info {
             for (count, local_type) in locals_info.iter() {
                 for _ in 0..*count {
-                    locals.push(default_value_for_type(*local_type)?);
+                    locals.push(default_value_for_type(*local_type));
                 }
             }
         }

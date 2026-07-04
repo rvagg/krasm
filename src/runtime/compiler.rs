@@ -18,8 +18,9 @@
 //! values.
 
 use super::bytecode::{BrTarget, CompiledFunction, Op};
+use super::imports::default_value_for_type;
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind};
-use crate::parser::module::{ExternalKind, FunctionType, Module};
+use crate::parser::module::{ExternalKind, FunctionType, Locals, Module};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
 
 /// A forward branch whose target is not yet known at the time of emission.
@@ -118,6 +119,7 @@ pub fn compile_module(module: &Module) -> Vec<CompiledFunction> {
             compile(
                 &func.body,
                 ftype.parameters.len() as u32,
+                &func.locals,
                 &module.types.types,
                 &func_sigs,
             )
@@ -127,12 +129,15 @@ pub fn compile_module(module: &Module) -> Vec<CompiledFunction> {
 
 /// Compile a structured function into flat bytecode.
 ///
+/// `locals` is the function's declared (non-parameter) locals, used to
+/// pre-compute typed zero defaults for frame initialisation.
 /// `types` is the module's type section, needed to resolve `BlockType::FuncType`.
 /// `func_sigs` maps module-level function index to `(param_count, result_count)`,
 /// needed to compute the stack effect of `call` instructions.
 pub fn compile(
     func: &StructuredFunction,
     param_count: u32,
+    locals: &Locals,
     types: &[FunctionType],
     func_sigs: &[(u16, u16)],
 ) -> CompiledFunction {
@@ -140,6 +145,7 @@ pub fn compile(
         ops: Vec::new(),
         labels: Vec::new(),
         depth: 0,
+        reachable: true,
         types,
         func_sigs,
     };
@@ -165,9 +171,19 @@ pub fn compile(
 
     ctx.ops.push(Op::End);
 
+    // Expand run-length locals declarations into one typed zero per local,
+    // so frame initialisation is a plain copy.
+    let mut local_defaults = Vec::with_capacity(locals.len() as usize);
+    for (count, value_type) in locals.iter() {
+        local_defaults.resize(
+            local_defaults.len() + *count as usize,
+            default_value_for_type(*value_type),
+        );
+    }
+
     CompiledFunction {
         ops: ctx.ops,
-        local_count: func.local_count as u32,
+        local_defaults,
         param_count,
         result_count: func.return_types.len() as u32,
     }
@@ -179,6 +195,11 @@ struct CompileContext<'a> {
     labels: Vec<Label>,
     /// Tracked stack depth (number of values on the operand stack).
     depth: u32,
+    /// False after an unconditional transfer (br, br_table, return,
+    /// unreachable) until the enclosing block ends. Dead code is skipped
+    /// entirely: validation allows it to be stack-polymorphic, so tracking
+    /// depth through it is meaningless (and would underflow).
+    reachable: bool,
     /// Module type section for resolving BlockType::FuncType.
     types: &'a [FunctionType],
     /// (param_count, result_count) per module-level function index.
@@ -242,6 +263,11 @@ impl<'a> CompileContext<'a> {
 
     /// Emit a single structured instruction.
     fn emit_instruction(&mut self, inst: &StructuredInstruction) {
+        // Dead code after an unconditional transfer is never emitted.
+        // Branch targets cannot point into it, so nothing is lost.
+        if !self.reachable {
+            return;
+        }
         match inst {
             StructuredInstruction::Plain(i) => self.emit_plain(i),
 
@@ -266,10 +292,15 @@ impl<'a> CompileContext<'a> {
                         self.apply_fixup(fixup, end_pos);
                     }
                 }
+                // The code after a block is reached either by fall-through
+                // or by branching to the block's label; in both cases the
+                // stack holds exactly the block's results above sd.
+                self.depth = sd + results as u32;
+                self.reachable = true;
             }
 
             StructuredInstruction::Loop { block_type, body, .. } => {
-                let (params, _results) = block_signature(block_type, self.types);
+                let (params, results) = block_signature(block_type, self.types);
 
                 // For loops, branch arity is the param count (restart with params)
                 let sd = self.depth - params as u32;
@@ -288,6 +319,9 @@ impl<'a> CompileContext<'a> {
                 self.patch_target(loop_start as usize, end_pos);
 
                 self.labels.pop();
+                // Fall-through past the loop leaves its results above sd.
+                self.depth = sd + results as u32;
+                self.reachable = true;
             }
 
             StructuredInstruction::If {
@@ -330,6 +364,12 @@ impl<'a> CompileContext<'a> {
                         stack_depth: sd,
                     });
 
+                    // The else branch is entered directly via the skip_then
+                    // br_if with the block params on the stack, regardless
+                    // of how the then branch ended.
+                    self.depth = sd + params as u32;
+                    self.reachable = true;
+
                     let else_start = self.pos();
                     self.patch_target(skip_then, else_start);
 
@@ -351,6 +391,10 @@ impl<'a> CompileContext<'a> {
                         }
                     }
                 }
+                // As with block: reached by fall-through or branch, with
+                // the if's results above sd either way.
+                self.depth = sd + results as u32;
+                self.reachable = true;
             }
         }
     }
@@ -616,9 +660,15 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
             InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),
-            InstructionKind::Return => self.op(Op::Return),
+            InstructionKind::Return => {
+                self.op(Op::Return);
+                self.reachable = false;
+            }
             InstructionKind::Nop => self.op(Op::Nop),
-            InstructionKind::Unreachable => self.op(Op::Unreachable),
+            InstructionKind::Unreachable => {
+                self.op(Op::Unreachable);
+                self.reachable = false;
+            }
             InstructionKind::Drop => self.op(Op::Drop),
             InstructionKind::Select => self.op(Op::Select),
             InstructionKind::SelectTyped { .. } => self.op(Op::Select),
@@ -638,6 +688,7 @@ impl<'a> CompileContext<'a> {
         // it is a return from the function.
         if label_index == 0 {
             self.emit(Op::Return);
+            self.reachable = false;
             return;
         }
 
@@ -663,6 +714,7 @@ impl<'a> CompileContext<'a> {
                 });
             }
         }
+        self.reachable = false;
     }
 
     /// Emit a conditional branch to the label at the given depth.
@@ -753,6 +805,7 @@ impl<'a> CompileContext<'a> {
         });
         // br_table pops an i32 index
         self.depth -= 1;
+        self.reachable = false;
     }
 }
 
@@ -771,6 +824,7 @@ mod tests {
         compile(
             &func.body,
             ftype.parameters.len() as u32,
+            &func.locals,
             &module.types.types,
             &func_sigs,
         )
@@ -798,7 +852,7 @@ mod tests {
 
         assert_eq!(cf.param_count, 1);
         assert_eq!(cf.result_count, 1);
-        assert_eq!(cf.local_count, 5);
+        assert_eq!(cf.local_count(), 5);
         assert!(matches!(cf.ops.last().unwrap(), Op::End));
     }
 

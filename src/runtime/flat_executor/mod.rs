@@ -220,23 +220,24 @@ macro_rules! require_ctx {
 }
 
 /// Build locals for the entry function from explicit arguments.
+/// Declared locals start as their type's zero value, per spec.
 fn init_locals(func: &CompiledFunction, args: &[Value]) -> Vec<Value> {
-    let mut locals = Vec::with_capacity(func.local_count as usize);
+    let mut locals = Vec::with_capacity(func.local_count());
     locals.extend_from_slice(args);
-    locals.resize(func.local_count as usize, Value::I32(0));
+    locals.extend_from_slice(&func.local_defaults);
     locals
 }
 
 /// Build locals for a callee by popping arguments from the stack.
+/// Declared locals start as their type's zero value, per spec.
 fn init_locals_from_stack(callee: &CompiledFunction, stack: &mut Stack) -> Result<Vec<Value>, RuntimeError> {
-    let mut args = Vec::with_capacity(callee.param_count as usize);
+    let mut args = Vec::with_capacity(callee.local_count());
     for _ in 0..callee.param_count {
         args.push(stack.pop()?);
     }
     args.reverse();
-    let mut locals = Vec::with_capacity(callee.local_count as usize);
-    locals.extend(args);
-    locals.resize(callee.local_count as usize, Value::I32(0));
+    let mut locals = args;
+    locals.extend_from_slice(&callee.local_defaults);
     Ok(locals)
 }
 

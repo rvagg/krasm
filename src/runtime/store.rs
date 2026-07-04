@@ -593,7 +593,7 @@ impl<T> Store<T> {
         }
 
         for global in &module.globals.globals {
-            let default_value = super::imports::default_value_for_type(global.global_type.value_type)?;
+            let default_value = super::imports::default_value_for_type(global.global_type.value_type);
             let addr = self.allocate_global(default_value);
             addresses.push(addr);
         }

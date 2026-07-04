@@ -5,6 +5,7 @@
 //! flat executor (`flat_executor.rs`) walks with a program counter. Branch
 //! targets are absolute indices into the bytecode array.
 
+use super::value::Value;
 use crate::parser::instruction::MemArg;
 use std::fmt;
 
@@ -386,12 +387,21 @@ impl Op {
 pub struct CompiledFunction {
     /// The flat bytecode for this function.
     pub ops: Vec<Op>,
-    /// Number of locals (including parameters).
-    pub local_count: u32,
+    /// Typed zero values for the declared (non-parameter) locals, expanded
+    /// at compile time. The executor copies these when building a frame, so
+    /// an untouched local reads as the correct type's zero, per spec.
+    pub local_defaults: Vec<Value>,
     /// Number of parameters (first N locals).
     pub param_count: u32,
     /// Number of return values.
     pub result_count: u32,
+}
+
+impl CompiledFunction {
+    /// Total locals: parameters plus declared locals.
+    pub fn local_count(&self) -> usize {
+        self.param_count as usize + self.local_defaults.len()
+    }
 }
 
 impl fmt::Display for CompiledFunction {
@@ -400,7 +410,7 @@ impl fmt::Display for CompiledFunction {
             f,
             "CompiledFunction(params={}, locals={}, results={})",
             self.param_count,
-            self.local_count - self.param_count,
+            self.local_defaults.len(),
             self.result_count,
         )?;
         for (i, op) in self.ops.iter().enumerate() {
