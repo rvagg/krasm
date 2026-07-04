@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use krasm::wast::*;
-    use krasm::{ImportObject, Module, Store, Value};
+    use krasm::{EngineKind, ImportObject, Module, Store, Value};
     use rstest::rstest;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -32,6 +32,11 @@ mod tests {
             module_registry.insert("spectest".to_string(), create_spectest_module());
 
             let mut store = Store::new();
+            // KRASM_FLAT=1 runs the whole suite on the flat bytecode engine,
+            // as a differential harness against the structured default.
+            if std::env::var_os("KRASM_FLAT").is_some_and(|v| v == "1") {
+                store.set_engine(EngineKind::Flat);
+            }
             let spectest_imports = create_spectest_imports(&mut store);
 
             WastRunner {
