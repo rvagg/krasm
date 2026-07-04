@@ -116,7 +116,7 @@ pub fn decode_function(
         .ok_or(super::super::validate::ValidationError::UnknownFunctionType)?;
 
     let ctx = module.validation_context();
-    let mut validator = CodeValidator::new(module, &ctx, locals, ftype, function_index);
+    let mut validator = CodeValidator::new(module, ctx, locals, ftype, function_index);
 
     let mut processor = StreamingStructureProcessor::new(locals.len() as usize, ftype.return_types.clone());
 

@@ -228,6 +228,7 @@ pub fn global_value_type(module: &Module, global_idx: u32) -> Result<ValueType, 
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use super::*;
     use crate::runtime::Store;

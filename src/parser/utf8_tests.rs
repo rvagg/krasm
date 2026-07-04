@@ -2,7 +2,7 @@
 // Generated from WebAssembly spec UTF-8 tests
 
 #[cfg(test)]
-mod utf8_tests {
+mod tests {
     use crate::parser;
 
     #[derive(Debug)]

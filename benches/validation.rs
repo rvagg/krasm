@@ -7,29 +7,27 @@ use std::hint::black_box;
 fn load_test_module(test_name: &str) -> Vec<u8> {
     // Load test from JSON fixture
     let json_path = format!("tests/spec/{}.json", test_name);
-    let json_content = fs::read_to_string(&json_path).expect(&format!("Failed to read {}", json_path));
+    let json_content = fs::read_to_string(&json_path).unwrap_or_else(|_| panic!("Failed to read {}", json_path));
 
     let test_data: serde_json::Value = serde_json::from_str(&json_content).expect("Failed to parse JSON");
 
-    // Try both formats - first check for bin section
-    if let Some(bin) = test_data["bin"].as_object() {
-        // Get the first module from bin section
-        if let Some((_, value)) = bin.iter().next() {
-            if let Some(binary) = value.as_str() {
-                return base64::Engine::decode(&base64::engine::general_purpose::STANDARD, binary)
-                    .expect("Failed to decode base64");
-            }
-        }
+    // Try both formats - first check for bin section (first module wins)
+    if let Some(bin) = test_data["bin"].as_object()
+        && let Some((_, value)) = bin.iter().next()
+        && let Some(binary) = value.as_str()
+    {
+        return base64::Engine::decode(&base64::engine::general_purpose::STANDARD, binary)
+            .expect("Failed to decode base64");
     }
 
     // Otherwise check commands array
     if let Some(commands) = test_data["commands"].as_array() {
         for command in commands {
-            if command["type"] == "module" {
-                if let Some(binary) = command["binary"].as_str() {
-                    return base64::Engine::decode(&base64::engine::general_purpose::STANDARD, binary)
-                        .expect("Failed to decode base64");
-                }
+            if command["type"] == "module"
+                && let Some(binary) = command["binary"].as_str()
+            {
+                return base64::Engine::decode(&base64::engine::general_purpose::STANDARD, binary)
+                    .expect("Failed to decode base64");
             }
         }
     }

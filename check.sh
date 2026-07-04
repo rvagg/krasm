@@ -80,7 +80,7 @@ echo -e "\n=== Running rustfmt check ==="
 cargo fmt -- --check
 
 echo -e "\n=== Running clippy ==="
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 
 echo -e "\n=== Checking documentation ==="
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet

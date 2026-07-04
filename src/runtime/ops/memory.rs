@@ -491,6 +491,7 @@ pub fn memory_fill(stack: &mut Stack, memory: &mut Memory) -> Result<(), Runtime
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use crate::parser::instruction::{Instruction, InstructionKind, MemArg};
     use crate::parser::module::{Limits, Memory as MemoryDef, Module, ValueType};
@@ -915,8 +916,8 @@ mod tests {
             }),
             make_instruction(InstructionKind::End),
         ];
-        let func = StructureBuilder::build_function(&instructions, 0, vec![].to_vec())
-            .expect("Structure building should succeed");
+        let func =
+            StructureBuilder::build_function(&instructions, 0, Vec::new()).expect("Structure building should succeed");
         let result = executor.execute_function(&func, vec![], &[], &mut resources);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("out of bounds"));
@@ -964,8 +965,8 @@ mod tests {
             }),
             make_instruction(InstructionKind::End),
         ];
-        let func = StructureBuilder::build_function(&instructions, 0, vec![].to_vec())
-            .expect("Structure building should succeed");
+        let func =
+            StructureBuilder::build_function(&instructions, 0, Vec::new()).expect("Structure building should succeed");
         let result = executor.execute_function(&func, vec![], &[], &mut resources);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("out of bounds"));

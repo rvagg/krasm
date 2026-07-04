@@ -8,9 +8,9 @@
 
 use super::types::{WasiErrno, WasiFileType};
 use crate::runtime::Memory;
-use std::cell::RefCell;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Instant;
 
 /// A file descriptor entry for WASI
@@ -169,8 +169,10 @@ pub const DEFAULT_MAX_FDS: u32 = 1024;
 pub const DEFAULT_MAX_IOVECS: u32 = 1024;
 
 pub struct WasiContext {
-    /// File descriptors (0=stdin, 1=stdout, 2=stderr, 3+=preopens/files)
-    fds: RefCell<Vec<Option<FileDescriptor>>>,
+    /// File descriptors (0=stdin, 1=stdout, 2=stderr, 3+=preopens/files).
+    /// `Mutex` rather than `RefCell` keeps the context `Sync`, so
+    /// `Arc<WasiContext>` is genuinely shareable across threads.
+    fds: Mutex<Vec<Option<FileDescriptor>>>,
     /// Preopened directories: (fd number, guest path, host path)
     preopens: Vec<(u32, String, PathBuf)>,
     /// Command line arguments
@@ -178,7 +180,7 @@ pub struct WasiContext {
     /// Environment variables (name=value pairs)
     env: Vec<String>,
     /// Process exit code (set by proc_exit)
-    exit_code: RefCell<Option<i32>>,
+    exit_code: Mutex<Option<i32>>,
     /// Monotonic clock baseline (captured at context construction)
     monotonic_epoch: Instant,
     /// Maximum number of open file descriptors (prevents resource exhaustion)
@@ -195,7 +197,7 @@ impl WasiContext {
 
     /// Get the exit code if proc_exit was called
     pub fn exit_code(&self) -> Option<i32> {
-        *self.exit_code.borrow()
+        *self.exit_code.lock().unwrap()
     }
 
     /// Return the monotonic clock baseline
@@ -205,7 +207,7 @@ impl WasiContext {
 
     /// Set the exit code (called by proc_exit)
     pub fn set_exit_code(&self, code: i32) {
-        *self.exit_code.borrow_mut() = Some(code);
+        *self.exit_code.lock().unwrap() = Some(code);
     }
 
     /// Get a reference to the args
@@ -218,9 +220,9 @@ impl WasiContext {
         &self.env
     }
 
-    /// Borrow the file descriptors for reading
-    pub fn fds_ref(&self) -> std::cell::Ref<'_, Vec<Option<FileDescriptor>>> {
-        self.fds.borrow()
+    /// Lock the file descriptors for reading
+    pub fn fds_ref(&self) -> std::sync::MutexGuard<'_, Vec<Option<FileDescriptor>>> {
+        self.fds.lock().unwrap()
     }
 
     // === Preopen methods ===
@@ -302,7 +304,7 @@ impl WasiContext {
     /// Reuses closed (None) slots before appending. Returns ENFILE if the
     /// configured `max_fds` limit would be exceeded.
     pub fn allocate_fd(&self, fd: FileDescriptor) -> Result<u32, WasiErrno> {
-        let mut fds = self.fds.borrow_mut();
+        let mut fds = self.fds.lock().unwrap();
         // Reuse a closed slot if available (skip stdin/stdout/stderr)
         for (i, slot) in fds.iter_mut().enumerate().skip(3) {
             if slot.is_none() {
@@ -324,7 +326,7 @@ impl WasiContext {
     /// with the WASI spec. The slot is set to None; a subsequent path_open
     /// will not reuse it (allocation starts from fd 3).
     pub fn close_fd(&self, fd: u32) -> Result<(), WasiErrno> {
-        let mut fds = self.fds.borrow_mut();
+        let mut fds = self.fds.lock().unwrap();
         let entry = fds.get_mut(fd as usize).ok_or(WasiErrno::BadF)?;
         if entry.is_none() {
             return Err(WasiErrno::BadF);
@@ -347,7 +349,7 @@ impl WasiContext {
             _ => return Err(WasiErrno::Inval),
         };
 
-        let mut fds = self.fds.borrow_mut();
+        let mut fds = self.fds.lock().unwrap();
         let fd_entry = fds
             .get_mut(fd as usize)
             .ok_or(WasiErrno::BadF)?
@@ -365,7 +367,7 @@ impl WasiContext {
     pub fn fd_read(&self, memory: &mut Memory, fd: u32, iovs_ptr: u32, iovs_len: u32) -> Result<usize, WasiErrno> {
         let iovecs = self.read_iovecs(memory, iovs_ptr, iovs_len)?;
 
-        let mut fds = self.fds.borrow_mut();
+        let mut fds = self.fds.lock().unwrap();
         let fd_entry = fds
             .get_mut(fd as usize)
             .ok_or(WasiErrno::BadF)?
@@ -408,7 +410,7 @@ impl WasiContext {
     pub fn fd_write(&self, memory: &Memory, fd: u32, iovs_ptr: u32, iovs_len: u32) -> Result<usize, WasiErrno> {
         let iovecs = self.read_iovecs(memory, iovs_ptr, iovs_len)?;
 
-        let mut fds = self.fds.borrow_mut();
+        let mut fds = self.fds.lock().unwrap();
         let fd_entry = fds
             .get_mut(fd as usize)
             .ok_or(WasiErrno::BadF)?
@@ -587,11 +589,11 @@ impl WasiContextBuilder {
         }
 
         WasiContext {
-            fds: RefCell::new(fds),
+            fds: Mutex::new(fds),
             preopens,
             args: self.args,
             env: self.env,
-            exit_code: RefCell::new(None),
+            exit_code: Mutex::new(None),
             monotonic_epoch: Instant::now(),
             max_fds: self.max_fds,
             max_iovecs: self.max_iovecs,

@@ -47,11 +47,6 @@ pub mod test {
             self
         }
 
-        pub fn arg(mut self, value: Value) -> Self {
-            self.args.push(value);
-            self
-        }
-
         pub fn args(mut self, args: Vec<Value>) -> Self {
             self.args = args;
             self
@@ -111,7 +106,7 @@ pub mod test {
             if !self.globals.is_empty() {
                 for (i, (_value_type, initial_value, _mutable)) in self.globals.iter().enumerate() {
                     executor
-                        .set_global_for_test(i as u32, initial_value.clone(), &mut resources)
+                        .set_global_for_test(i as u32, *initial_value, &mut resources)
                         .expect("Setting global should succeed");
                 }
             }
@@ -137,7 +132,7 @@ pub mod test {
             if !self.globals.is_empty() {
                 for (i, (_value_type, initial_value, _mutable)) in self.globals.iter().enumerate() {
                     executor
-                        .set_global_for_test(i as u32, initial_value.clone(), &mut resources)
+                        .set_global_for_test(i as u32, *initial_value, &mut resources)
                         .expect("Setting global should succeed");
                 }
             }

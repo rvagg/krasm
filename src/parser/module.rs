@@ -7,9 +7,9 @@
 //! plus a lazily built [`ValidationContext`] that caches derived lookups used
 //! during type checking and execution.
 
-use std::cell::RefCell;
 use std::fmt;
 use std::io;
+use std::sync::OnceLock;
 
 use fhex::ToHex;
 
@@ -74,22 +74,14 @@ pub struct Module {
 
     /// Cached validation context for efficient lookups during validation
     /// and streaming decode. Built lazily via `validation_context()`.
-    pub(crate) validation_context: RefCell<Option<ValidationContext>>,
+    /// `OnceLock` keeps `Module` `Sync`, so `Arc<Module>` is shareable.
+    pub(crate) validation_context: OnceLock<ValidationContext>,
 }
 
 impl Module {
     /// Get the cached validation context, building it lazily if needed
-    pub fn validation_context(&self) -> std::cell::Ref<'_, ValidationContext> {
-        // Build context if not already cached
-        if self.validation_context.borrow().is_none() {
-            let ctx = self.build_validation_context();
-            *self.validation_context.borrow_mut() = Some(ctx);
-        }
-
-        // Return a Ref to the context
-        std::cell::Ref::map(self.validation_context.borrow(), |opt| {
-            opt.as_ref().expect("ValidationContext should be built")
-        })
+    pub fn validation_context(&self) -> &ValidationContext {
+        self.validation_context.get_or_init(|| self.build_validation_context())
     }
 
     /// Finds and formats the export name for a function at the given index.
@@ -2077,7 +2069,7 @@ impl Module {
             data: DataSection::new(),
             data_count: DataCountSection::new(),
             custom: Vec::new(),
-            validation_context: RefCell::new(None),
+            validation_context: OnceLock::new(),
         }
     }
 }

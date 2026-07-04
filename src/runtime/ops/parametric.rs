@@ -61,6 +61,7 @@ pub fn select_typed(stack: &mut Stack, _val_types: &[ValueType]) -> Result<(), R
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use crate::parser::instruction::InstructionKind;
     use crate::parser::module::ValueType;

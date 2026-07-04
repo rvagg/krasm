@@ -420,8 +420,8 @@ mod tests {
     fn test_rights_all_covers_all_bits() {
         // RIGHTS_ALL should include all 30 defined right bits (0-29)
         assert_eq!(RIGHTS_ALL, 0x3fff_ffff);
-        assert!(RIGHTS_ALL & RIGHT_SOCK_ACCEPT != 0); // bit 29, the highest
-        assert!(RIGHTS_ALL & (1 << 30) == 0); // bit 30 should not be set
+        assert_eq!(RIGHTS_ALL & RIGHT_SOCK_ACCEPT, RIGHT_SOCK_ACCEPT); // bit 29, the highest
+        assert_eq!(RIGHTS_ALL & (1 << 30), 0); // bit 30 should not be set
     }
 
     #[test]
@@ -452,7 +452,7 @@ mod tests {
         let exists = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "");
         assert_eq!(errno_from_io_error(&exists), WasiErrno::Exist);
 
-        let other = std::io::Error::new(std::io::ErrorKind::Other, "");
+        let other = std::io::Error::other("");
         assert_eq!(errno_from_io_error(&other), WasiErrno::Io);
     }
 }

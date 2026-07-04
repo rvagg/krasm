@@ -809,6 +809,7 @@ pub fn i64_popcnt(stack: &mut Stack) -> Result<(), RuntimeError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use crate::parser::instruction::InstructionKind;
     use crate::parser::module::ValueType;

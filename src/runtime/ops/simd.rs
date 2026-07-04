@@ -2587,6 +2587,7 @@ fn canonicalise_f64_nan(v: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use super::*;
     use crate::parser::instruction::MemArg;
@@ -3804,10 +3805,8 @@ mod tests {
         let mut stack = make_stack(vec![Value::V128(a), Value::V128(b)]);
         i32x4_dot_i16x8_s(&mut stack).unwrap();
         let r = get_i32x4_lanes(stack.pop_v128().unwrap());
-        assert_eq!(r[0], 1 * 10 + 2 * 20); // 50
-        assert_eq!(r[1], 3 * 30 + 4 * 40); // 250
-        assert_eq!(r[2], 5 * 50 + 6 * 60); // 610
-        assert_eq!(r[3], 7 * 70 + 8 * 80); // 1130
+        // dot products: [1*10+2*20, 3*30+4*40, 5*50+6*60, 7*70+8*80]
+        assert_eq!(r, [50, 250, 610, 1130]);
     }
 
     #[test]

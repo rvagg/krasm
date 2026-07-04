@@ -4,7 +4,6 @@
 //! and overall execution throughput.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use krasm::runtime::bytecode::CompiledFunction;
 use krasm::runtime::compiler::compile_module;
 use krasm::runtime::flat_executor::execute_flat;
 use krasm::{Module, Store, Value};
@@ -14,8 +13,8 @@ use std::sync::Arc;
 /// Load and parse a WAT module from benches/modules/
 fn load_module(name: &str) -> Module {
     let wat_path = format!("benches/modules/{}.wat", name);
-    let wat_source = std::fs::read_to_string(&wat_path).expect(&format!("Failed to read {}", wat_path));
-    krasm::wat::parse(&wat_source).expect(&format!("Failed to parse WAT: {}", name))
+    let wat_source = std::fs::read_to_string(&wat_path).unwrap_or_else(|_| panic!("Failed to read {}", wat_path));
+    krasm::wat::parse(&wat_source).unwrap_or_else(|e| panic!("Failed to parse WAT {}: {}", name, e))
 }
 
 /// Create a store and instantiate a module

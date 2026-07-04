@@ -467,7 +467,7 @@ impl ParseContext {
                 position: SectionPosition::new(0, 0),
             },
             custom: Vec::new(),
-            validation_context: std::cell::RefCell::new(None),
+            validation_context: std::sync::OnceLock::new(),
         }
     }
 }

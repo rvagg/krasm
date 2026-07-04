@@ -1949,7 +1949,7 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
             .get_function_type(i)
             .ok_or(ValidationError::UnknownFunctionType)?;
 
-        let mut v = CodeValidator::new(module, &ctx, &body.locals, ftype, func_index);
+        let mut v = CodeValidator::new(module, ctx, &body.locals, ftype, func_index);
         validate_structured(&body.body.body, &mut v)?;
         v.validate(&validation_instr(InstructionKind::End))?;
         v.finalise()?;

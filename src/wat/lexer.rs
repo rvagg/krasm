@@ -1017,7 +1017,7 @@ mod tests {
         // Valid underscore placement: between hex digits
         assert_eq!(
             kinds("0x0125_6789_ADEF_bcef"),
-            vec![TokenKind::Integer(SignedValue::unsigned(0x01256789ADEFbcef))]
+            vec![TokenKind::Integer(SignedValue::unsigned(0x01256789ADEFBCEF))]
         );
         // Valid: simple hex with underscore
         assert_eq!(kinds("0x1_0"), vec![TokenKind::Integer(SignedValue::unsigned(0x10))]);
@@ -1216,35 +1216,31 @@ mod proptests {
         /// Token spans must be valid: within bounds and non-inverted.
         #[test]
         fn spans_are_valid(source in "\\PC{0,200}") {
-            for result in Lexer::new(&source) {
-                if let Ok(token) = result {
-                    prop_assert!(
-                        token.span.start <= token.span.end,
-                        "span inverted: start {} > end {}",
-                        token.span.start, token.span.end
-                    );
-                    prop_assert!(
-                        token.span.end <= source.len(),
-                        "span end {} exceeds source length {}",
-                        token.span.end, source.len()
-                    );
-                }
+            for token in Lexer::new(&source).flatten() {
+                prop_assert!(
+                    token.span.start <= token.span.end,
+                    "span inverted: start {} > end {}",
+                    token.span.start, token.span.end
+                );
+                prop_assert!(
+                    token.span.end <= source.len(),
+                    "span end {} exceeds source length {}",
+                    token.span.end, source.len()
+                );
             }
         }
 
         /// Token text extraction must be valid UTF-8 and match the span.
         #[test]
         fn token_text_is_valid(source in "\\PC{0,200}") {
-            for result in Lexer::new(&source) {
-                if let Ok(token) = result {
-                    let text = token.text(&source);
-                    prop_assert_eq!(
-                        text.len(),
-                        token.span.end - token.span.start,
-                        "text length {} doesn't match span length {}",
-                        text.len(), token.span.end - token.span.start
-                    );
-                }
+            for token in Lexer::new(&source).flatten() {
+                let text = token.text(&source);
+                prop_assert_eq!(
+                    text.len(),
+                    token.span.end - token.span.start,
+                    "text length {} doesn't match span length {}",
+                    text.len(), token.span.end - token.span.start
+                );
             }
         }
 
@@ -1267,16 +1263,14 @@ mod proptests {
         /// Keywords extracted via text() should match the keyword string.
         #[test]
         fn keyword_text_matches(source in "[a-z][a-z0-9.]{0,20}( [a-z][a-z0-9.]{0,20}){0,5}") {
-            for result in Lexer::new(&source) {
-                if let Ok(token) = result {
-                    if let TokenKind::Keyword(ref kw) = token.kind {
-                        let text = token.text(&source);
-                        prop_assert_eq!(
-                            text, kw.as_str(),
-                            "keyword text '{}' doesn't match TokenKind '{}'",
-                            text, kw
-                        );
-                    }
+            for token in Lexer::new(&source).flatten() {
+                if let TokenKind::Keyword(ref kw) = token.kind {
+                    let text = token.text(&source);
+                    prop_assert_eq!(
+                        text, kw.as_str(),
+                        "keyword text '{}' doesn't match TokenKind '{}'",
+                        text, kw
+                    );
                 }
             }
         }
@@ -1284,17 +1278,15 @@ mod proptests {
         /// Identifiers extracted via text() should be '$' + the id string.
         #[test]
         fn id_text_matches(source in "\\$[a-z_][a-z0-9_]{0,10}( \\$[a-z_][a-z0-9_]{0,10}){0,5}") {
-            for result in Lexer::new(&source) {
-                if let Ok(token) = result {
-                    if let TokenKind::Id(ref id) = token.kind {
-                        let text = token.text(&source);
-                        let expected = format!("${}", id);
-                        prop_assert_eq!(
-                            text, expected.as_str(),
-                            "id text '{}' doesn't match expected '{}'",
-                            text, expected
-                        );
-                    }
+            for token in Lexer::new(&source).flatten() {
+                if let TokenKind::Id(ref id) = token.kind {
+                    let text = token.text(&source);
+                    let expected = format!("${}", id);
+                    prop_assert_eq!(
+                        text, expected.as_str(),
+                        "id text '{}' doesn't match expected '{}'",
+                        text, expected
+                    );
                 }
             }
         }
@@ -1303,15 +1295,13 @@ mod proptests {
         #[test]
         fn line_numbers_increase(source in "[a-z0-9()\\n ]{0,100}") {
             let mut last_line = 0u32;
-            for result in Lexer::new(&source) {
-                if let Ok(token) = result {
-                    prop_assert!(
-                        token.span.line >= last_line,
-                        "line number decreased: {} -> {}",
-                        last_line, token.span.line
-                    );
-                    last_line = token.span.line;
-                }
+            for token in Lexer::new(&source).flatten() {
+                prop_assert!(
+                    token.span.line >= last_line,
+                    "line number decreased: {} -> {}",
+                    last_line, token.span.line
+                );
+                last_line = token.span.line;
             }
         }
 

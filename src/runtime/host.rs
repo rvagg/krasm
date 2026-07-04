@@ -196,6 +196,7 @@ impl_host_func!(A0, A1, A2, A3, A4, A5, A6, A7);
 impl_host_func!(A0, A1, A2, A3, A4, A5, A6, A7, A8);
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // 3.14 etc. are arbitrary test floats, not stand-ins for consts
 mod tests {
     use super::*;
 
