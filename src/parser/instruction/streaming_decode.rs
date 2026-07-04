@@ -118,7 +118,11 @@ pub fn decode_function(
     let ctx = module.validation_context();
     let mut validator = CodeValidator::new(module, ctx, locals, ftype, function_index);
 
-    let mut processor = StreamingStructureProcessor::new(locals.len() as usize, ftype.return_types.clone());
+    // local_count covers parameters plus declared locals: the code section's
+    // locals vector never includes parameters, but StructuredFunction's
+    // local_count does (matching the WAT parser).
+    let local_count = ftype.parameters.len() + locals.len() as usize;
+    let mut processor = StreamingStructureProcessor::new(local_count, ftype.return_types.clone());
 
     decode_with_processor(&mut validator, &mut processor, ParseType::ReadAll, reader)?;
 
