@@ -252,6 +252,7 @@ fn global_get_set() {
         globals: vec![Value::I32(10)],
     };
     let global_addrs = vec![GlobalAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &global_addrs,
@@ -260,6 +261,8 @@ fn global_get_set() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -284,6 +287,7 @@ fn memory_store_load() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -292,6 +296,8 @@ fn memory_store_load() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -314,6 +320,7 @@ fn memory_load8_store8() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -322,6 +329,8 @@ fn memory_load8_store8() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -344,6 +353,7 @@ fn memory_grow_and_size() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -352,6 +362,8 @@ fn memory_grow_and_size() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -810,6 +822,7 @@ fn memory_load_with_offset() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -818,6 +831,8 @@ fn memory_load_with_offset() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -840,6 +855,7 @@ fn memory_fill_and_load() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -848,6 +864,8 @@ fn memory_fill_and_load() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -872,6 +890,7 @@ fn memory_copy_and_load() {
         globals: Vec::new(),
     };
     let memory_addrs = vec![MemoryAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -880,6 +899,8 @@ fn memory_copy_and_load() {
         types: &[],
         functions: &[],
         num_imported: 0,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1105,6 +1126,7 @@ fn imported_call_suspends_and_resumes() {
         addr: FuncAddr(7),
         type_idx: 0,
     }];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1113,6 +1135,8 @@ fn imported_call_suspends_and_resumes() {
         types: &types,
         functions: &functions,
         num_imported: 1,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();
@@ -1151,6 +1175,7 @@ fn imported_call_from_nested_frame() {
         addr: FuncAddr(0),
         type_idx: 0,
     }];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1159,6 +1184,8 @@ fn imported_call_from_nested_frame() {
         types: &types,
         functions: &functions,
         num_imported: 1,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();
@@ -1190,6 +1217,7 @@ fn two_sequential_imported_calls() {
         addr: FuncAddr(3),
         type_idx: 0,
     }];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1198,6 +1226,8 @@ fn two_sequential_imported_calls() {
         types: &types,
         functions: &functions,
         num_imported: 1,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();
@@ -1236,6 +1266,7 @@ fn resume_with_wrong_result_count_traps() {
         addr: FuncAddr(0),
         type_idx: 0,
     }];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1244,6 +1275,8 @@ fn resume_with_wrong_result_count_traps() {
         types: &types,
         functions: &functions,
         num_imported: 1,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();
@@ -1274,6 +1307,7 @@ fn execute_flat_rejects_imported_call() {
         addr: FuncAddr(0),
         type_idx: 0,
     }];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1282,6 +1316,8 @@ fn execute_flat_rejects_imported_call() {
         types: &types,
         functions: &functions,
         num_imported: 1,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let err = execute_flat(&funcs, 0, &[], Some(&mut ctx)).unwrap_err();
@@ -1352,6 +1388,7 @@ fn call_indirect_dispatches_by_table_index() {
     let mut resources = empty_resources();
     resources.tables.push(make_table(&[Some(0), Some(1)]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1360,6 +1397,8 @@ fn call_indirect_dispatches_by_table_index() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     // Entry 0 is $add, entry 1 is $sub; $dispatch is compiled func 2
@@ -1386,6 +1425,7 @@ fn call_indirect_type_mismatch_traps() {
     let mut resources = empty_resources();
     resources.tables.push(make_table(&[Some(0)]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1394,6 +1434,8 @@ fn call_indirect_type_mismatch_traps() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let err = execute_flat(&funcs, 1, &[Value::I32(1), Value::I32(2)], Some(&mut ctx)).unwrap_err();
@@ -1409,6 +1451,7 @@ fn call_indirect_null_entry_traps() {
     let mut resources = empty_resources();
     resources.tables.push(make_table(&[None]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1417,6 +1460,8 @@ fn call_indirect_null_entry_traps() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let args = [Value::I32(0), Value::I32(1), Value::I32(2)];
@@ -1433,6 +1478,7 @@ fn call_indirect_out_of_bounds_traps() {
     let mut resources = empty_resources();
     resources.tables.push(make_table(&[Some(0)]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1441,6 +1487,8 @@ fn call_indirect_out_of_bounds_traps() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let args = [Value::I32(5), Value::I32(1), Value::I32(2)];
@@ -1466,6 +1514,7 @@ fn call_indirect_to_import_suspends() {
     // Table slot 0 holds the import's address
     resources.tables.push(make_table(&[Some(0)]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1474,6 +1523,8 @@ fn call_indirect_to_import_suspends() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();
@@ -1498,6 +1549,7 @@ fn call_indirect_foreign_funcref_suspends() {
     let mut resources = empty_resources();
     resources.tables.push(make_table(&[Some(99)]));
     let table_addrs = [TableAddr(0)];
+    let mut segments = SegmentState::default();
     let mut ctx = ExecContext {
         resources: &mut resources,
         global_addrs: &[],
@@ -1506,6 +1558,8 @@ fn call_indirect_foreign_funcref_suspends() {
         types: &types,
         functions: &entries,
         num_imported,
+        segments: &mut segments,
+        data_segments: &[],
     };
 
     let mut executor = FlatExecutor::new();

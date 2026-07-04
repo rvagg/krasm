@@ -1754,16 +1754,16 @@ mod tests {
 
     #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // ref.null is not yet compiled; the placeholder op must trap loudly
+        // SIMD is not yet compiled; the placeholder op must trap loudly
         // rather than compute anything.
         let (mut store, id) = flat_instance(
-            "(module (func (export \"run\") (result funcref) (ref.null func)))",
+            "(module (func (export \"run\") (result i32)
+                (i32x4.extract_lane 0 (v128.const i32x4 7 0 0 0))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("not yet supported by the flat engine: ref.null"),
+            err.to_string().contains("not yet supported by the flat engine"),
             "unexpected error: {err}"
         );
     }
@@ -1773,7 +1773,8 @@ mod tests {
         // Instances keep the engine they were created with; the unsupported
         // instruction runs fine on the structured instance created first.
         let mut store = Store::new();
-        let wat = "(module (func (export \"run\") (result funcref) (ref.null func)))";
+        let wat = "(module (func (export \"run\") (result i32)
+            (i32x4.extract_lane 0 (v128.const i32x4 7 0 0 0))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();
@@ -1784,7 +1785,7 @@ mod tests {
 
         assert_eq!(
             store.invoke_export(structured_id, "run", vec![], None).unwrap(),
-            vec![Value::FuncRef(None)]
+            vec![Value::I32(7)]
         );
         assert!(store.invoke_export(flat_id, "run", vec![], None).is_err());
     }

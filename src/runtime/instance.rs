@@ -224,6 +224,8 @@ impl Instance {
                 types: &self.module.types.types,
                 functions: &flat.entries,
                 num_imported: num_imported_functions,
+                segments: self.executor.segments_mut(),
+                data_segments: &self.module.data.data,
             };
             return flat.executor.invoke(&flat.funcs, code_idx, &args, Some(&mut ctx));
         }
@@ -260,6 +262,8 @@ impl Instance {
                 types: &self.module.types.types,
                 functions: &flat.entries,
                 num_imported: self.module.imports.function_count(),
+                segments: self.executor.segments_mut(),
+                data_segments: &self.module.data.data,
             };
             return flat.executor.resume_with_results(&flat.funcs, results, Some(&mut ctx));
         }

@@ -7,6 +7,7 @@
 
 use super::value::Value;
 use crate::parser::instruction::MemArg;
+use crate::parser::module::ValueType;
 use std::fmt;
 
 /// Branch target with stack cleanup metadata.
@@ -303,6 +304,50 @@ pub enum Op {
     /// is non-zero, the second otherwise. Typed and untyped select compile
     /// to the same op (the type annotation is validation-only).
     Select,
+
+    // -- References --
+    /// Push a null reference of the given type (FuncRef or ExternRef).
+    RefNull(ValueType),
+    /// Pop a reference; push 1 if null, 0 otherwise.
+    RefIsNull,
+    /// Push a funcref to module-level function `func_idx`.
+    RefFunc {
+        func_idx: u32,
+    },
+
+    // -- Tables and bulk memory --
+    TableGet {
+        table_idx: u32,
+    },
+    TableSet {
+        table_idx: u32,
+    },
+    TableSize {
+        table_idx: u32,
+    },
+    TableGrow {
+        table_idx: u32,
+    },
+    TableFill {
+        table_idx: u32,
+    },
+    TableCopy {
+        dst_table: u32,
+        src_table: u32,
+    },
+    TableInit {
+        elem_idx: u32,
+        table_idx: u32,
+    },
+    ElemDrop {
+        elem_idx: u32,
+    },
+    MemoryInit {
+        data_idx: u32,
+    },
+    DataDrop {
+        data_idx: u32,
+    },
 }
 
 impl Op {
@@ -346,6 +391,13 @@ impl Op {
             Op::I64TruncSatF32S | Op::I64TruncSatF32U | Op::I64TruncSatF64S | Op::I64TruncSatF64U => 0,
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
             Op::Select => -2, // pop condition + one branch, keep the other
+            Op::RefNull(_) | Op::RefFunc { .. } | Op::TableSize { .. } => 1,
+            Op::RefIsNull | Op::TableGet { .. } => 0, // pop one, push one
+            Op::TableSet { .. } => -2,
+            Op::TableGrow { .. } => -1, // pop init + delta, push old size
+            Op::TableFill { .. } | Op::TableCopy { .. } | Op::TableInit { .. } => -3,
+            Op::MemoryInit { .. } => -3,
+            Op::ElemDrop { .. } | Op::DataDrop { .. } => 0,
             Op::I32Eqz => 0,
             Op::I32Eq | Op::I32Ne => -1,
             Op::I32LtS | Op::I32LtU | Op::I32GtS | Op::I32GtU => -1,
@@ -553,6 +605,19 @@ impl fmt::Display for Op {
             Op::F32ReinterpretI32 => write!(f, "f32.reinterpret_i32"),
             Op::F64ReinterpretI64 => write!(f, "f64.reinterpret_i64"),
             Op::Select => write!(f, "select"),
+            Op::RefNull(t) => write!(f, "ref.null {t}"),
+            Op::RefIsNull => write!(f, "ref.is_null"),
+            Op::RefFunc { func_idx } => write!(f, "ref.func {func_idx}"),
+            Op::TableGet { table_idx } => write!(f, "table.get {table_idx}"),
+            Op::TableSet { table_idx } => write!(f, "table.set {table_idx}"),
+            Op::TableSize { table_idx } => write!(f, "table.size {table_idx}"),
+            Op::TableGrow { table_idx } => write!(f, "table.grow {table_idx}"),
+            Op::TableFill { table_idx } => write!(f, "table.fill {table_idx}"),
+            Op::TableCopy { dst_table, src_table } => write!(f, "table.copy {dst_table} {src_table}"),
+            Op::TableInit { elem_idx, table_idx } => write!(f, "table.init {elem_idx} {table_idx}"),
+            Op::ElemDrop { elem_idx } => write!(f, "elem.drop {elem_idx}"),
+            Op::MemoryInit { data_idx } => write!(f, "memory.init {data_idx}"),
+            Op::DataDrop { data_idx } => write!(f, "data.drop {data_idx}"),
             Op::I32Eqz => write!(f, "i32.eqz"),
             Op::I32Eq => write!(f, "i32.eq"),
             Op::I32Ne => write!(f, "i32.ne"),

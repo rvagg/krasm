@@ -672,6 +672,25 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Drop => self.op(Op::Drop),
             InstructionKind::Select => self.op(Op::Select),
             InstructionKind::SelectTyped { .. } => self.op(Op::Select),
+            InstructionKind::RefNull { ref_type } => self.op(Op::RefNull(*ref_type)),
+            InstructionKind::RefIsNull => self.op(Op::RefIsNull),
+            InstructionKind::RefFunc { func_idx } => self.op(Op::RefFunc { func_idx: *func_idx }),
+            InstructionKind::TableGet { table_idx } => self.op(Op::TableGet { table_idx: *table_idx }),
+            InstructionKind::TableSet { table_idx } => self.op(Op::TableSet { table_idx: *table_idx }),
+            InstructionKind::TableSize { table_idx } => self.op(Op::TableSize { table_idx: *table_idx }),
+            InstructionKind::TableGrow { table_idx } => self.op(Op::TableGrow { table_idx: *table_idx }),
+            InstructionKind::TableFill { table_idx } => self.op(Op::TableFill { table_idx: *table_idx }),
+            InstructionKind::TableCopy { dst_table, src_table } => self.op(Op::TableCopy {
+                dst_table: *dst_table,
+                src_table: *src_table,
+            }),
+            InstructionKind::TableInit { elem_idx, table_idx } => self.op(Op::TableInit {
+                elem_idx: *elem_idx,
+                table_idx: *table_idx,
+            }),
+            InstructionKind::ElemDrop { elem_idx } => self.op(Op::ElemDrop { elem_idx: *elem_idx }),
+            InstructionKind::MemoryInit { data_idx } => self.op(Op::MemoryInit { data_idx: *data_idx }),
+            InstructionKind::DataDrop { data_idx } => self.op(Op::DataDrop { data_idx: *data_idx }),
 
             // Not yet compiled: emit a named placeholder so execution
             // traps with exactly which instruction is missing, rather than

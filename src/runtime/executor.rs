@@ -158,8 +158,8 @@ pub struct Executor {
     stack: Stack,
     /// Call stack for managing function calls (always has at least one frame during execution)
     call_stack: Vec<CallFrame>,
-    /// Element segments (for table.init)
-    element_segments: Vec<Vec<Option<Value>>>,
+    /// Segment state shared with the flat engine via `segments_mut()`
+    segments: SegmentState,
     /// Number of imported functions (cached from module, hot path)
     num_imported_functions: usize,
     /// Maps local function index to global FuncAddr (empty until linked)
@@ -176,8 +176,18 @@ pub struct Executor {
     saved_return_types: Vec<ValueType>,
     /// Optional instruction budget - execution stops when exhausted
     instruction_budget: Option<u64>,
-    /// Data segments that have been dropped (data.drop)
-    dropped_data: HashSet<u32>,
+}
+
+/// Per-instance segment state, produced at instantiation and mutated by the
+/// bulk-memory instructions. Owned by the structured executor (which runs
+/// instantiation for every engine) and borrowed by the flat engine.
+#[derive(Default)]
+pub(crate) struct SegmentState {
+    /// Runtime element segments for table.init; elem.drop empties them.
+    pub(crate) element_segments: Vec<Vec<Option<Value>>>,
+    /// Data segments dropped via data.drop (active segments are logically
+    /// dropped after initialisation, per spec).
+    pub(crate) dropped_data: HashSet<u32>,
 }
 
 impl Executor {
@@ -198,7 +208,7 @@ impl Executor {
             module,
             stack: Stack::new(),
             call_stack: Vec::new(),
-            element_segments: Vec::new(),
+            segments: SegmentState::default(),
             num_imported_functions,
             function_addresses: Vec::new(),
             memory_addresses,
@@ -207,7 +217,6 @@ impl Executor {
             saved_contexts: None,
             saved_return_types: Vec::new(),
             instruction_budget: None,
-            dropped_data: HashSet::new(),
         })
     }
 
@@ -333,15 +342,15 @@ impl Executor {
                     table.init(start_idx, &values, 0, values.len() as u32)?;
 
                     // Active segments are dropped after instantiation per spec
-                    self.element_segments.push(Vec::new());
+                    self.segments.element_segments.push(Vec::new());
                 }
                 ElementMode::Declarative => {
                     // Declarative segments are dropped immediately per spec
-                    self.element_segments.push(Vec::new());
+                    self.segments.element_segments.push(Vec::new());
                 }
                 ElementMode::Passive => {
                     // Passive segments remain available for table.init
-                    self.element_segments.push(values);
+                    self.segments.element_segments.push(values);
                 }
             }
         }
@@ -385,7 +394,7 @@ impl Executor {
 
                     ops::memory::copy_to_memory(memory, offset_addr, data)?;
                     // Active segments are logically dropped after initialisation
-                    self.dropped_data.insert(seg_idx as u32);
+                    self.segments.dropped_data.insert(seg_idx as u32);
                 }
                 DataMode::Passive => {
                     // Passive data segments are used with memory.init instruction
@@ -679,6 +688,11 @@ impl Executor {
     /// Pass `None` to disable the limit.
     pub fn set_instruction_budget(&mut self, budget: Option<u64>) {
         self.instruction_budget = budget;
+    }
+
+    /// Borrow the segment state for the flat engine's bulk-memory ops.
+    pub(super) fn segments_mut(&mut self) -> &mut SegmentState {
+        &mut self.segments
     }
 
     #[cfg(test)]
@@ -1647,7 +1661,7 @@ impl Executor {
                     memory,
                     *data_idx,
                     &self.module.data.data,
-                    &self.dropped_data,
+                    &self.segments.dropped_data,
                 )?;
                 Ok(BlockEnd::Normal)
             }
@@ -1673,7 +1687,7 @@ impl Executor {
             // data.drop x - Drop a data segment (spec: 4.4.7.13)
             // [] → []
             DataDrop { data_idx } => {
-                self.dropped_data.insert(*data_idx);
+                self.segments.dropped_data.insert(*data_idx);
                 Ok(BlockEnd::Normal)
             }
 
@@ -2387,6 +2401,7 @@ impl Executor {
                 let dst_idx = self.stack.pop_i32()? as u32;
 
                 let src_segment = self
+                    .segments
                     .element_segments
                     .get(*elem_idx as usize)
                     .ok_or(RuntimeError::ElementIndexOutOfBounds(*elem_idx))?;
@@ -2433,10 +2448,10 @@ impl Executor {
             }
             // spec: 4.4.6.8
             ElemDrop { elem_idx } => {
-                if (*elem_idx as usize) >= self.element_segments.len() {
+                if (*elem_idx as usize) >= self.segments.element_segments.len() {
                     return Err(RuntimeError::ElementIndexOutOfBounds(*elem_idx));
                 }
-                self.element_segments[*elem_idx as usize].clear();
+                self.segments.element_segments[*elem_idx as usize].clear();
                 Ok(BlockEnd::Normal)
             }
 

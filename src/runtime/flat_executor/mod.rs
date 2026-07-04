@@ -38,12 +38,13 @@
 //! possible, keeping the dispatch loop thin.
 
 use super::bytecode::{CompiledFunction, Op};
+use super::executor::SegmentState;
 use super::ops;
 use super::stack::Stack;
 use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
 use super::value::Value;
 use super::{ExecutionOutcome, ExternalCallRequest, RuntimeError};
-use crate::parser::module::FunctionType;
+use crate::parser::module::{Data, FunctionType, ValueType};
 
 /// Perform stack cleanup for a branch: keep `arity` values from the top,
 /// discard everything down to `stack_depth`, push the kept values back.
@@ -84,6 +85,11 @@ pub struct ExecContext<'a> {
     pub functions: &'a [FuncEntry],
     /// Number of imported functions (a prefix of `functions`).
     pub num_imported: usize,
+    /// Per-instance segment state (element segments and dropped data),
+    /// owned by the structured executor and shared with this engine.
+    pub(crate) segments: &'a mut SegmentState,
+    /// The module's data segments, for memory.init.
+    pub(crate) data_segments: &'a [Data],
 }
 
 /// A module-level function as seen by the flat executor: where it lives in
@@ -200,6 +206,26 @@ impl ExecContext<'_> {
         self.resources
             .tables
             .get(addr.0)
+            .ok_or(RuntimeError::TableIndexOutOfBounds(index))
+    }
+
+    /// Resolve module-local table index to its store-wide index.
+    fn table_addr(&self, index: u32) -> Result<usize, RuntimeError> {
+        self.table_addrs
+            .get(index as usize)
+            .map(|addr| addr.0)
+            .ok_or(RuntimeError::TableIndexOutOfBounds(index))
+    }
+
+    /// Resolve module-local table index to a mutable table instance.
+    fn table_mut(&mut self, index: u32) -> Result<&mut super::table::Table, RuntimeError> {
+        let addr = self
+            .table_addrs
+            .get(index as usize)
+            .ok_or(RuntimeError::TableIndexOutOfBounds(index))?;
+        self.resources
+            .tables
+            .get_mut(addr.0)
             .ok_or(RuntimeError::TableIndexOutOfBounds(index))
     }
 
@@ -860,6 +886,157 @@ impl FlatExecutor {
                 }
                 Op::Drop => stack_op!(ops::parametric::drop),
                 Op::Select => stack_op!(ops::parametric::select),
+
+                // -- References --
+                Op::RefNull(ref_type) => {
+                    let value = match ref_type {
+                        ValueType::FuncRef => Value::FuncRef(None),
+                        ValueType::ExternRef => Value::ExternRef(None),
+                        other => {
+                            return Err(RuntimeError::InvalidConversion(format!(
+                                "invalid reference type for ref.null: {other:?}"
+                            )));
+                        }
+                    };
+                    stack.push(value);
+                    pc += 1;
+                }
+                Op::RefIsNull => {
+                    let value = stack.pop()?;
+                    let is_null = match value {
+                        Value::FuncRef(None) | Value::ExternRef(None) => 1,
+                        Value::FuncRef(Some(_)) | Value::ExternRef(Some(_)) => 0,
+                        other => {
+                            return Err(RuntimeError::TypeMismatch {
+                                expected: "reference type".to_string(),
+                                actual: format!("{:?}", other.typ()),
+                            });
+                        }
+                    };
+                    stack.push(Value::I32(is_null));
+                    pc += 1;
+                }
+                Op::RefFunc { func_idx } => {
+                    let c = require_ctx!(ctx);
+                    let entry = c
+                        .functions
+                        .get(*func_idx as usize)
+                        .ok_or(RuntimeError::FunctionIndexOutOfBounds(*func_idx))?;
+                    stack.push(Value::FuncRef(Some(entry.addr)));
+                    pc += 1;
+                }
+
+                // -- Tables and bulk memory --
+                Op::TableGet { table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let idx = stack.pop_i32()?;
+                    let value = c.table(*table_idx)?.get(idx as u32)?;
+                    stack.push(value);
+                    pc += 1;
+                }
+                Op::TableSet { table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let value = stack.pop()?;
+                    let idx = stack.pop_i32()?;
+                    c.table_mut(*table_idx)?.set(idx as u32, Some(value))?;
+                    pc += 1;
+                }
+                Op::TableSize { table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let size = c.table(*table_idx)?.size();
+                    stack.push(Value::I32(size as i32));
+                    pc += 1;
+                }
+                Op::TableGrow { table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let delta = stack.pop_i32()?;
+                    let init_value = stack.pop()?;
+                    let result = c.table_mut(*table_idx)?.grow(delta as u32, Some(init_value))?;
+                    stack.push(Value::I32(result as i32));
+                    pc += 1;
+                }
+                Op::TableFill { table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let count = stack.pop_i32()? as u32;
+                    let value = stack.pop()?;
+                    let start = stack.pop_i32()? as u32;
+                    c.table_mut(*table_idx)?.fill(start, count, Some(value))?;
+                    pc += 1;
+                }
+                Op::TableCopy { dst_table, src_table } => {
+                    let c = require_ctx!(ctx);
+                    let count = stack.pop_i32()? as u32;
+                    let src_idx = stack.pop_i32()? as u32;
+                    let dst_idx = stack.pop_i32()? as u32;
+
+                    let dst_addr = c.table_addr(*dst_table)?;
+                    let src_addr = c.table_addr(*src_table)?;
+                    if dst_addr == src_addr {
+                        let table = c.table_mut(*dst_table)?;
+                        table.copy_within(dst_idx, src_idx, count)?;
+                    } else if src_addr < dst_addr {
+                        let (left, right) = c.resources.tables.split_at_mut(dst_addr);
+                        right[0].copy_from(dst_idx, &left[src_addr], src_idx, count)?;
+                    } else {
+                        let (left, right) = c.resources.tables.split_at_mut(src_addr);
+                        left[dst_addr].copy_from(dst_idx, &right[0], src_idx, count)?;
+                    }
+                    pc += 1;
+                }
+                Op::TableInit { elem_idx, table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let count = stack.pop_i32()? as u32;
+                    let src_idx = stack.pop_i32()? as u32;
+                    let dst_idx = stack.pop_i32()? as u32;
+
+                    // Field-level access keeps the segment borrow and the
+                    // table borrow disjoint.
+                    let src_segment = c
+                        .segments
+                        .element_segments
+                        .get(*elem_idx as usize)
+                        .ok_or(RuntimeError::ElementIndexOutOfBounds(*elem_idx))?;
+                    let addr = c
+                        .table_addrs
+                        .get(*table_idx as usize)
+                        .ok_or(RuntimeError::TableIndexOutOfBounds(*table_idx))?;
+                    let table = c
+                        .resources
+                        .tables
+                        .get_mut(addr.0)
+                        .ok_or(RuntimeError::TableIndexOutOfBounds(*table_idx))?;
+                    table.init(dst_idx, src_segment, src_idx, count)?;
+                    pc += 1;
+                }
+                Op::ElemDrop { elem_idx } => {
+                    let c = require_ctx!(ctx);
+                    let segment = c
+                        .segments
+                        .element_segments
+                        .get_mut(*elem_idx as usize)
+                        .ok_or(RuntimeError::ElementIndexOutOfBounds(*elem_idx))?;
+                    segment.clear();
+                    pc += 1;
+                }
+                Op::MemoryInit { data_idx } => {
+                    let c = require_ctx!(ctx);
+                    let addr = c
+                        .memory_addrs
+                        .first()
+                        .ok_or_else(|| RuntimeError::MemoryError("no memory".to_string()))?;
+                    let memory = c
+                        .resources
+                        .memories
+                        .get_mut(addr.0)
+                        .ok_or_else(|| RuntimeError::MemoryError("invalid memory address".to_string()))?;
+                    ops::memory::memory_init(stack, memory, *data_idx, c.data_segments, &c.segments.dropped_data)?;
+                    pc += 1;
+                }
+                Op::DataDrop { data_idx } => {
+                    let c = require_ctx!(ctx);
+                    c.segments.dropped_data.insert(*data_idx);
+                    pc += 1;
+                }
                 Op::Unreachable => {
                     return Err(RuntimeError::Trap("unreachable".to_string()));
                 }
