@@ -191,6 +191,12 @@ impl<'a> CompileContext<'a> {
         self.ops.len() as u32
     }
 
+    /// Emit an op whose stack effect is fully described by `Op::stack_delta`.
+    /// The one-line arm form for mechanical 1:1 instruction mappings.
+    fn op(&mut self, op: Op) {
+        self.emit(op);
+    }
+
     /// Emit an op, adjust stack depth, and return its position.
     fn emit(&mut self, op: Op) -> usize {
         let pos = self.ops.len();
@@ -352,51 +358,41 @@ impl<'a> CompileContext<'a> {
     /// Emit a plain (non-control-flow-structure) instruction.
     fn emit_plain(&mut self, inst: &Instruction) {
         match &inst.kind {
-            InstructionKind::I32Const { value } => {
-                self.emit(Op::I32Const(*value));
-            }
-            InstructionKind::I32Add => {
-                self.emit(Op::I32Add);
-            }
-            InstructionKind::I32Sub => {
-                self.emit(Op::I32Sub);
-            }
-            InstructionKind::I32Mul => {
-                self.emit(Op::I32Mul);
-            }
-            InstructionKind::I32Eqz => {
-                self.emit(Op::I32Eqz);
-            }
-            InstructionKind::I32Eq => {
-                self.emit(Op::I32Eq);
-            }
-            InstructionKind::I32Ne => {
-                self.emit(Op::I32Ne);
-            }
-            InstructionKind::I32LtS => {
-                self.emit(Op::I32LtS);
-            }
-            InstructionKind::I32LtU => {
-                self.emit(Op::I32LtU);
-            }
-            InstructionKind::I32GtS => {
-                self.emit(Op::I32GtS);
-            }
-            InstructionKind::I32GtU => {
-                self.emit(Op::I32GtU);
-            }
-            InstructionKind::I32LeS => {
-                self.emit(Op::I32LeS);
-            }
-            InstructionKind::I32LeU => {
-                self.emit(Op::I32LeU);
-            }
-            InstructionKind::I32GeS => {
-                self.emit(Op::I32GeS);
-            }
-            InstructionKind::I32GeU => {
-                self.emit(Op::I32GeU);
-            }
+            InstructionKind::I32Const { value } => self.op(Op::I32Const(*value)),
+            InstructionKind::I64Const { value } => self.op(Op::I64Const(*value)),
+            InstructionKind::F32Const { value } => self.op(Op::F32Const(*value)),
+            InstructionKind::F64Const { value } => self.op(Op::F64Const(*value)),
+            InstructionKind::I32Add => self.op(Op::I32Add),
+            InstructionKind::I32Sub => self.op(Op::I32Sub),
+            InstructionKind::I32Mul => self.op(Op::I32Mul),
+            InstructionKind::I32DivS => self.op(Op::I32DivS),
+            InstructionKind::I32DivU => self.op(Op::I32DivU),
+            InstructionKind::I32RemS => self.op(Op::I32RemS),
+            InstructionKind::I32RemU => self.op(Op::I32RemU),
+            InstructionKind::I32Clz => self.op(Op::I32Clz),
+            InstructionKind::I32Ctz => self.op(Op::I32Ctz),
+            InstructionKind::I32Popcnt => self.op(Op::I32Popcnt),
+            InstructionKind::I32And => self.op(Op::I32And),
+            InstructionKind::I32Or => self.op(Op::I32Or),
+            InstructionKind::I32Xor => self.op(Op::I32Xor),
+            InstructionKind::I32Shl => self.op(Op::I32Shl),
+            InstructionKind::I32ShrS => self.op(Op::I32ShrS),
+            InstructionKind::I32ShrU => self.op(Op::I32ShrU),
+            InstructionKind::I32Rotl => self.op(Op::I32Rotl),
+            InstructionKind::I32Rotr => self.op(Op::I32Rotr),
+            InstructionKind::I32Extend8S => self.op(Op::I32Extend8S),
+            InstructionKind::I32Extend16S => self.op(Op::I32Extend16S),
+            InstructionKind::I32Eqz => self.op(Op::I32Eqz),
+            InstructionKind::I32Eq => self.op(Op::I32Eq),
+            InstructionKind::I32Ne => self.op(Op::I32Ne),
+            InstructionKind::I32LtS => self.op(Op::I32LtS),
+            InstructionKind::I32LtU => self.op(Op::I32LtU),
+            InstructionKind::I32GtS => self.op(Op::I32GtS),
+            InstructionKind::I32GtU => self.op(Op::I32GtU),
+            InstructionKind::I32LeS => self.op(Op::I32LeS),
+            InstructionKind::I32LeU => self.op(Op::I32LeU),
+            InstructionKind::I32GeS => self.op(Op::I32GeS),
+            InstructionKind::I32GeU => self.op(Op::I32GeU),
 
             InstructionKind::LocalGet { local_idx } => {
                 self.emit(Op::LocalGet { index: *local_idx });
@@ -485,18 +481,10 @@ impl<'a> CompileContext<'a> {
             InstructionKind::F64Store { memarg } => {
                 self.emit(Op::F64Store(*memarg));
             }
-            InstructionKind::MemorySize => {
-                self.emit(Op::MemorySize);
-            }
-            InstructionKind::MemoryGrow => {
-                self.emit(Op::MemoryGrow);
-            }
-            InstructionKind::MemoryCopy => {
-                self.emit(Op::MemoryCopy);
-            }
-            InstructionKind::MemoryFill => {
-                self.emit(Op::MemoryFill);
-            }
+            InstructionKind::MemorySize => self.op(Op::MemorySize),
+            InstructionKind::MemoryGrow => self.op(Op::MemoryGrow),
+            InstructionKind::MemoryCopy => self.op(Op::MemoryCopy),
+            InstructionKind::MemoryFill => self.op(Op::MemoryFill),
 
             InstructionKind::Call { func_idx } => {
                 // Stack effect depends on callee's signature: pops params, pushes results.
@@ -523,18 +511,12 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
             InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),
-            InstructionKind::Return => {
-                self.emit(Op::Return);
-            }
-            InstructionKind::Nop => {
-                self.emit(Op::Nop);
-            }
-            InstructionKind::Unreachable => {
-                self.emit(Op::Unreachable);
-            }
-            InstructionKind::Drop => {
-                self.emit(Op::Drop);
-            }
+            InstructionKind::Return => self.op(Op::Return),
+            InstructionKind::Nop => self.op(Op::Nop),
+            InstructionKind::Unreachable => self.op(Op::Unreachable),
+            InstructionKind::Drop => self.op(Op::Drop),
+            InstructionKind::Select => self.op(Op::Select),
+            InstructionKind::SelectTyped { .. } => self.op(Op::Select),
 
             // Not yet compiled -- emit Unreachable as a placeholder so we
             // get a clear trap rather than silent wrong behaviour.

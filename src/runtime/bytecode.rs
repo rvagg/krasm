@@ -27,11 +27,35 @@ pub struct BrTarget {
 pub enum Op {
     // -- Constants --
     I32Const(i32),
+    I64Const(i64),
+    F32Const(f32),
+    F64Const(f64),
 
-    // -- Arithmetic --
+    // -- i32 arithmetic --
     I32Add,
     I32Sub,
     I32Mul,
+    I32DivS,
+    I32DivU,
+    I32RemS,
+    I32RemU,
+    I32Clz,
+    I32Ctz,
+    I32Popcnt,
+
+    // -- i32 bitwise --
+    I32And,
+    I32Or,
+    I32Xor,
+    I32Shl,
+    I32ShrS,
+    I32ShrU,
+    I32Rotl,
+    I32Rotr,
+
+    // -- i32 sign extension --
+    I32Extend8S,
+    I32Extend16S,
 
     // -- Comparison --
     I32Eqz,
@@ -161,6 +185,10 @@ pub enum Op {
 
     /// Drop top of stack.
     Drop,
+    /// Pop an i32 condition and two values; push the first if the condition
+    /// is non-zero, the second otherwise. Typed and untyped select compile
+    /// to the same op (the type annotation is validation-only).
+    Select,
 }
 
 impl Op {
@@ -168,8 +196,14 @@ impl Op {
     /// Used by the compiler to track stack depth during emission.
     pub fn stack_delta(&self) -> i32 {
         match self {
-            Op::I32Const(_) => 1,
+            Op::I32Const(_) | Op::I64Const(_) | Op::F32Const(_) | Op::F64Const(_) => 1,
             Op::I32Add | Op::I32Sub | Op::I32Mul => -1,
+            Op::I32DivS | Op::I32DivU | Op::I32RemS | Op::I32RemU => -1,
+            Op::I32And | Op::I32Or | Op::I32Xor => -1,
+            Op::I32Shl | Op::I32ShrS | Op::I32ShrU | Op::I32Rotl | Op::I32Rotr => -1,
+            Op::I32Clz | Op::I32Ctz | Op::I32Popcnt => 0,
+            Op::I32Extend8S | Op::I32Extend16S => 0,
+            Op::Select => -2, // pop condition + one branch, keep the other
             Op::I32Eqz => 0,
             Op::I32Eq | Op::I32Ne => -1,
             Op::I32LtS | Op::I32LtU | Op::I32GtS | Op::I32GtU => -1,
@@ -239,9 +273,30 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Op::I32Const(v) => write!(f, "i32.const {v}"),
+            Op::I64Const(v) => write!(f, "i64.const {v}"),
+            Op::F32Const(v) => write!(f, "f32.const {v}"),
+            Op::F64Const(v) => write!(f, "f64.const {v}"),
             Op::I32Add => write!(f, "i32.add"),
             Op::I32Sub => write!(f, "i32.sub"),
             Op::I32Mul => write!(f, "i32.mul"),
+            Op::I32DivS => write!(f, "i32.div_s"),
+            Op::I32DivU => write!(f, "i32.div_u"),
+            Op::I32RemS => write!(f, "i32.rem_s"),
+            Op::I32RemU => write!(f, "i32.rem_u"),
+            Op::I32Clz => write!(f, "i32.clz"),
+            Op::I32Ctz => write!(f, "i32.ctz"),
+            Op::I32Popcnt => write!(f, "i32.popcnt"),
+            Op::I32And => write!(f, "i32.and"),
+            Op::I32Or => write!(f, "i32.or"),
+            Op::I32Xor => write!(f, "i32.xor"),
+            Op::I32Shl => write!(f, "i32.shl"),
+            Op::I32ShrS => write!(f, "i32.shr_s"),
+            Op::I32ShrU => write!(f, "i32.shr_u"),
+            Op::I32Rotl => write!(f, "i32.rotl"),
+            Op::I32Rotr => write!(f, "i32.rotr"),
+            Op::I32Extend8S => write!(f, "i32.extend8_s"),
+            Op::I32Extend16S => write!(f, "i32.extend16_s"),
+            Op::Select => write!(f, "select"),
             Op::I32Eqz => write!(f, "i32.eqz"),
             Op::I32Eq => write!(f, "i32.eq"),
             Op::I32Ne => write!(f, "i32.ne"),
