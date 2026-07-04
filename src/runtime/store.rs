@@ -1762,7 +1762,11 @@ mod tests {
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
-        assert!(err.to_string().contains("unreachable"), "unexpected error: {err}");
+        assert!(
+            err.to_string()
+                .contains("not yet supported by the flat engine: f64.add"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

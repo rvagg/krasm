@@ -219,6 +219,10 @@ pub enum Op {
 
     /// Unreachable trap.
     Unreachable,
+    /// Placeholder for an instruction the flat compiler does not support
+    /// yet. Traps with the instruction's mnemonic, so a failing program
+    /// names exactly what is missing.
+    Unsupported(&'static str),
 
     /// Drop top of stack.
     Drop,
@@ -280,7 +284,7 @@ impl Op {
             Op::Br { .. } => 0,           // unreachable after, depth irrelevant
             Op::BrIf { .. } => -1,        // pops condition
             Op::BrTable { .. } => -1,     // pops index
-            Op::Return | Op::End | Op::Unreachable => 0,
+            Op::Return | Op::End | Op::Unreachable | Op::Unsupported(_) => 0,
             Op::Nop | Op::Label { .. } => 0,
             Op::Drop => -1,
         }
@@ -463,6 +467,7 @@ impl fmt::Display for Op {
             Op::End => write!(f, "end"),
             Op::Label { end_target } => write!(f, "label (end -> {end_target})"),
             Op::Unreachable => write!(f, "unreachable"),
+            Op::Unsupported(name) => write!(f, "unsupported <{name}>"),
             Op::Drop => write!(f, "drop"),
         }
     }

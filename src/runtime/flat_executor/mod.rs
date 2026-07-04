@@ -792,6 +792,11 @@ impl FlatExecutor {
                 Op::Unreachable => {
                     return Err(RuntimeError::Trap("unreachable".to_string()));
                 }
+                Op::Unsupported(name) => {
+                    return Err(RuntimeError::Trap(format!(
+                        "instruction not yet supported by the flat engine: {name}"
+                    )));
+                }
             }
         }
 

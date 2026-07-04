@@ -5,10 +5,10 @@
 //! - `dump` -- display module structure (header, details, disassembly)
 //! - `compile` -- compile WAT text format to `.wasm` binary
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use krasm::parser;
 use krasm::wasi::{WasiContext, create_wasi_instance};
-use krasm::{Module, Store};
+use krasm::{EngineKind, Module, Store};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{stderr, stdin, stdout};
@@ -34,6 +34,10 @@ enum Commands {
         /// Preopen a directory for filesystem access
         #[arg(long = "dir", value_name = "PATH")]
         dirs: Vec<String>,
+
+        /// Interpreter engine (flat is experimental with partial coverage)
+        #[arg(long, value_enum, default_value_t = EngineArg::Structured)]
+        engine: EngineArg,
 
         /// Arguments to pass to the module (after --)
         #[arg(last = true)]
@@ -82,7 +86,12 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, dirs, args } => run_wasi_module(&file, dirs, args),
+        Commands::Run {
+            file,
+            dirs,
+            engine,
+            args,
+        } => run_wasi_module(&file, dirs, engine, args),
         Commands::Dump {
             file,
             header,
@@ -152,7 +161,23 @@ fn compile_module(file: &str, output: Option<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_wasi_module(file: &str, dirs: Vec<String>, module_args: Vec<String>) -> ExitCode {
+/// CLI-facing engine choice, mapped onto [`EngineKind`].
+#[derive(Clone, Copy, ValueEnum)]
+enum EngineArg {
+    Structured,
+    Flat,
+}
+
+impl From<EngineArg> for EngineKind {
+    fn from(arg: EngineArg) -> Self {
+        match arg {
+            EngineArg::Structured => EngineKind::Structured,
+            EngineArg::Flat => EngineKind::Flat,
+        }
+    }
+}
+
+fn run_wasi_module(file: &str, dirs: Vec<String>, engine: EngineArg, module_args: Vec<String>) -> ExitCode {
     let module = match load_module(file) {
         Ok(m) => m,
         Err(e) => {
@@ -165,8 +190,6 @@ fn run_wasi_module(file: &str, dirs: Vec<String>, module_args: Vec<String>) -> E
     let mut args = vec![file.to_string()];
     args.extend(module_args);
 
-    // WasiContext uses RefCell internally which isn't Sync, but we don't
-    // share it across threads, so Arc is fine here.
     let mut builder = WasiContext::builder()
         .args(args)
         .stdin(Box::new(stdin()))
@@ -182,11 +205,10 @@ fn run_wasi_module(file: &str, dirs: Vec<String>, module_args: Vec<String>) -> E
         builder = builder.preopen_dir(dir, dir);
     }
 
-    #[allow(clippy::arc_with_non_send_sync)]
     let ctx = Arc::new(builder.build());
 
     let mut store = Store::new();
-    #[allow(clippy::arc_with_non_send_sync)]
+    store.set_engine(engine.into());
     let module = Arc::new(module);
     let instance_id = match create_wasi_instance(&mut store, module, ctx.clone(), true) {
         Ok(id) => id,

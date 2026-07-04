@@ -553,11 +553,10 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Select => self.op(Op::Select),
             InstructionKind::SelectTyped { .. } => self.op(Op::Select),
 
-            // Not yet compiled -- emit Unreachable as a placeholder so we
-            // get a clear trap rather than silent wrong behaviour.
-            _ => {
-                self.emit(Op::Unreachable);
-            }
+            // Not yet compiled: emit a named placeholder so execution
+            // traps with exactly which instruction is missing, rather than
+            // computing anything silently wrong.
+            other => self.op(Op::Unsupported(other.mnemonic())),
         }
     }
 
