@@ -5,15 +5,43 @@
 //! context stack, no label stack, and no multi-level dispatch. The executor
 //! reuses the existing `Stack` and `Value` types.
 //!
+//! Calls to imported functions suspend execution rather than dispatching
+//! internally. The caller (ultimately the Store) drives this loop:
+//!
+//! ```text
+//! invoke(funcs, idx, args)
+//!    |
+//!    +--> Complete(results)                        done
+//!    |
+//!    +--> NeedsExternalCall { func_addr, args }
+//!            |
+//!            v
+//!         caller performs the call
+//!            |
+//!            v
+//!         resume_with_results(results)
+//!            |
+//!            +--> Complete(results)                done
+//!            |
+//!            +--> NeedsExternalCall                repeat: call, resume
+//! ```
+//!
+//! While suspended, the executor retains the operand stack, the internal
+//! call stack, and the frame that issued the call (as `SuspendedState`).
+//! Stack discipline at the suspension point: the call's arguments have
+//! already been popped; resume pushes the results, exactly as if the call
+//! had executed inline. Same-module calls are handled internally on a
+//! shared operand stack and never suspend.
+//!
 //! Instruction implementations are delegated to the `ops` module where
 //! possible, keeping the dispatch loop thin.
 
-use super::RuntimeError;
 use super::bytecode::{CompiledFunction, Op};
 use super::ops;
 use super::stack::Stack;
-use super::store::{GlobalAddr, MemoryAddr, Resources};
+use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources};
 use super::value::Value;
+use super::{ExecutionOutcome, ExternalCallRequest, RuntimeError};
 
 /// Perform stack cleanup for a branch: keep `arity` values from the top,
 /// discard everything down to `stack_depth`, push the kept values back.
@@ -40,10 +68,25 @@ pub struct ExecContext<'a> {
     pub resources: &'a mut Resources,
     pub global_addrs: &'a [GlobalAddr],
     pub memory_addrs: &'a [MemoryAddr],
-    /// Number of imported functions. `Op::Call { func_idx }` values below
-    /// this are imports (not yet supported); values at or above index into
-    /// the `funcs` slice passed to `execute_flat`.
-    pub num_imported: u32,
+    /// One entry per imported function. `Op::Call { func_idx }` values below
+    /// this slice's length suspend execution with
+    /// `ExecutionOutcome::NeedsExternalCall`; values at or above index into
+    /// the compiled `funcs` slice after subtracting the import count.
+    pub imported_funcs: &'a [ImportedFunc],
+}
+
+/// An imported function as seen by the flat executor: where to dispatch the
+/// call, and the signature shape needed to keep the shared operand stack
+/// consistent across the suspension.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportedFunc {
+    /// Store address to dispatch the call to.
+    pub addr: FuncAddr,
+    /// Number of arguments to pop when suspending.
+    pub param_count: u16,
+    /// Number of results the external call must produce; enforced on resume,
+    /// since a wrong count would silently skew branch stack offsets.
+    pub result_count: u16,
 }
 
 const MAX_CALL_DEPTH: usize = 1000;
@@ -145,342 +188,518 @@ fn init_locals_from_stack(callee: &CompiledFunction, stack: &mut Stack) -> Resul
     Ok(locals)
 }
 
-/// Execute a compiled function with the given arguments.
+/// Execution state suspended across an external call.
 ///
-/// `funcs` is the slice of all compiled local functions for the module.
-/// `func_idx` is the index into `funcs` of the entry function.
-/// `ctx` provides access to globals, memory, and import count. Pass `None`
-/// for pure computation with no calls, globals, or memory.
+/// Holds the frame that issued the call (with `pc` already past the Call op)
+/// and the entry function index, needed to collect the right number of
+/// results when execution eventually completes.
+struct SuspendedState {
+    frame: CallFrame,
+    entry_func_idx: usize,
+    /// Result count declared by the suspended import; resume traps on
+    /// mismatch rather than corrupting the stack.
+    expected_results: u16,
+}
+
+/// Flat bytecode executor with resumable external calls.
+///
+/// Owns the operand stack and call stack so execution can suspend when an
+/// imported function is called: `invoke` returns
+/// `ExecutionOutcome::NeedsExternalCall`, the Store performs the call, and
+/// `resume_with_results` continues from the saved state. This mirrors the
+/// structured `Executor`'s outcome-based dispatch, so the Store can drive
+/// either engine with the same loop.
+pub struct FlatExecutor {
+    stack: Stack,
+    call_stack: Vec<CallFrame>,
+    suspended: Option<SuspendedState>,
+}
+
+impl Default for FlatExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FlatExecutor {
+    pub fn new() -> Self {
+        FlatExecutor {
+            stack: Stack::new(),
+            call_stack: Vec::new(),
+            suspended: None,
+        }
+    }
+
+    /// Discard all execution state, returning the executor to a reusable
+    /// idle state after an error.
+    fn reset(&mut self) {
+        self.stack.clear();
+        self.call_stack.clear();
+        self.suspended = None;
+    }
+
+    /// Execute a compiled function with the given arguments.
+    ///
+    /// `funcs` is the slice of all compiled local functions for the module.
+    /// `func_idx` is the index into `funcs` of the entry function.
+    /// `ctx` provides access to globals, memory, and imported functions.
+    /// Pass `None` for pure computation with no imports, globals, or memory.
+    ///
+    /// Returns `Complete` with the function's results, or `NeedsExternalCall`
+    /// if an imported function must be dispatched; the caller performs that
+    /// call and passes its results to [`FlatExecutor::resume_with_results`].
+    pub(crate) fn invoke(
+        &mut self,
+        funcs: &[CompiledFunction],
+        func_idx: usize,
+        args: &[Value],
+        ctx: Option<&mut ExecContext<'_>>,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        self.reset();
+        let func = funcs
+            .get(func_idx)
+            .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx as u32))?;
+
+        let frame = CallFrame {
+            func_idx,
+            pc: 0,
+            stack_base: 0,
+            locals: init_locals(func, args),
+        };
+        let result = self.run(funcs, frame, func_idx, ctx);
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    /// Resume execution after an external call completes, pushing its
+    /// results onto the operand stack and continuing from the saved frame.
+    // Called only from tests until the Store drives the flat executor; the
+    // expectation flags itself for removal once that integration lands.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn resume_with_results(
+        &mut self,
+        funcs: &[CompiledFunction],
+        results: Vec<Value>,
+        ctx: Option<&mut ExecContext<'_>>,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let SuspendedState {
+            frame,
+            entry_func_idx,
+            expected_results,
+        } = self
+            .suspended
+            .take()
+            .ok_or_else(|| RuntimeError::Trap("resume called without saved execution state".to_string()))?;
+
+        // A wrong count would silently skew branch stack offsets for the
+        // rest of execution; trap here instead. Types are still checked
+        // lazily by the typed pops that consume the values.
+        if results.len() != expected_results as usize {
+            self.reset();
+            return Err(RuntimeError::Trap(format!(
+                "external call returned {} values, expected {}",
+                results.len(),
+                expected_results
+            )));
+        }
+
+        for value in results {
+            self.stack.push(value);
+        }
+
+        let result = self.run(funcs, frame, entry_func_idx, ctx);
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    /// The dispatch loop: walk bytecode from `frame` until the entry
+    /// function completes or an imported call suspends execution.
+    fn run(
+        &mut self,
+        funcs: &[CompiledFunction],
+        frame: CallFrame,
+        entry_func_idx: usize,
+        mut ctx: Option<&mut ExecContext<'_>>,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        // Destructure into disjoint borrows: the loop mutates the operand
+        // stack and call stack independently.
+        let FlatExecutor {
+            stack,
+            call_stack,
+            suspended,
+        } = self;
+
+        let CallFrame {
+            func_idx: mut current_func_idx,
+            mut pc,
+            // Stack base for the current function. Branch stack_depth values
+            // are offsets from this base, since the physical stack is shared
+            // across all active call frames.
+            mut stack_base,
+            mut locals,
+        } = frame;
+
+        loop {
+            let ops_slice = &funcs[current_func_idx].ops;
+            if pc >= ops_slice.len() {
+                break;
+            }
+
+            match &ops_slice[pc] {
+                // -- Constants --
+                Op::I32Const(v) => {
+                    ops::numeric::i32_const(stack, *v)?;
+                    pc += 1;
+                }
+
+                // -- Arithmetic --
+                Op::I32Add => {
+                    ops::numeric::i32_add(stack)?;
+                    pc += 1;
+                }
+                Op::I32Sub => {
+                    ops::numeric::i32_sub(stack)?;
+                    pc += 1;
+                }
+                Op::I32Mul => {
+                    ops::numeric::i32_mul(stack)?;
+                    pc += 1;
+                }
+
+                // -- Comparison --
+                Op::I32Eqz => {
+                    ops::comparison::i32_eqz(stack)?;
+                    pc += 1;
+                }
+                Op::I32Eq => {
+                    ops::comparison::i32_eq(stack)?;
+                    pc += 1;
+                }
+                Op::I32Ne => {
+                    ops::comparison::i32_ne(stack)?;
+                    pc += 1;
+                }
+                Op::I32LtS => {
+                    ops::comparison::i32_lt_s(stack)?;
+                    pc += 1;
+                }
+                Op::I32LtU => {
+                    ops::comparison::i32_lt_u(stack)?;
+                    pc += 1;
+                }
+                Op::I32GtS => {
+                    ops::comparison::i32_gt_s(stack)?;
+                    pc += 1;
+                }
+                Op::I32GtU => {
+                    ops::comparison::i32_gt_u(stack)?;
+                    pc += 1;
+                }
+                Op::I32LeS => {
+                    ops::comparison::i32_le_s(stack)?;
+                    pc += 1;
+                }
+                Op::I32LeU => {
+                    ops::comparison::i32_le_u(stack)?;
+                    pc += 1;
+                }
+                Op::I32GeS => {
+                    ops::comparison::i32_ge_s(stack)?;
+                    pc += 1;
+                }
+                Op::I32GeU => {
+                    ops::comparison::i32_ge_u(stack)?;
+                    pc += 1;
+                }
+
+                // -- Local variables --
+                // These interact with the locals array directly; no ops function.
+                Op::LocalGet { index } => {
+                    let val = locals
+                        .get(*index as usize)
+                        .copied()
+                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    stack.push(val);
+                    pc += 1;
+                }
+                Op::LocalSet { index } => {
+                    let val = stack.pop()?;
+                    let slot = locals
+                        .get_mut(*index as usize)
+                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    *slot = val;
+                    pc += 1;
+                }
+                Op::LocalTee { index } => {
+                    let val = stack.pop()?;
+                    let slot = locals
+                        .get_mut(*index as usize)
+                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    *slot = val;
+                    stack.push(val);
+                    pc += 1;
+                }
+
+                // -- Global variables --
+                Op::GlobalGet { index } => {
+                    require_ctx!(ctx).global_get(stack, *index)?;
+                    pc += 1;
+                }
+                Op::GlobalSet { index } => {
+                    require_ctx!(ctx).global_set(stack, *index)?;
+                    pc += 1;
+                }
+
+                // -- Memory --
+                Op::I32Load(m) => {
+                    ops::memory::i32_load(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Load8S(m) => {
+                    ops::memory::i32_load8_s(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Load8U(m) => {
+                    ops::memory::i32_load8_u(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Load16S(m) => {
+                    ops::memory::i32_load16_s(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Load16U(m) => {
+                    ops::memory::i32_load16_u(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load(m) => {
+                    ops::memory::i64_load(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load8S(m) => {
+                    ops::memory::i64_load8_s(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load8U(m) => {
+                    ops::memory::i64_load8_u(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load16S(m) => {
+                    ops::memory::i64_load16_s(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load16U(m) => {
+                    ops::memory::i64_load16_u(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load32S(m) => {
+                    ops::memory::i64_load32_s(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Load32U(m) => {
+                    ops::memory::i64_load32_u(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::F32Load(m) => {
+                    ops::memory::f32_load(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::F64Load(m) => {
+                    ops::memory::f64_load(stack, require_ctx!(ctx).memory()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Store(m) => {
+                    ops::memory::i32_store(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Store8(m) => {
+                    ops::memory::i32_store8(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I32Store16(m) => {
+                    ops::memory::i32_store16(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Store(m) => {
+                    ops::memory::i64_store(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Store8(m) => {
+                    ops::memory::i64_store8(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Store16(m) => {
+                    ops::memory::i64_store16(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::I64Store32(m) => {
+                    ops::memory::i64_store32(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::F32Store(m) => {
+                    ops::memory::f32_store(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::F64Store(m) => {
+                    ops::memory::f64_store(stack, require_ctx!(ctx).memory_mut()?, m)?;
+                    pc += 1;
+                }
+                Op::MemorySize => {
+                    ops::memory::memory_size(stack, require_ctx!(ctx).memory()?)?;
+                    pc += 1;
+                }
+                Op::MemoryGrow => {
+                    ops::memory::memory_grow(stack, require_ctx!(ctx).memory_mut()?)?;
+                    pc += 1;
+                }
+                Op::MemoryCopy => {
+                    ops::memory::memory_copy(stack, require_ctx!(ctx).memory_mut()?)?;
+                    pc += 1;
+                }
+                Op::MemoryFill => {
+                    ops::memory::memory_fill(stack, require_ctx!(ctx).memory_mut()?)?;
+                    pc += 1;
+                }
+
+                // -- Control flow --
+                // These mutate pc directly; no ops function.
+                Op::Br {
+                    target,
+                    arity,
+                    stack_depth,
+                } => {
+                    branch_cleanup(stack, *arity, stack_base + *stack_depth as usize)?;
+                    pc = *target as usize;
+                }
+                Op::BrIf {
+                    target,
+                    arity,
+                    stack_depth,
+                } => {
+                    let cond = stack.pop_i32()?;
+                    if cond != 0 {
+                        branch_cleanup(stack, *arity, stack_base + *stack_depth as usize)?;
+                        pc = *target as usize;
+                    } else {
+                        pc += 1;
+                    }
+                }
+                Op::BrTable { targets, default } => {
+                    let index = stack.pop_i32()? as u32;
+                    let target = if (index as usize) < targets.len() {
+                        &targets[index as usize]
+                    } else {
+                        default
+                    };
+                    branch_cleanup(stack, target.arity, stack_base + target.stack_depth as usize)?;
+                    pc = target.pc as usize;
+                }
+                Op::Call { func_idx } => {
+                    let imported = ctx.as_ref().map(|c| c.imported_funcs).unwrap_or(&[]);
+
+                    // Imported function: pop its arguments, save the current
+                    // frame, and hand the call to the Store. Execution resumes
+                    // in `resume_with_results` at the instruction after the Call.
+                    if let Some(&imported_func) = imported.get(*func_idx as usize) {
+                        let mut args = Vec::with_capacity(imported_func.param_count as usize);
+                        for _ in 0..imported_func.param_count {
+                            args.push(stack.pop()?);
+                        }
+                        args.reverse();
+
+                        *suspended = Some(SuspendedState {
+                            frame: CallFrame {
+                                func_idx: current_func_idx,
+                                pc: pc + 1,
+                                stack_base,
+                                locals,
+                            },
+                            entry_func_idx,
+                            expected_results: imported_func.result_count,
+                        });
+                        return Ok(ExecutionOutcome::NeedsExternalCall(ExternalCallRequest {
+                            func_addr: imported_func.addr,
+                            args,
+                        }));
+                    }
+
+                    let local_idx = *func_idx as usize - imported.len();
+                    if local_idx >= funcs.len() {
+                        return Err(RuntimeError::FunctionIndexOutOfBounds(*func_idx));
+                    }
+                    if call_stack.len() >= MAX_CALL_DEPTH {
+                        return Err(RuntimeError::CallStackOverflow);
+                    }
+
+                    let callee = &funcs[local_idx];
+                    let callee_locals = init_locals_from_stack(callee, stack)?;
+
+                    let new_stack_base = stack.len();
+                    call_stack.push(CallFrame {
+                        func_idx: current_func_idx,
+                        pc: pc + 1,
+                        stack_base,
+                        locals: std::mem::replace(&mut locals, callee_locals),
+                    });
+                    current_func_idx = local_idx;
+                    stack_base = new_stack_base;
+                    pc = 0;
+                }
+                Op::Return | Op::End => {
+                    if let Some(frame) = call_stack.pop() {
+                        current_func_idx = frame.func_idx;
+                        pc = frame.pc;
+                        stack_base = frame.stack_base;
+                        locals = frame.locals;
+                    } else {
+                        break;
+                    }
+                }
+                Op::Nop | Op::Label { .. } => {
+                    pc += 1;
+                }
+                Op::Drop => {
+                    ops::parametric::drop(stack)?;
+                    pc += 1;
+                }
+                Op::Unreachable => {
+                    return Err(RuntimeError::Trap("unreachable".to_string()));
+                }
+            }
+        }
+
+        // Collect the entry function's return values from the stack
+        let result_count = funcs[entry_func_idx].result_count;
+        let mut results = Vec::with_capacity(result_count as usize);
+        for _ in 0..result_count {
+            results.push(stack.pop()?);
+        }
+        results.reverse();
+        Ok(ExecutionOutcome::Complete(results))
+    }
+}
+
+/// Execute a compiled function to completion with the given arguments.
+///
+/// Convenience wrapper over [`FlatExecutor`] for callers with no Store to
+/// dispatch external calls (benchmarks, tests): calling an imported function
+/// is an error here.
 pub fn execute_flat(
     funcs: &[CompiledFunction],
     func_idx: usize,
     args: &[Value],
-    mut ctx: Option<&mut ExecContext<'_>>,
+    ctx: Option<&mut ExecContext<'_>>,
 ) -> Result<Vec<Value>, RuntimeError> {
-    let func = &funcs[func_idx];
-    let mut stack = Stack::new();
-
-    // Initialise locals: parameters first, then zero-initialised locals.
-    let mut locals = init_locals(func, args);
-
-    let mut current_func_idx: usize = func_idx;
-    let mut pc: usize = 0;
-    let mut call_stack: Vec<CallFrame> = Vec::new();
-    // Stack base for the current function. Branch stack_depth values are
-    // offsets from this base, since the physical stack is shared across
-    // all active call frames.
-    let mut stack_base: usize = 0;
-
-    loop {
-        let ops_slice = &funcs[current_func_idx].ops;
-        if pc >= ops_slice.len() {
-            break;
-        }
-
-        match &ops_slice[pc] {
-            // -- Constants --
-            Op::I32Const(v) => {
-                ops::numeric::i32_const(&mut stack, *v)?;
-                pc += 1;
-            }
-
-            // -- Arithmetic --
-            Op::I32Add => {
-                ops::numeric::i32_add(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32Sub => {
-                ops::numeric::i32_sub(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32Mul => {
-                ops::numeric::i32_mul(&mut stack)?;
-                pc += 1;
-            }
-
-            // -- Comparison --
-            Op::I32Eqz => {
-                ops::comparison::i32_eqz(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32Eq => {
-                ops::comparison::i32_eq(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32Ne => {
-                ops::comparison::i32_ne(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32LtS => {
-                ops::comparison::i32_lt_s(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32LtU => {
-                ops::comparison::i32_lt_u(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32GtS => {
-                ops::comparison::i32_gt_s(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32GtU => {
-                ops::comparison::i32_gt_u(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32LeS => {
-                ops::comparison::i32_le_s(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32LeU => {
-                ops::comparison::i32_le_u(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32GeS => {
-                ops::comparison::i32_ge_s(&mut stack)?;
-                pc += 1;
-            }
-            Op::I32GeU => {
-                ops::comparison::i32_ge_u(&mut stack)?;
-                pc += 1;
-            }
-
-            // -- Local variables --
-            // These interact with the locals array directly; no ops function.
-            Op::LocalGet { index } => {
-                let val = locals
-                    .get(*index as usize)
-                    .copied()
-                    .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
-                stack.push(val);
-                pc += 1;
-            }
-            Op::LocalSet { index } => {
-                let val = stack.pop()?;
-                let slot = locals
-                    .get_mut(*index as usize)
-                    .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
-                *slot = val;
-                pc += 1;
-            }
-            Op::LocalTee { index } => {
-                let val = stack.pop()?;
-                let slot = locals
-                    .get_mut(*index as usize)
-                    .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
-                *slot = val;
-                stack.push(val);
-                pc += 1;
-            }
-
-            // -- Global variables --
-            Op::GlobalGet { index } => {
-                require_ctx!(ctx).global_get(&mut stack, *index)?;
-                pc += 1;
-            }
-            Op::GlobalSet { index } => {
-                require_ctx!(ctx).global_set(&mut stack, *index)?;
-                pc += 1;
-            }
-
-            // -- Memory --
-            Op::I32Load(m) => {
-                ops::memory::i32_load(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I32Load8S(m) => {
-                ops::memory::i32_load8_s(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I32Load8U(m) => {
-                ops::memory::i32_load8_u(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I32Load16S(m) => {
-                ops::memory::i32_load16_s(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I32Load16U(m) => {
-                ops::memory::i32_load16_u(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load(m) => {
-                ops::memory::i64_load(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load8S(m) => {
-                ops::memory::i64_load8_s(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load8U(m) => {
-                ops::memory::i64_load8_u(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load16S(m) => {
-                ops::memory::i64_load16_s(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load16U(m) => {
-                ops::memory::i64_load16_u(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load32S(m) => {
-                ops::memory::i64_load32_s(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I64Load32U(m) => {
-                ops::memory::i64_load32_u(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::F32Load(m) => {
-                ops::memory::f32_load(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::F64Load(m) => {
-                ops::memory::f64_load(&mut stack, require_ctx!(ctx).memory()?, m)?;
-                pc += 1;
-            }
-            Op::I32Store(m) => {
-                ops::memory::i32_store(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I32Store8(m) => {
-                ops::memory::i32_store8(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I32Store16(m) => {
-                ops::memory::i32_store16(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I64Store(m) => {
-                ops::memory::i64_store(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I64Store8(m) => {
-                ops::memory::i64_store8(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I64Store16(m) => {
-                ops::memory::i64_store16(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::I64Store32(m) => {
-                ops::memory::i64_store32(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::F32Store(m) => {
-                ops::memory::f32_store(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::F64Store(m) => {
-                ops::memory::f64_store(&mut stack, require_ctx!(ctx).memory_mut()?, m)?;
-                pc += 1;
-            }
-            Op::MemorySize => {
-                ops::memory::memory_size(&mut stack, require_ctx!(ctx).memory()?)?;
-                pc += 1;
-            }
-            Op::MemoryGrow => {
-                ops::memory::memory_grow(&mut stack, require_ctx!(ctx).memory_mut()?)?;
-                pc += 1;
-            }
-            Op::MemoryCopy => {
-                ops::memory::memory_copy(&mut stack, require_ctx!(ctx).memory_mut()?)?;
-                pc += 1;
-            }
-            Op::MemoryFill => {
-                ops::memory::memory_fill(&mut stack, require_ctx!(ctx).memory_mut()?)?;
-                pc += 1;
-            }
-
-            // -- Control flow --
-            // These mutate pc directly; no ops function.
-            Op::Br {
-                target,
-                arity,
-                stack_depth,
-            } => {
-                branch_cleanup(&mut stack, *arity, stack_base + *stack_depth as usize)?;
-                pc = *target as usize;
-            }
-            Op::BrIf {
-                target,
-                arity,
-                stack_depth,
-            } => {
-                let cond = stack.pop_i32()?;
-                if cond != 0 {
-                    branch_cleanup(&mut stack, *arity, stack_base + *stack_depth as usize)?;
-                    pc = *target as usize;
-                } else {
-                    pc += 1;
-                }
-            }
-            Op::BrTable { targets, default } => {
-                let index = stack.pop_i32()? as u32;
-                let target = if (index as usize) < targets.len() {
-                    &targets[index as usize]
-                } else {
-                    default
-                };
-                branch_cleanup(&mut stack, target.arity, stack_base + target.stack_depth as usize)?;
-                pc = target.pc as usize;
-            }
-            Op::Call { func_idx } => {
-                let num_imported = ctx.as_ref().map(|c| c.num_imported).unwrap_or(0);
-                let local_idx = (*func_idx as usize)
-                    .checked_sub(num_imported as usize)
-                    .ok_or_else(|| RuntimeError::Trap("imported function calls not yet supported".to_string()))?;
-                if local_idx >= funcs.len() {
-                    return Err(RuntimeError::FunctionIndexOutOfBounds(*func_idx));
-                }
-                if call_stack.len() >= MAX_CALL_DEPTH {
-                    return Err(RuntimeError::CallStackOverflow);
-                }
-
-                let callee = &funcs[local_idx];
-                let callee_locals = init_locals_from_stack(callee, &mut stack)?;
-
-                let new_stack_base = stack.len();
-                call_stack.push(CallFrame {
-                    func_idx: current_func_idx,
-                    pc: pc + 1,
-                    stack_base,
-                    locals: std::mem::replace(&mut locals, callee_locals),
-                });
-                current_func_idx = local_idx;
-                stack_base = new_stack_base;
-                pc = 0;
-            }
-            Op::Return | Op::End => {
-                if let Some(frame) = call_stack.pop() {
-                    current_func_idx = frame.func_idx;
-                    pc = frame.pc;
-                    stack_base = frame.stack_base;
-                    locals = frame.locals;
-                } else {
-                    break;
-                }
-            }
-            Op::Nop | Op::Label { .. } => {
-                pc += 1;
-            }
-            Op::Drop => {
-                ops::parametric::drop(&mut stack)?;
-                pc += 1;
-            }
-            Op::Unreachable => {
-                return Err(RuntimeError::Trap("unreachable".to_string()));
-            }
-        }
+    let mut executor = FlatExecutor::new();
+    match executor.invoke(funcs, func_idx, args, ctx)? {
+        ExecutionOutcome::Complete(results) => Ok(results),
+        ExecutionOutcome::NeedsExternalCall(_) => Err(RuntimeError::Trap(
+            "imported function call requires Store dispatch".to_string(),
+        )),
     }
-
-    // Collect return values from the stack
-    let mut results = Vec::with_capacity(func.result_count as usize);
-    for _ in 0..func.result_count {
-        results.push(stack.pop()?);
-    }
-    results.reverse();
-    Ok(results)
 }
 
 #[cfg(test)]
@@ -727,7 +946,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &global_addrs,
             memory_addrs: &[],
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -756,7 +975,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -783,7 +1002,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -810,7 +1029,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1273,7 +1492,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1300,7 +1519,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1329,7 +1548,7 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            num_imported: 0,
+            imported_funcs: &[],
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1506,5 +1725,220 @@ mod tests {
         );
         let result = execute_flat(&funcs, 1, &[], None).expect("execution failed");
         assert_eq!(result, vec![Value::I32(42)]);
+    }
+
+    // -- Imported calls (suspend/resume) --
+
+    /// Fresh Resources with no memories, tables, or globals.
+    fn empty_resources() -> Resources {
+        Resources {
+            memories: Vec::new(),
+            tables: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+
+    /// Unwrap a NeedsExternalCall outcome into its request.
+    fn expect_external_call(outcome: ExecutionOutcome) -> ExternalCallRequest {
+        match outcome {
+            ExecutionOutcome::NeedsExternalCall(request) => request,
+            ExecutionOutcome::Complete(values) => {
+                panic!("expected external call, got Complete({values:?})")
+            }
+        }
+    }
+
+    /// Unwrap a Complete outcome into its results.
+    fn expect_complete(outcome: ExecutionOutcome) -> Vec<Value> {
+        match outcome {
+            ExecutionOutcome::Complete(values) => values,
+            ExecutionOutcome::NeedsExternalCall(request) => {
+                panic!("expected completion, got external call to {:?}", request.func_addr)
+            }
+        }
+    }
+
+    #[test]
+    fn imported_call_suspends_and_resumes() {
+        // run(n) = mul2(n) + 1, where mul2 is imported
+        let funcs = compile_wat(
+            "(module
+                (import \"env\" \"mul2\" (func $mul2 (param i32) (result i32)))
+                (func $run (param i32) (result i32)
+                    (i32.add (call $mul2 (local.get 0)) (i32.const 1))))",
+        );
+
+        let mut resources = empty_resources();
+        let imported = [ImportedFunc {
+            addr: FuncAddr(7),
+            param_count: 1,
+            result_count: 1,
+        }];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            imported_funcs: &imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let outcome = executor
+            .invoke(&funcs, 0, &[Value::I32(21)], Some(&mut ctx))
+            .expect("invoke failed");
+
+        // Suspended at the import with the popped argument
+        let request = expect_external_call(outcome);
+        assert_eq!(request.func_addr.0, 7);
+        assert_eq!(request.args, vec![Value::I32(21)]);
+
+        // The Store would call mul2(21) = 42; resume with that result
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(42)], Some(&mut ctx))
+            .expect("resume failed");
+        assert_eq!(expect_complete(outcome), vec![Value::I32(43)]);
+    }
+
+    #[test]
+    fn imported_call_from_nested_frame() {
+        // Suspension happens two frames deep; the internal call stack and
+        // both frames' locals must survive across the external call.
+        let funcs = compile_wat(
+            "(module
+                (import \"env\" \"get\" (func $get (result i32)))
+                (func $helper (result i32)
+                    (i32.add (call $get) (i32.const 10)))
+                (func $run (param i32) (result i32)
+                    (i32.add (call $helper) (local.get 0))))",
+        );
+
+        let mut resources = empty_resources();
+        let imported = [ImportedFunc {
+            addr: FuncAddr(0),
+            param_count: 0,
+            result_count: 1,
+        }];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            imported_funcs: &imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let outcome = executor
+            .invoke(&funcs, 1, &[Value::I32(100)], Some(&mut ctx))
+            .expect("invoke failed");
+        let request = expect_external_call(outcome);
+        assert!(request.args.is_empty());
+
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(5)], Some(&mut ctx))
+            .expect("resume failed");
+        // get() = 5, helper() = 15, run(100) = 115
+        assert_eq!(expect_complete(outcome), vec![Value::I32(115)]);
+    }
+
+    #[test]
+    fn two_sequential_imported_calls() {
+        let funcs = compile_wat(
+            "(module
+                (import \"env\" \"get\" (func $get (result i32)))
+                (func $run (result i32)
+                    (i32.add (call $get) (call $get))))",
+        );
+
+        let mut resources = empty_resources();
+        let imported = [ImportedFunc {
+            addr: FuncAddr(3),
+            param_count: 0,
+            result_count: 1,
+        }];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            imported_funcs: &imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let outcome = executor.invoke(&funcs, 0, &[], Some(&mut ctx)).expect("invoke failed");
+        expect_external_call(outcome);
+
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(3)], Some(&mut ctx))
+            .expect("first resume failed");
+        expect_external_call(outcome);
+
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(4)], Some(&mut ctx))
+            .expect("second resume failed");
+        assert_eq!(expect_complete(outcome), vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn resume_without_suspension_traps() {
+        let mut executor = FlatExecutor::new();
+        let err = executor.resume_with_results(&[], vec![], None).unwrap_err();
+        assert!(err.to_string().contains("resume called without saved execution state"));
+    }
+
+    #[test]
+    fn resume_with_wrong_result_count_traps() {
+        let funcs = compile_wat(
+            "(module
+                (import \"env\" \"get\" (func $get (result i32)))
+                (func $run (result i32) (call $get)))",
+        );
+
+        let mut resources = empty_resources();
+        let imported = [ImportedFunc {
+            addr: FuncAddr(0),
+            param_count: 0,
+            result_count: 1,
+        }];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            imported_funcs: &imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let outcome = executor.invoke(&funcs, 0, &[], Some(&mut ctx)).expect("invoke failed");
+        expect_external_call(outcome);
+
+        // The import declares one result; resuming with two must trap
+        let err = executor
+            .resume_with_results(&funcs, vec![Value::I32(1), Value::I32(2)], Some(&mut ctx))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("returned 2 values, expected 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn execute_flat_rejects_imported_call() {
+        let funcs = compile_wat(
+            "(module
+                (import \"env\" \"get\" (func $get (result i32)))
+                (func $run (result i32) (call $get)))",
+        );
+
+        let mut resources = empty_resources();
+        let imported = [ImportedFunc {
+            addr: FuncAddr(0),
+            param_count: 0,
+            result_count: 1,
+        }];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            imported_funcs: &imported,
+        };
+
+        let err = execute_flat(&funcs, 0, &[], Some(&mut ctx)).unwrap_err();
+        assert!(err.to_string().contains("requires Store dispatch"));
     }
 }
