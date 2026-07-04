@@ -505,6 +505,20 @@ impl<'a> CompileContext<'a> {
                 self.ops.push(Op::Call { func_idx: *func_idx });
                 self.depth = (self.depth as i32 - params as i32 + results as i32) as u32;
             }
+            InstructionKind::CallIndirect { type_idx, table_idx } => {
+                // Pops the i32 element index, then the params; pushes results.
+                // The signature comes from the type section, not func_sigs.
+                let (params, results) = self
+                    .types
+                    .get(*type_idx as usize)
+                    .map(|ft| (ft.parameters.len() as i32, ft.return_types.len() as i32))
+                    .unwrap_or((0, 0));
+                self.ops.push(Op::CallIndirect {
+                    type_idx: *type_idx,
+                    table_idx: *table_idx,
+                });
+                self.depth = (self.depth as i32 - 1 - params + results) as u32;
+            }
 
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),

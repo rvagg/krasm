@@ -5,7 +5,8 @@
 //! context stack, no label stack, and no multi-level dispatch. The executor
 //! reuses the existing `Stack` and `Value` types.
 //!
-//! Calls to imported functions suspend execution rather than dispatching
+//! External calls — imported functions (directly or via call_indirect) and
+//! foreign table funcrefs — suspend execution rather than dispatching
 //! internally. The caller (ultimately the Store) drives this loop:
 //!
 //! ```text
@@ -39,9 +40,10 @@
 use super::bytecode::{CompiledFunction, Op};
 use super::ops;
 use super::stack::Stack;
-use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources};
+use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
 use super::value::Value;
 use super::{ExecutionOutcome, ExternalCallRequest, RuntimeError};
+use crate::parser::module::FunctionType;
 
 /// Perform stack cleanup for a branch: keep `arity` values from the top,
 /// discard everything down to `stack_depth`, push the kept values back.
@@ -68,25 +70,31 @@ pub struct ExecContext<'a> {
     pub resources: &'a mut Resources,
     pub global_addrs: &'a [GlobalAddr],
     pub memory_addrs: &'a [MemoryAddr],
-    /// One entry per imported function. `Op::Call { func_idx }` values below
-    /// this slice's length suspend execution with
-    /// `ExecutionOutcome::NeedsExternalCall`; values at or above index into
-    /// the compiled `funcs` slice after subtracting the import count.
-    pub imported_funcs: &'a [ImportedFunc],
+    pub table_addrs: &'a [TableAddr],
+    /// Module function types, indexed by type index. Used for the argument
+    /// and result shapes of imported calls, and for call_indirect signature
+    /// checks.
+    pub types: &'a [FunctionType],
+    /// All module-level functions, imports first (matching the module index
+    /// space). `Op::Call { func_idx }` values below `num_imported` suspend
+    /// execution with `ExecutionOutcome::NeedsExternalCall`; values at or
+    /// above index into the compiled `funcs` slice after subtracting
+    /// `num_imported`. call_indirect scans this slice to map a table
+    /// funcref back to a callable.
+    pub functions: &'a [FuncEntry],
+    /// Number of imported functions (a prefix of `functions`).
+    pub num_imported: usize,
 }
 
-/// An imported function as seen by the flat executor: where to dispatch the
-/// call, and the signature shape needed to keep the shared operand stack
-/// consistent across the suspension.
+/// A module-level function as seen by the flat executor: where it lives in
+/// the Store, and its type for signature checks and stack discipline.
 #[derive(Debug, Clone, Copy)]
-pub struct ImportedFunc {
-    /// Store address to dispatch the call to.
+pub struct FuncEntry {
+    /// Store address to dispatch external calls to, and the identity that
+    /// table funcrefs are matched against.
     pub addr: FuncAddr,
-    /// Number of arguments to pop when suspending.
-    pub param_count: u16,
-    /// Number of results the external call must produce; enforced on resume,
-    /// since a wrong count would silently skew branch stack offsets.
-    pub result_count: u16,
+    /// Index into `ExecContext::types`.
+    pub type_idx: u32,
 }
 
 const MAX_CALL_DEPTH: usize = 1000;
@@ -157,6 +165,25 @@ impl ExecContext<'_> {
         *slot = val;
         Ok(())
     }
+
+    /// Resolve module-local table index to the table instance.
+    fn table(&self, index: u32) -> Result<&super::table::Table, RuntimeError> {
+        let addr = self
+            .table_addrs
+            .get(index as usize)
+            .ok_or(RuntimeError::TableIndexOutOfBounds(index))?;
+        self.resources
+            .tables
+            .get(addr.0)
+            .ok_or(RuntimeError::TableIndexOutOfBounds(index))
+    }
+
+    /// Look up a function type by type index.
+    fn func_type(&self, type_idx: u32) -> Result<&FunctionType, RuntimeError> {
+        self.types
+            .get(type_idx as usize)
+            .ok_or(RuntimeError::InvalidFunctionType)
+    }
 }
 
 /// Require a mutable reference to the execution context, or trap.
@@ -199,6 +226,65 @@ struct SuspendedState {
     /// Result count declared by the suspended import; resume traps on
     /// mismatch rather than corrupting the stack.
     expected_results: u16,
+}
+
+/// Enter a local function call: bounds- and depth-check, pop the callee's
+/// arguments into fresh locals, save the caller's frame, and return the
+/// callee's cursor. Shared by `call` and `call_indirect`.
+/// `caller` is the issuing frame with `pc` already past the call instruction.
+fn enter_local_call(
+    stack: &mut Stack,
+    call_stack: &mut Vec<CallFrame>,
+    funcs: &[CompiledFunction],
+    local_idx: usize,
+    module_func_idx: u32,
+    caller: CallFrame,
+) -> Result<CallFrame, RuntimeError> {
+    if local_idx >= funcs.len() {
+        return Err(RuntimeError::FunctionIndexOutOfBounds(module_func_idx));
+    }
+    if call_stack.len() >= MAX_CALL_DEPTH {
+        return Err(RuntimeError::CallStackOverflow);
+    }
+
+    let callee = &funcs[local_idx];
+    let locals = init_locals_from_stack(callee, stack)?;
+    let stack_base = stack.len();
+    call_stack.push(caller);
+    Ok(CallFrame {
+        func_idx: local_idx,
+        pc: 0,
+        stack_base,
+        locals,
+    })
+}
+
+/// Suspend execution for an external call: pop the callee's arguments per
+/// its type, record the suspension, and build the request for the Store.
+/// `frame` is the issuing frame with `pc` already past the call instruction.
+fn suspend_external_call(
+    stack: &mut Stack,
+    suspended: &mut Option<SuspendedState>,
+    frame: CallFrame,
+    entry_func_idx: usize,
+    func_addr: FuncAddr,
+    ftype: &FunctionType,
+) -> Result<ExecutionOutcome, RuntimeError> {
+    let mut args = Vec::with_capacity(ftype.parameters.len());
+    for _ in 0..ftype.parameters.len() {
+        args.push(stack.pop()?);
+    }
+    args.reverse();
+
+    *suspended = Some(SuspendedState {
+        frame,
+        entry_func_idx,
+        expected_results: ftype.return_types.len() as u16,
+    });
+    Ok(ExecutionOutcome::NeedsExternalCall(ExternalCallRequest {
+        func_addr,
+        args,
+    }))
 }
 
 /// Flat bytecode executor with resumable external calls.
@@ -598,55 +684,123 @@ impl FlatExecutor {
                     pc = target.pc as usize;
                 }
                 Op::Call { func_idx } => {
-                    let imported = ctx.as_ref().map(|c| c.imported_funcs).unwrap_or(&[]);
+                    let num_imported = ctx.as_ref().map(|c| c.num_imported).unwrap_or(0);
 
-                    // Imported function: pop its arguments, save the current
-                    // frame, and hand the call to the Store. Execution resumes
-                    // in `resume_with_results` at the instruction after the Call.
-                    if let Some(&imported_func) = imported.get(*func_idx as usize) {
-                        let mut args = Vec::with_capacity(imported_func.param_count as usize);
-                        for _ in 0..imported_func.param_count {
-                            args.push(stack.pop()?);
+                    // Imported function: suspend and hand the call to the
+                    // Store. Execution resumes in `resume_with_results` at
+                    // the instruction after the Call.
+                    if (*func_idx as usize) < num_imported {
+                        let c = require_ctx!(ctx);
+                        let entry = c
+                            .functions
+                            .get(*func_idx as usize)
+                            .copied()
+                            .ok_or(RuntimeError::FunctionIndexOutOfBounds(*func_idx))?;
+                        let ftype = c.func_type(entry.type_idx)?;
+                        let frame = CallFrame {
+                            func_idx: current_func_idx,
+                            pc: pc + 1,
+                            stack_base,
+                            locals,
+                        };
+                        return suspend_external_call(stack, suspended, frame, entry_func_idx, entry.addr, ftype);
+                    }
+
+                    let local_idx = *func_idx as usize - num_imported;
+                    let caller = CallFrame {
+                        func_idx: current_func_idx,
+                        pc: pc + 1,
+                        stack_base,
+                        locals: std::mem::take(&mut locals),
+                    };
+                    let callee = enter_local_call(stack, call_stack, funcs, local_idx, *func_idx, caller)?;
+                    current_func_idx = callee.func_idx;
+                    pc = callee.pc;
+                    stack_base = callee.stack_base;
+                    locals = callee.locals;
+                }
+                Op::CallIndirect { type_idx, table_idx } => {
+                    let c = require_ctx!(ctx);
+                    let elem_idx = stack.pop_i32()? as u32;
+
+                    // Spec: an out-of-bounds element index is "undefined
+                    // element", not "out of bounds table access".
+                    let func_ref = c.table(*table_idx)?.get(elem_idx).map_err(|e| match e {
+                        RuntimeError::TableIndexOutOfBounds(_) => RuntimeError::UndefinedElement(elem_idx),
+                        other => other,
+                    })?;
+                    let func_addr = match func_ref {
+                        Value::FuncRef(Some(addr)) => addr,
+                        Value::FuncRef(None) => return Err(RuntimeError::UndefinedElement(elem_idx)),
+                        other => {
+                            return Err(RuntimeError::TypeMismatch {
+                                expected: "funcref".to_string(),
+                                actual: format!("{:?}", other.typ()),
+                            });
                         }
-                        args.reverse();
+                    };
+                    let expected = c.func_type(*type_idx)?;
 
-                        *suspended = Some(SuspendedState {
-                            frame: CallFrame {
+                    match c.functions.iter().position(|e| e.addr == func_addr) {
+                        Some(module_idx) => {
+                            // The funcref belongs to this module: the
+                            // signature check happens here, before any
+                            // arguments are consumed.
+                            let actual = c.func_type(c.functions[module_idx].type_idx)?;
+                            if expected != actual {
+                                return Err(RuntimeError::IndirectCallTypeMismatch {
+                                    expected: format!("{expected:?}"),
+                                    actual: format!("{actual:?}"),
+                                });
+                            }
+
+                            if module_idx < c.num_imported {
+                                let frame = CallFrame {
+                                    func_idx: current_func_idx,
+                                    pc: pc + 1,
+                                    stack_base,
+                                    locals,
+                                };
+                                return suspend_external_call(
+                                    stack,
+                                    suspended,
+                                    frame,
+                                    entry_func_idx,
+                                    func_addr,
+                                    expected,
+                                );
+                            }
+
+                            // Local function: internal call, same frame
+                            // discipline as Op::Call.
+                            let local_idx = module_idx - c.num_imported;
+                            let caller = CallFrame {
+                                func_idx: current_func_idx,
+                                pc: pc + 1,
+                                stack_base,
+                                locals: std::mem::take(&mut locals),
+                            };
+                            let callee =
+                                enter_local_call(stack, call_stack, funcs, local_idx, module_idx as u32, caller)?;
+                            current_func_idx = callee.func_idx;
+                            pc = callee.pc;
+                            stack_base = callee.stack_base;
+                            locals = callee.locals;
+                        }
+                        None => {
+                            // Foreign funcref: a function from another module
+                            // placed in a shared table. Its type is unknown
+                            // here, so the signature check is deferred to the
+                            // Store at dispatch (structured executor parity).
+                            let frame = CallFrame {
                                 func_idx: current_func_idx,
                                 pc: pc + 1,
                                 stack_base,
                                 locals,
-                            },
-                            entry_func_idx,
-                            expected_results: imported_func.result_count,
-                        });
-                        return Ok(ExecutionOutcome::NeedsExternalCall(ExternalCallRequest {
-                            func_addr: imported_func.addr,
-                            args,
-                        }));
+                            };
+                            return suspend_external_call(stack, suspended, frame, entry_func_idx, func_addr, expected);
+                        }
                     }
-
-                    let local_idx = *func_idx as usize - imported.len();
-                    if local_idx >= funcs.len() {
-                        return Err(RuntimeError::FunctionIndexOutOfBounds(*func_idx));
-                    }
-                    if call_stack.len() >= MAX_CALL_DEPTH {
-                        return Err(RuntimeError::CallStackOverflow);
-                    }
-
-                    let callee = &funcs[local_idx];
-                    let callee_locals = init_locals_from_stack(callee, stack)?;
-
-                    let new_stack_base = stack.len();
-                    call_stack.push(CallFrame {
-                        func_idx: current_func_idx,
-                        pc: pc + 1,
-                        stack_base,
-                        locals: std::mem::replace(&mut locals, callee_locals),
-                    });
-                    current_func_idx = local_idx;
-                    stack_base = new_stack_base;
-                    pc = 0;
                 }
                 Op::Return | Op::End => {
                     if let Some(frame) = call_stack.pop() {
@@ -685,8 +839,9 @@ impl FlatExecutor {
 /// Execute a compiled function to completion with the given arguments.
 ///
 /// Convenience wrapper over [`FlatExecutor`] for callers with no Store to
-/// dispatch external calls (benchmarks, tests): calling an imported function
-/// is an error here.
+/// dispatch external calls (benchmarks, tests): any external call — an
+/// imported function, directly or via call_indirect, or a foreign table
+/// funcref — is an error here.
 pub fn execute_flat(
     funcs: &[CompiledFunction],
     func_idx: usize,
@@ -696,17 +851,26 @@ pub fn execute_flat(
     let mut executor = FlatExecutor::new();
     match executor.invoke(funcs, func_idx, args, ctx)? {
         ExecutionOutcome::Complete(results) => Ok(results),
-        ExecutionOutcome::NeedsExternalCall(_) => Err(RuntimeError::Trap(
-            "imported function call requires Store dispatch".to_string(),
-        )),
+        ExecutionOutcome::NeedsExternalCall(_) => {
+            Err(RuntimeError::Trap("external call requires Store dispatch".to_string()))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::module::ValueType;
     use crate::runtime::compiler;
     use crate::wat;
+
+    /// Shorthand for building a FunctionType in test contexts.
+    fn ftype(params: &[ValueType], results: &[ValueType]) -> FunctionType {
+        FunctionType {
+            parameters: params.to_vec(),
+            return_types: results.to_vec(),
+        }
+    }
 
     fn compile_wat(source: &str) -> Vec<CompiledFunction> {
         let module = wat::parse(source).expect("WAT parse failed");
@@ -946,7 +1110,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &global_addrs,
             memory_addrs: &[],
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -975,7 +1142,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1002,7 +1172,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1029,7 +1202,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1492,7 +1668,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1519,7 +1698,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1548,7 +1730,10 @@ mod tests {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &memory_addrs,
-            imported_funcs: &[],
+            table_addrs: &[],
+            types: &[],
+            functions: &[],
+            num_imported: 0,
         };
 
         let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
@@ -1769,16 +1954,19 @@ mod tests {
         );
 
         let mut resources = empty_resources();
-        let imported = [ImportedFunc {
+        let types = [ftype(&[ValueType::I32], &[ValueType::I32])];
+        let functions = [FuncEntry {
             addr: FuncAddr(7),
-            param_count: 1,
-            result_count: 1,
+            type_idx: 0,
         }];
         let mut ctx = ExecContext {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &[],
-            imported_funcs: &imported,
+            table_addrs: &[],
+            types: &types,
+            functions: &functions,
+            num_imported: 1,
         };
 
         let mut executor = FlatExecutor::new();
@@ -1812,16 +2000,19 @@ mod tests {
         );
 
         let mut resources = empty_resources();
-        let imported = [ImportedFunc {
+        let types = [ftype(&[], &[ValueType::I32])];
+        let functions = [FuncEntry {
             addr: FuncAddr(0),
-            param_count: 0,
-            result_count: 1,
+            type_idx: 0,
         }];
         let mut ctx = ExecContext {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &[],
-            imported_funcs: &imported,
+            table_addrs: &[],
+            types: &types,
+            functions: &functions,
+            num_imported: 1,
         };
 
         let mut executor = FlatExecutor::new();
@@ -1848,16 +2039,19 @@ mod tests {
         );
 
         let mut resources = empty_resources();
-        let imported = [ImportedFunc {
+        let types = [ftype(&[], &[ValueType::I32])];
+        let functions = [FuncEntry {
             addr: FuncAddr(3),
-            param_count: 0,
-            result_count: 1,
+            type_idx: 0,
         }];
         let mut ctx = ExecContext {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &[],
-            imported_funcs: &imported,
+            table_addrs: &[],
+            types: &types,
+            functions: &functions,
+            num_imported: 1,
         };
 
         let mut executor = FlatExecutor::new();
@@ -1891,16 +2085,19 @@ mod tests {
         );
 
         let mut resources = empty_resources();
-        let imported = [ImportedFunc {
+        let types = [ftype(&[], &[ValueType::I32])];
+        let functions = [FuncEntry {
             addr: FuncAddr(0),
-            param_count: 0,
-            result_count: 1,
+            type_idx: 0,
         }];
         let mut ctx = ExecContext {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &[],
-            imported_funcs: &imported,
+            table_addrs: &[],
+            types: &types,
+            functions: &functions,
+            num_imported: 1,
         };
 
         let mut executor = FlatExecutor::new();
@@ -1926,19 +2123,258 @@ mod tests {
         );
 
         let mut resources = empty_resources();
-        let imported = [ImportedFunc {
+        let types = [ftype(&[], &[ValueType::I32])];
+        let functions = [FuncEntry {
             addr: FuncAddr(0),
-            param_count: 0,
-            result_count: 1,
+            type_idx: 0,
         }];
         let mut ctx = ExecContext {
             resources: &mut resources,
             global_addrs: &[],
             memory_addrs: &[],
-            imported_funcs: &imported,
+            table_addrs: &[],
+            types: &types,
+            functions: &functions,
+            num_imported: 1,
         };
 
         let err = execute_flat(&funcs, 0, &[], Some(&mut ctx)).unwrap_err();
         assert!(err.to_string().contains("requires Store dispatch"));
+    }
+
+    // -- call_indirect --
+
+    use crate::parser::module::{ExternalKind, Limits, RefType};
+    use crate::runtime::table::Table;
+
+    /// Parse and compile a module, returning everything a call_indirect
+    /// context needs: compiled functions, the module's type section, and a
+    /// FuncEntry per module-level function with `FuncAddr(i)` assigned in
+    /// module index order (imports first), plus the import count.
+    fn compile_with_metadata(source: &str) -> (Vec<CompiledFunction>, Vec<FunctionType>, Vec<FuncEntry>, usize) {
+        let module = wat::parse(source).expect("WAT parse failed");
+        let types = module.types.types.clone();
+
+        let mut entries = Vec::new();
+        for imp in &module.imports.imports {
+            if let ExternalKind::Function(type_idx) = imp.external_kind {
+                entries.push(FuncEntry {
+                    addr: FuncAddr(entries.len()),
+                    type_idx,
+                });
+            }
+        }
+        let num_imported = entries.len();
+        for func in &module.functions.functions {
+            entries.push(FuncEntry {
+                addr: FuncAddr(entries.len()),
+                type_idx: func.ftype_index,
+            });
+        }
+
+        (compiler::compile_module(&module), types, entries, num_imported)
+    }
+
+    /// A funcref table populated with the given entries (None = null slot).
+    fn make_table(entries: &[Option<usize>]) -> Table {
+        let limits = Limits {
+            min: entries.len() as u32,
+            max: Some(entries.len() as u32),
+        };
+        let mut table = Table::new(RefType::FuncRef, limits).expect("table creation failed");
+        for (i, entry) in entries.iter().enumerate() {
+            if let Some(addr) = entry {
+                table
+                    .set(i as u32, Some(Value::FuncRef(Some(FuncAddr(*addr)))))
+                    .expect("table set failed");
+            }
+        }
+        table
+    }
+
+    const DISPATCH_WAT: &str = "(module
+        (type $binop (func (param i32 i32) (result i32)))
+        (table 3 funcref)
+        (func $add (type $binop) (i32.add (local.get 0) (local.get 1)))
+        (func $sub (type $binop) (i32.sub (local.get 0) (local.get 1)))
+        (func $dispatch (param i32 i32 i32) (result i32)
+            (call_indirect (type $binop) (local.get 1) (local.get 2) (local.get 0))))";
+
+    #[test]
+    fn call_indirect_dispatches_by_table_index() {
+        let (funcs, types, entries, num_imported) = compile_with_metadata(DISPATCH_WAT);
+        let mut resources = empty_resources();
+        resources.tables.push(make_table(&[Some(0), Some(1)]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        // Entry 0 is $add, entry 1 is $sub; $dispatch is compiled func 2
+        let args = [Value::I32(0), Value::I32(10), Value::I32(4)];
+        let result = execute_flat(&funcs, 2, &args, Some(&mut ctx)).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(14)]);
+
+        let args = [Value::I32(1), Value::I32(10), Value::I32(4)];
+        let result = execute_flat(&funcs, 2, &args, Some(&mut ctx)).expect("execution failed");
+        assert_eq!(result, vec![Value::I32(6)]);
+    }
+
+    #[test]
+    fn call_indirect_type_mismatch_traps() {
+        let (funcs, types, entries, num_imported) = compile_with_metadata(
+            "(module
+                (type $binop (func (param i32 i32) (result i32)))
+                (type $unop (func (param i32) (result i32)))
+                (table 1 funcref)
+                (func $neg (type $unop) (i32.sub (i32.const 0) (local.get 0)))
+                (func $main (param i32 i32) (result i32)
+                    (call_indirect (type $binop) (local.get 0) (local.get 1) (i32.const 0))))",
+        );
+        let mut resources = empty_resources();
+        resources.tables.push(make_table(&[Some(0)]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        let err = execute_flat(&funcs, 1, &[Value::I32(1), Value::I32(2)], Some(&mut ctx)).unwrap_err();
+        assert!(
+            err.to_string().contains("indirect call type mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn call_indirect_null_entry_traps() {
+        let (funcs, types, entries, num_imported) = compile_with_metadata(DISPATCH_WAT);
+        let mut resources = empty_resources();
+        resources.tables.push(make_table(&[None]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        let args = [Value::I32(0), Value::I32(1), Value::I32(2)];
+        let err = execute_flat(&funcs, 2, &args, Some(&mut ctx)).unwrap_err();
+        assert!(
+            err.to_string().contains("uninitialized element"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn call_indirect_out_of_bounds_traps() {
+        let (funcs, types, entries, num_imported) = compile_with_metadata(DISPATCH_WAT);
+        let mut resources = empty_resources();
+        resources.tables.push(make_table(&[Some(0)]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        let args = [Value::I32(5), Value::I32(1), Value::I32(2)];
+        let err = execute_flat(&funcs, 2, &args, Some(&mut ctx)).unwrap_err();
+        assert!(
+            err.to_string().contains("uninitialized element"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn call_indirect_to_import_suspends() {
+        let (funcs, types, entries, num_imported) = compile_with_metadata(
+            "(module
+                (type $unop (func (param i32) (result i32)))
+                (import \"env\" \"ext\" (func $ext (type $unop)))
+                (table 1 funcref)
+                (func $main (param i32) (result i32)
+                    (call_indirect (type $unop) (local.get 0) (i32.const 0))))",
+        );
+        assert_eq!(num_imported, 1);
+        let mut resources = empty_resources();
+        // Table slot 0 holds the import's address
+        resources.tables.push(make_table(&[Some(0)]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let outcome = executor
+            .invoke(&funcs, 0, &[Value::I32(21)], Some(&mut ctx))
+            .expect("invoke failed");
+        let request = expect_external_call(outcome);
+        assert_eq!(request.func_addr.0, 0);
+        assert_eq!(request.args, vec![Value::I32(21)]);
+
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(42)], Some(&mut ctx))
+            .expect("resume failed");
+        assert_eq!(expect_complete(outcome), vec![Value::I32(42)]);
+    }
+
+    #[test]
+    fn call_indirect_foreign_funcref_suspends() {
+        // A funcref whose address is not in this module's function list:
+        // dispatch goes to the Store, which owns the type check.
+        let (funcs, types, entries, num_imported) = compile_with_metadata(DISPATCH_WAT);
+        let mut resources = empty_resources();
+        resources.tables.push(make_table(&[Some(99)]));
+        let table_addrs = [TableAddr(0)];
+        let mut ctx = ExecContext {
+            resources: &mut resources,
+            global_addrs: &[],
+            memory_addrs: &[],
+            table_addrs: &table_addrs,
+            types: &types,
+            functions: &entries,
+            num_imported,
+        };
+
+        let mut executor = FlatExecutor::new();
+        let args = [Value::I32(0), Value::I32(10), Value::I32(4)];
+        let outcome = executor
+            .invoke(&funcs, 2, &args, Some(&mut ctx))
+            .expect("invoke failed");
+        let request = expect_external_call(outcome);
+        assert_eq!(request.func_addr.0, 99);
+        // Arguments popped per the expected $binop signature
+        assert_eq!(request.args, vec![Value::I32(10), Value::I32(4)]);
+
+        let outcome = executor
+            .resume_with_results(&funcs, vec![Value::I32(14)], Some(&mut ctx))
+            .expect("resume failed");
+        assert_eq!(expect_complete(outcome), vec![Value::I32(14)]);
     }
 }

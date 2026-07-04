@@ -130,6 +130,15 @@ pub enum Op {
     Call {
         func_idx: u32,
     },
+    /// Pop an i32 element index, look up a funcref in table `table_idx`,
+    /// check its signature against type `type_idx`, and call it. The callee
+    /// may be local, imported (suspends execution), or foreign (a funcref
+    /// from another module; also suspends, with the type check deferred to
+    /// the Store).
+    CallIndirect {
+        type_idx: u32,
+        table_idx: u32,
+    },
     /// Return from the current function.
     Return,
     /// No operation. Used as a placeholder (e.g. after block/loop markers
@@ -181,14 +190,15 @@ impl Op {
             Op::I32Store(_) | Op::I32Store8(_) | Op::I32Store16(_) => -2,
             Op::I64Store(_) | Op::I64Store8(_) | Op::I64Store16(_) | Op::I64Store32(_) => -2,
             Op::F32Store(_) | Op::F64Store(_) => -2,
-            Op::MemorySize => 1,      // push page count
-            Op::MemoryGrow => 0,      // pop pages, push old size
-            Op::MemoryCopy => -3,     // pop dest, src, len
-            Op::MemoryFill => -3,     // pop dest, val, len
-            Op::Call { .. } => 0,     // variable: handled separately in compiler
-            Op::Br { .. } => 0,       // unreachable after, depth irrelevant
-            Op::BrIf { .. } => -1,    // pops condition
-            Op::BrTable { .. } => -1, // pops index
+            Op::MemorySize => 1,          // push page count
+            Op::MemoryGrow => 0,          // pop pages, push old size
+            Op::MemoryCopy => -3,         // pop dest, src, len
+            Op::MemoryFill => -3,         // pop dest, val, len
+            Op::Call { .. } => 0,         // variable: handled separately in compiler
+            Op::CallIndirect { .. } => 0, // variable: handled separately in compiler
+            Op::Br { .. } => 0,           // unreachable after, depth irrelevant
+            Op::BrIf { .. } => -1,        // pops condition
+            Op::BrTable { .. } => -1,     // pops index
             Op::Return | Op::End | Op::Unreachable => 0,
             Op::Nop | Op::Label { .. } => 0,
             Op::Drop => -1,
@@ -308,6 +318,9 @@ impl fmt::Display for Op {
                 write!(f, "] default -> {}", default.pc)
             }
             Op::Call { func_idx } => write!(f, "call {func_idx}"),
+            Op::CallIndirect { type_idx, table_idx } => {
+                write!(f, "call_indirect (type {type_idx}) (table {table_idx})")
+            }
             Op::Return => write!(f, "return"),
             Op::Nop => write!(f, "nop"),
             Op::End => write!(f, "end"),
