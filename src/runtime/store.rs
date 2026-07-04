@@ -1754,11 +1754,11 @@ mod tests {
 
     #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // i64.add is not yet compiled; the placeholder op must trap loudly
+        // f64.add is not yet compiled; the placeholder op must trap loudly
         // rather than compute anything.
         let (mut store, id) = flat_instance(
-            "(module (func (export \"run\") (result i64)
-                (i64.add (i64.const 1) (i64.const 2))))",
+            "(module (func (export \"run\") (result f64)
+                (f64.add (f64.const 1) (f64.const 2))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -1770,8 +1770,8 @@ mod tests {
         // Instances keep the engine they were created with; the unsupported
         // instruction runs fine on the structured instance created first.
         let mut store = Store::new();
-        let wat = "(module (func (export \"run\") (result i64)
-            (i64.add (i64.const 1) (i64.const 2))))";
+        let wat = "(module (func (export \"run\") (result f64)
+            (f64.add (f64.const 1) (f64.const 2))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();
@@ -1782,7 +1782,7 @@ mod tests {
 
         assert_eq!(
             store.invoke_export(structured_id, "run", vec![], None).unwrap(),
-            vec![Value::I64(3)]
+            vec![Value::F64(3.0)]
         );
         assert!(store.invoke_export(flat_id, "run", vec![], None).is_err());
     }
