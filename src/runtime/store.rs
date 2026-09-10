@@ -1753,6 +1753,27 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_splat_load_reads_one_byte() {
+        // A splat's output width does not determine its memory access width.
+        let (mut store, id) = flat_instance(
+            "(module
+                (memory 1)
+                (data (i32.const 65535) \"\\ab\")
+                (func (export \"splat\") (result v128)
+                    (v128.load8_splat offset=65535 (i32.const 0)))
+                (func (export \"wide\") (result v128)
+                    (v128.load offset=65535 (i32.const 0))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "splat", vec![], None).unwrap(),
+            vec![Value::V128([0xab; 16])]
+        );
+        let err = store.invoke_export(id, "wide", vec![], None).unwrap_err();
+        assert!(matches!(err, RuntimeError::MemoryError(_)));
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // Lane extraction remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

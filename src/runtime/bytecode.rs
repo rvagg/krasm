@@ -232,6 +232,19 @@ pub enum Op {
     F32Load(MemArg),
     F64Load(MemArg),
     V128Load(MemArg),
+    // These read less than 16 bytes but each produces a full v128.
+    V128Load8x8S(MemArg),
+    V128Load8x8U(MemArg),
+    V128Load16x4S(MemArg),
+    V128Load16x4U(MemArg),
+    V128Load32x2S(MemArg),
+    V128Load32x2U(MemArg),
+    V128Load8Splat(MemArg),
+    V128Load16Splat(MemArg),
+    V128Load32Splat(MemArg),
+    V128Load64Splat(MemArg),
+    V128Load32Zero(MemArg),
+    V128Load64Zero(MemArg),
     // Store ops pop a value and an i32 address, apply offset, write to memory.
     I32Store(MemArg),
     I32Store8(MemArg),
@@ -428,7 +441,21 @@ impl Op {
             Op::I64Load(_) | Op::I64Load8S(_) | Op::I64Load8U(_) => 0,
             Op::I64Load16S(_) | Op::I64Load16U(_) => 0,
             Op::I64Load32S(_) | Op::I64Load32U(_) => 0,
-            Op::F32Load(_) | Op::F64Load(_) | Op::V128Load(_) => 0,
+            Op::F32Load(_)
+            | Op::F64Load(_)
+            | Op::V128Load(_)
+            | Op::V128Load8x8S(_)
+            | Op::V128Load8x8U(_)
+            | Op::V128Load16x4S(_)
+            | Op::V128Load16x4U(_)
+            | Op::V128Load32x2S(_)
+            | Op::V128Load32x2U(_)
+            | Op::V128Load8Splat(_)
+            | Op::V128Load16Splat(_)
+            | Op::V128Load32Splat(_)
+            | Op::V128Load64Splat(_)
+            | Op::V128Load32Zero(_)
+            | Op::V128Load64Zero(_) => 0,
             // Stores: pop value + addr = -2
             Op::I32Store(_) | Op::I32Store8(_) | Op::I32Store16(_) => -2,
             Op::I64Store(_) | Op::I64Store8(_) | Op::I64Store16(_) | Op::I64Store32(_) => -2,
@@ -679,6 +706,18 @@ impl fmt::Display for Op {
             Op::F32Load(m) => write!(f, "f32.load offset={}", m.offset),
             Op::F64Load(m) => write!(f, "f64.load offset={}", m.offset),
             Op::V128Load(m) => write!(f, "v128.load offset={}", m.offset),
+            Op::V128Load8x8S(m) => write!(f, "v128.load8x8_s offset={}", m.offset),
+            Op::V128Load8x8U(m) => write!(f, "v128.load8x8_u offset={}", m.offset),
+            Op::V128Load16x4S(m) => write!(f, "v128.load16x4_s offset={}", m.offset),
+            Op::V128Load16x4U(m) => write!(f, "v128.load16x4_u offset={}", m.offset),
+            Op::V128Load32x2S(m) => write!(f, "v128.load32x2_s offset={}", m.offset),
+            Op::V128Load32x2U(m) => write!(f, "v128.load32x2_u offset={}", m.offset),
+            Op::V128Load8Splat(m) => write!(f, "v128.load8_splat offset={}", m.offset),
+            Op::V128Load16Splat(m) => write!(f, "v128.load16_splat offset={}", m.offset),
+            Op::V128Load32Splat(m) => write!(f, "v128.load32_splat offset={}", m.offset),
+            Op::V128Load64Splat(m) => write!(f, "v128.load64_splat offset={}", m.offset),
+            Op::V128Load32Zero(m) => write!(f, "v128.load32_zero offset={}", m.offset),
+            Op::V128Load64Zero(m) => write!(f, "v128.load64_zero offset={}", m.offset),
             Op::I32Store(m) => write!(f, "i32.store offset={}", m.offset),
             Op::I32Store8(m) => write!(f, "i32.store8 offset={}", m.offset),
             Op::I32Store16(m) => write!(f, "i32.store16 offset={}", m.offset),

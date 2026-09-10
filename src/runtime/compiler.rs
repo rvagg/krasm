@@ -612,6 +612,18 @@ impl<'a> CompileContext<'a> {
                 self.emit(Op::F64Load(*memarg));
             }
             InstructionKind::Simd(SimdOp::V128Load { memarg }) => self.op(Op::V128Load(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load8x8S { memarg }) => self.op(Op::V128Load8x8S(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load8x8U { memarg }) => self.op(Op::V128Load8x8U(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load16x4S { memarg }) => self.op(Op::V128Load16x4S(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load16x4U { memarg }) => self.op(Op::V128Load16x4U(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load32x2S { memarg }) => self.op(Op::V128Load32x2S(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load32x2U { memarg }) => self.op(Op::V128Load32x2U(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load8Splat { memarg }) => self.op(Op::V128Load8Splat(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load16Splat { memarg }) => self.op(Op::V128Load16Splat(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load32Splat { memarg }) => self.op(Op::V128Load32Splat(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load64Splat { memarg }) => self.op(Op::V128Load64Splat(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load32Zero { memarg }) => self.op(Op::V128Load32Zero(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load64Zero { memarg }) => self.op(Op::V128Load64Zero(*memarg)),
             InstructionKind::I32Store { memarg } => {
                 self.emit(Op::I32Store(*memarg));
             }
