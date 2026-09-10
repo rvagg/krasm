@@ -611,6 +611,7 @@ impl<'a> CompileContext<'a> {
             InstructionKind::F64Load { memarg } => {
                 self.emit(Op::F64Load(*memarg));
             }
+            InstructionKind::Simd(SimdOp::V128Load { memarg }) => self.op(Op::V128Load(*memarg)),
             InstructionKind::I32Store { memarg } => {
                 self.emit(Op::I32Store(*memarg));
             }
@@ -638,6 +639,7 @@ impl<'a> CompileContext<'a> {
             InstructionKind::F64Store { memarg } => {
                 self.emit(Op::F64Store(*memarg));
             }
+            InstructionKind::Simd(SimdOp::V128Store { memarg }) => self.op(Op::V128Store(*memarg)),
             InstructionKind::MemorySize => self.op(Op::MemorySize),
             InstructionKind::MemoryGrow => self.op(Op::MemoryGrow),
             InstructionKind::MemoryCopy => self.op(Op::MemoryCopy),

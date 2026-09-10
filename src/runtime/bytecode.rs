@@ -231,6 +231,7 @@ pub enum Op {
     I64Load32U(MemArg),
     F32Load(MemArg),
     F64Load(MemArg),
+    V128Load(MemArg),
     // Store ops pop a value and an i32 address, apply offset, write to memory.
     I32Store(MemArg),
     I32Store8(MemArg),
@@ -241,6 +242,7 @@ pub enum Op {
     I64Store32(MemArg),
     F32Store(MemArg),
     F64Store(MemArg),
+    V128Store(MemArg),
     MemorySize,
     MemoryGrow,
     MemoryCopy,
@@ -426,11 +428,11 @@ impl Op {
             Op::I64Load(_) | Op::I64Load8S(_) | Op::I64Load8U(_) => 0,
             Op::I64Load16S(_) | Op::I64Load16U(_) => 0,
             Op::I64Load32S(_) | Op::I64Load32U(_) => 0,
-            Op::F32Load(_) | Op::F64Load(_) => 0,
+            Op::F32Load(_) | Op::F64Load(_) | Op::V128Load(_) => 0,
             // Stores: pop value + addr = -2
             Op::I32Store(_) | Op::I32Store8(_) | Op::I32Store16(_) => -2,
             Op::I64Store(_) | Op::I64Store8(_) | Op::I64Store16(_) | Op::I64Store32(_) => -2,
-            Op::F32Store(_) | Op::F64Store(_) => -2,
+            Op::F32Store(_) | Op::F64Store(_) | Op::V128Store(_) => -2,
             Op::MemorySize => 1,          // push page count
             Op::MemoryGrow => 0,          // pop pages, push old size
             Op::MemoryCopy => -3,         // pop dest, src, len
@@ -676,6 +678,7 @@ impl fmt::Display for Op {
             Op::I64Load32U(m) => write!(f, "i64.load32_u offset={}", m.offset),
             Op::F32Load(m) => write!(f, "f32.load offset={}", m.offset),
             Op::F64Load(m) => write!(f, "f64.load offset={}", m.offset),
+            Op::V128Load(m) => write!(f, "v128.load offset={}", m.offset),
             Op::I32Store(m) => write!(f, "i32.store offset={}", m.offset),
             Op::I32Store8(m) => write!(f, "i32.store8 offset={}", m.offset),
             Op::I32Store16(m) => write!(f, "i32.store16 offset={}", m.offset),
@@ -685,6 +688,7 @@ impl fmt::Display for Op {
             Op::I64Store32(m) => write!(f, "i64.store32 offset={}", m.offset),
             Op::F32Store(m) => write!(f, "f32.store offset={}", m.offset),
             Op::F64Store(m) => write!(f, "f64.store offset={}", m.offset),
+            Op::V128Store(m) => write!(f, "v128.store offset={}", m.offset),
             Op::MemorySize => write!(f, "memory.size"),
             Op::MemoryGrow => write!(f, "memory.grow"),
             Op::MemoryCopy => write!(f, "memory.copy"),
