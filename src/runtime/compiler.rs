@@ -19,7 +19,7 @@
 
 use super::bytecode::{BrTarget, CompiledFunction, Op};
 use super::imports::default_value_for_type;
-use crate::parser::instruction::{BlockType, Instruction, InstructionKind};
+use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
 use crate::parser::module::{ExternalKind, FunctionType, Locals, Module};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
 
@@ -406,6 +406,14 @@ impl<'a> CompileContext<'a> {
             InstructionKind::I64Const { value } => self.op(Op::I64Const(*value)),
             InstructionKind::F32Const { value } => self.op(Op::F32Const(*value)),
             InstructionKind::F64Const { value } => self.op(Op::F64Const(*value)),
+            InstructionKind::Simd(SimdOp::V128Const { value }) => self.op(Op::V128Const(*value)),
+            InstructionKind::Simd(SimdOp::V128Not) => self.op(Op::V128Not),
+            InstructionKind::Simd(SimdOp::V128And) => self.op(Op::V128And),
+            InstructionKind::Simd(SimdOp::V128AndNot) => self.op(Op::V128AndNot),
+            InstructionKind::Simd(SimdOp::V128Or) => self.op(Op::V128Or),
+            InstructionKind::Simd(SimdOp::V128Xor) => self.op(Op::V128Xor),
+            InstructionKind::Simd(SimdOp::V128Bitselect) => self.op(Op::V128Bitselect),
+            InstructionKind::Simd(SimdOp::V128AnyTrue) => self.op(Op::V128AnyTrue),
             InstructionKind::I32Add => self.op(Op::I32Add),
             InstructionKind::I32Sub => self.op(Op::I32Sub),
             InstructionKind::I32Mul => self.op(Op::I32Mul),

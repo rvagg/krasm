@@ -1754,8 +1754,7 @@ mod tests {
 
     #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // SIMD is not yet compiled; the placeholder op must trap loudly
-        // rather than compute anything.
+        // Lane extraction remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
                 (i32x4.extract_lane 0 (v128.const i32x4 7 0 0 0))))",

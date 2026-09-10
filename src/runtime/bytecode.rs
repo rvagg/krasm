@@ -33,6 +33,16 @@ pub enum Op {
     F32Const(f32),
     F64Const(f64),
 
+    // -- SIMD --
+    V128Const([u8; 16]),
+    V128Not,
+    V128And,
+    V128AndNot,
+    V128Or,
+    V128Xor,
+    V128Bitselect,
+    V128AnyTrue,
+
     // -- i32 arithmetic --
     I32Add,
     I32Sub,
@@ -355,7 +365,7 @@ impl Op {
     /// Used by the compiler to track stack depth during emission.
     pub fn stack_delta(&self) -> i32 {
         match self {
-            Op::I32Const(_) | Op::I64Const(_) | Op::F32Const(_) | Op::F64Const(_) => 1,
+            Op::I32Const(_) | Op::I64Const(_) | Op::F32Const(_) | Op::F64Const(_) | Op::V128Const(_) => 1,
             Op::I32Add | Op::I32Sub | Op::I32Mul => -1,
             Op::I32DivS | Op::I32DivU | Op::I32RemS | Op::I32RemU => -1,
             Op::I32And | Op::I32Or | Op::I32Xor => -1,
@@ -390,6 +400,9 @@ impl Op {
             Op::I32TruncSatF32S | Op::I32TruncSatF32U | Op::I32TruncSatF64S | Op::I32TruncSatF64U => 0,
             Op::I64TruncSatF32S | Op::I64TruncSatF32U | Op::I64TruncSatF64S | Op::I64TruncSatF64U => 0,
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
+            Op::V128Not | Op::V128AnyTrue => 0,
+            Op::V128And | Op::V128AndNot | Op::V128Or | Op::V128Xor => -1,
+            Op::V128Bitselect => -2,
             Op::Select => -2, // pop condition + one branch, keep the other
             Op::RefNull(_) | Op::RefFunc { .. } | Op::TableSize { .. } => 1,
             Op::RefIsNull | Op::TableGet { .. } => 0, // pop one, push one
@@ -479,6 +492,14 @@ impl fmt::Display for Op {
             Op::I64Const(v) => write!(f, "i64.const {v}"),
             Op::F32Const(v) => write!(f, "f32.const {v}"),
             Op::F64Const(v) => write!(f, "f64.const {v}"),
+            Op::V128Const(value) => {
+                write!(f, "v128.const")?;
+                for i in 0..4 {
+                    let lane = u32::from_le_bytes([value[i * 4], value[i * 4 + 1], value[i * 4 + 2], value[i * 4 + 3]]);
+                    write!(f, " 0x{lane:08x}")?;
+                }
+                Ok(())
+            }
             Op::I32Add => write!(f, "i32.add"),
             Op::I32Sub => write!(f, "i32.sub"),
             Op::I32Mul => write!(f, "i32.mul"),
@@ -604,6 +625,13 @@ impl fmt::Display for Op {
             Op::I64ReinterpretF64 => write!(f, "i64.reinterpret_f64"),
             Op::F32ReinterpretI32 => write!(f, "f32.reinterpret_i32"),
             Op::F64ReinterpretI64 => write!(f, "f64.reinterpret_i64"),
+            Op::V128Not => write!(f, "v128.not"),
+            Op::V128And => write!(f, "v128.and"),
+            Op::V128AndNot => write!(f, "v128.andnot"),
+            Op::V128Or => write!(f, "v128.or"),
+            Op::V128Xor => write!(f, "v128.xor"),
+            Op::V128Bitselect => write!(f, "v128.bitselect"),
+            Op::V128AnyTrue => write!(f, "v128.any_true"),
             Op::Select => write!(f, "select"),
             Op::RefNull(t) => write!(f, "ref.null {t}"),
             Op::RefIsNull => write!(f, "ref.is_null"),

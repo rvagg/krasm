@@ -511,6 +511,19 @@ impl FlatExecutor {
                 Op::I64Const(v) => stack_op!(ops::numeric::i64_const, *v),
                 Op::F32Const(v) => stack_op!(ops::numeric::f32_const, *v),
                 Op::F64Const(v) => stack_op!(ops::numeric::f64_const, *v),
+                Op::V128Const(v) => {
+                    stack.push(Value::V128(*v));
+                    pc += 1;
+                }
+
+                // -- SIMD bitwise --
+                Op::V128Not => stack_op!(ops::simd::v128_not),
+                Op::V128And => stack_op!(ops::simd::v128_and),
+                Op::V128AndNot => stack_op!(ops::simd::v128_andnot),
+                Op::V128Or => stack_op!(ops::simd::v128_or),
+                Op::V128Xor => stack_op!(ops::simd::v128_xor),
+                Op::V128Bitselect => stack_op!(ops::simd::v128_bitselect),
+                Op::V128AnyTrue => stack_op!(ops::simd::v128_any_true),
 
                 // -- Arithmetic --
                 Op::I32Add => stack_op!(ops::numeric::i32_add),

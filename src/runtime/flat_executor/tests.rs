@@ -941,6 +941,30 @@ fn compiler_block_stack_depth() {
     }
 }
 
+#[test]
+fn simd_bitselect_preserves_outer_stack_for_branch() {
+    let result = compile_and_run(
+        "(module (func (result i32)
+            (local $v v128)
+            (i32.const 99)
+            (v128.const i8x16 0x10 0x21 0x32 0x43 0x54 0x65 0x76 0x87 0x98 0xa9 0xba 0xcb 0xdc 0xed 0xfe 0x0f)
+            (v128.const i8x16 0x01 0x12 0x23 0x34 0x45 0x56 0x67 0x78 0x89 0x9a 0xab 0xbc 0xcd 0xde 0xef 0xf0)
+            (v128.const i8x16 0xff 0x00 0xff 0x00 0xff 0x00 0xff 0x00 0xff 0x00 0xff 0x00 0xff 0x00 0xff 0x00)
+            (v128.bitselect)
+            (local.set $v)
+            (block (result i32)
+                (i32.const 7) ;; The branch must discard this without disturbing 99.
+                (i32.const 42)
+                (local.get $v)
+                (v128.any_true)
+                (br_if 0)
+                (unreachable))
+            (drop)))",
+        &[],
+    );
+    assert_eq!(result, vec![Value::I32(99)]);
+}
+
 // ================================================================
 // Function call tests
 // ================================================================
