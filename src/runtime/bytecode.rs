@@ -42,6 +42,16 @@ pub enum Op {
     V128Xor,
     V128Bitselect,
     V128AnyTrue,
+    // Scalar splats consume operand-stack values; V128Load*Splat below reads memory.
+    I8x16Splat,
+    I16x8Splat,
+    I32x4Splat,
+    I64x2Splat,
+    F32x4Splat,
+    F64x2Splat,
+    // Shuffle indices are fixed validated immediates; swizzle indices are runtime values.
+    I8x16Shuffle([u8; 16]),
+    I8x16Swizzle,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -466,6 +476,8 @@ impl Op {
             Op::I64TruncSatF32S | Op::I64TruncSatF32U | Op::I64TruncSatF64S | Op::I64TruncSatF64U => 0,
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
             Op::V128Not | Op::V128AnyTrue => 0,
+            Op::I8x16Splat | Op::I16x8Splat | Op::I32x4Splat | Op::I64x2Splat | Op::F32x4Splat | Op::F64x2Splat => 0,
+            Op::I8x16Shuffle(_) | Op::I8x16Swizzle => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -736,6 +748,21 @@ impl fmt::Display for Op {
             Op::V128Xor => write!(f, "v128.xor"),
             Op::V128Bitselect => write!(f, "v128.bitselect"),
             Op::V128AnyTrue => write!(f, "v128.any_true"),
+            Op::I8x16Splat => write!(f, "i8x16.splat"),
+            Op::I16x8Splat => write!(f, "i16x8.splat"),
+            Op::I32x4Splat => write!(f, "i32x4.splat"),
+            Op::I64x2Splat => write!(f, "i64x2.splat"),
+            Op::F32x4Splat => write!(f, "f32x4.splat"),
+            Op::F64x2Splat => write!(f, "f64x2.splat"),
+            Op::I8x16Shuffle(lanes) => {
+                write!(f, "i8x16.shuffle")?;
+                for i in 0..4 {
+                    let lane = u32::from_le_bytes([lanes[i * 4], lanes[i * 4 + 1], lanes[i * 4 + 2], lanes[i * 4 + 3]]);
+                    write!(f, " 0x{lane:08x}")?;
+                }
+                Ok(())
+            }
+            Op::I8x16Swizzle => write!(f, "i8x16.swizzle"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),

@@ -1832,6 +1832,30 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_shuffle_and_swizzle_boundaries() {
+        // Shuffle selects from two vectors using fixed indices 0..31.
+        // Swizzle selects from one vector using runtime indices; indices >=16 yield zero.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128)
+                    (i8x16.shuffle 0 15 16 31 1 14 17 30 2 13 18 29 3 12 19 28
+                        (v128.const i8x16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+                        (v128.const i8x16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32))
+                    (i8x16.swizzle
+                        (v128.const i8x16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+                        (v128.const i8x16 0 15 16 31 1 14 128 255 2 13 18 29 3 12 19 28))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([1, 16, 17, 32, 2, 15, 18, 31, 3, 14, 19, 30, 4, 13, 20, 29]),
+                Value::V128([1, 16, 0, 0, 2, 15, 0, 0, 3, 14, 0, 0, 4, 13, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // SIMD arithmetic remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
