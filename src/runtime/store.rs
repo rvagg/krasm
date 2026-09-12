@@ -1801,6 +1801,30 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i8x16_comparisons_preserve_signedness_and_masks() {
+        // High-bit lanes have opposite signed and unsigned ordering.
+        // True comparisons use all-ones byte masks, not scalar booleans.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128)
+                    (local $a v128)
+                    (local $b v128)
+                    (local.set $a (v128.const i8x16 -128 -1 127 0 1 2 3 4 5 6 7 8 9 10 11 12))
+                    (local.set $b (v128.const i8x16 127 0 -128 0 1 2 3 4 5 6 7 8 9 10 11 12))
+                    (i8x16.lt_s (local.get $a) (local.get $b))
+                    (i8x16.lt_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_i16x8_reductions() {
         let (mut store, id) = flat_instance(
             "(module

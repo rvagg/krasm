@@ -61,6 +61,17 @@ pub enum Op {
     // Shuffle indices are fixed validated immediates; swizzle indices are runtime values.
     I8x16Shuffle([u8; 16]),
     I8x16Swizzle,
+    // Comparisons produce per-lane masks: 0xff for true, 0x00 for false.
+    I8x16Eq,
+    I8x16Ne,
+    I8x16LtS,
+    I8x16LtU,
+    I8x16GtS,
+    I8x16GtU,
+    I8x16LeS,
+    I8x16LeU,
+    I8x16GeS,
+    I8x16GeU,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -496,6 +507,16 @@ impl Op {
             | Op::I64x2Bitmask => 0,
             Op::I8x16Splat | Op::I16x8Splat | Op::I32x4Splat | Op::I64x2Splat | Op::F32x4Splat | Op::F64x2Splat => 0,
             Op::I8x16Shuffle(_) | Op::I8x16Swizzle => -1,
+            Op::I8x16Eq
+            | Op::I8x16Ne
+            | Op::I8x16LtS
+            | Op::I8x16LtU
+            | Op::I8x16GtS
+            | Op::I8x16GtU
+            | Op::I8x16LeS
+            | Op::I8x16LeU
+            | Op::I8x16GeS
+            | Op::I8x16GeU => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -789,6 +810,16 @@ impl fmt::Display for Op {
                 Ok(())
             }
             Op::I8x16Swizzle => write!(f, "i8x16.swizzle"),
+            Op::I8x16Eq => write!(f, "i8x16.eq"),
+            Op::I8x16Ne => write!(f, "i8x16.ne"),
+            Op::I8x16LtS => write!(f, "i8x16.lt_s"),
+            Op::I8x16LtU => write!(f, "i8x16.lt_u"),
+            Op::I8x16GtS => write!(f, "i8x16.gt_s"),
+            Op::I8x16GtU => write!(f, "i8x16.gt_u"),
+            Op::I8x16LeS => write!(f, "i8x16.le_s"),
+            Op::I8x16LeU => write!(f, "i8x16.le_u"),
+            Op::I8x16GeS => write!(f, "i8x16.ge_s"),
+            Op::I8x16GeU => write!(f, "i8x16.ge_u"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),
