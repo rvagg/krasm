@@ -262,6 +262,23 @@ pub enum Op {
     V128Load64Splat(MemArg),
     V128Load32Zero(MemArg),
     V128Load64Zero(MemArg),
+    // Lane loads consume an existing v128 and replace only the selected lane.
+    V128Load8Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Load16Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Load32Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Load64Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
     // Store ops pop a value and an i32 address, apply offset, write to memory.
     I32Store(MemArg),
     I32Store8(MemArg),
@@ -273,6 +290,22 @@ pub enum Op {
     F32Store(MemArg),
     F64Store(MemArg),
     V128Store(MemArg),
+    V128Store8Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Store16Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Store32Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
+    V128Store64Lane {
+        memarg: MemArg,
+        lane: u8,
+    },
     MemorySize,
     MemoryGrow,
     MemoryCopy,
@@ -487,10 +520,21 @@ impl Op {
             | Op::V128Load64Splat(_)
             | Op::V128Load32Zero(_)
             | Op::V128Load64Zero(_) => 0,
+            // Lane loads: pop vector + addr, push updated vector = -1
+            Op::V128Load8Lane { .. }
+            | Op::V128Load16Lane { .. }
+            | Op::V128Load32Lane { .. }
+            | Op::V128Load64Lane { .. } => -1,
             // Stores: pop value + addr = -2
             Op::I32Store(_) | Op::I32Store8(_) | Op::I32Store16(_) => -2,
             Op::I64Store(_) | Op::I64Store8(_) | Op::I64Store16(_) | Op::I64Store32(_) => -2,
-            Op::F32Store(_) | Op::F64Store(_) | Op::V128Store(_) => -2,
+            Op::F32Store(_)
+            | Op::F64Store(_)
+            | Op::V128Store(_)
+            | Op::V128Store8Lane { .. }
+            | Op::V128Store16Lane { .. }
+            | Op::V128Store32Lane { .. }
+            | Op::V128Store64Lane { .. } => -2,
             Op::MemorySize => 1,          // push page count
             Op::MemoryGrow => 0,          // pop pages, push old size
             Op::MemoryCopy => -3,         // pop dest, src, len
@@ -763,6 +807,18 @@ impl fmt::Display for Op {
             Op::V128Load64Splat(m) => write!(f, "v128.load64_splat offset={}", m.offset),
             Op::V128Load32Zero(m) => write!(f, "v128.load32_zero offset={}", m.offset),
             Op::V128Load64Zero(m) => write!(f, "v128.load64_zero offset={}", m.offset),
+            Op::V128Load8Lane { memarg, lane } => {
+                write!(f, "v128.load8_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Load16Lane { memarg, lane } => {
+                write!(f, "v128.load16_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Load32Lane { memarg, lane } => {
+                write!(f, "v128.load32_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Load64Lane { memarg, lane } => {
+                write!(f, "v128.load64_lane offset={} {lane}", memarg.offset)
+            }
             Op::I32Store(m) => write!(f, "i32.store offset={}", m.offset),
             Op::I32Store8(m) => write!(f, "i32.store8 offset={}", m.offset),
             Op::I32Store16(m) => write!(f, "i32.store16 offset={}", m.offset),
@@ -773,6 +829,18 @@ impl fmt::Display for Op {
             Op::F32Store(m) => write!(f, "f32.store offset={}", m.offset),
             Op::F64Store(m) => write!(f, "f64.store offset={}", m.offset),
             Op::V128Store(m) => write!(f, "v128.store offset={}", m.offset),
+            Op::V128Store8Lane { memarg, lane } => {
+                write!(f, "v128.store8_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Store16Lane { memarg, lane } => {
+                write!(f, "v128.store16_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Store32Lane { memarg, lane } => {
+                write!(f, "v128.store32_lane offset={} {lane}", memarg.offset)
+            }
+            Op::V128Store64Lane { memarg, lane } => {
+                write!(f, "v128.store64_lane offset={} {lane}", memarg.offset)
+            }
             Op::MemorySize => write!(f, "memory.size"),
             Op::MemoryGrow => write!(f, "memory.grow"),
             Op::MemoryCopy => write!(f, "memory.copy"),

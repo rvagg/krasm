@@ -1801,6 +1801,37 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_lane_memory_preserves_width_and_neighbours() {
+        // The two-byte boundary load replaces only lane 7 of the vector.
+        // The unaligned store preserves its adjacent sentinel bytes.
+        let (mut store, id) = flat_instance(
+            "(module
+                (memory 1)
+                (data (i32.const 65534) \"\\12\\34\")
+                (data (i32.const 30) \"\\11\\ff\\ff\\22\")
+                (func (export \"run\") (result v128 i32)
+                    (local $vector v128)
+                    (local.set $vector
+                        (v128.load16_lane offset=65534 7
+                            (i32.const 0)
+                            (v128.const i16x8 1 2 3 4 5 6 7 8)))
+                    (v128.store16_lane offset=30 7
+                        (i32.const 1)
+                        (local.get $vector))
+                    (local.get $vector)
+                    (i32.load offset=30 (i32.const 0))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 0x12, 0x34]),
+                Value::I32(0x22341211),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // SIMD arithmetic remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

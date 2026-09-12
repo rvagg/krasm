@@ -638,6 +638,22 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Simd(SimdOp::V128Load64Splat { memarg }) => self.op(Op::V128Load64Splat(*memarg)),
             InstructionKind::Simd(SimdOp::V128Load32Zero { memarg }) => self.op(Op::V128Load32Zero(*memarg)),
             InstructionKind::Simd(SimdOp::V128Load64Zero { memarg }) => self.op(Op::V128Load64Zero(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Load8Lane { memarg, lane }) => self.op(Op::V128Load8Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Load16Lane { memarg, lane }) => self.op(Op::V128Load16Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Load32Lane { memarg, lane }) => self.op(Op::V128Load32Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Load64Lane { memarg, lane }) => self.op(Op::V128Load64Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
             InstructionKind::I32Store { memarg } => {
                 self.emit(Op::I32Store(*memarg));
             }
@@ -666,6 +682,22 @@ impl<'a> CompileContext<'a> {
                 self.emit(Op::F64Store(*memarg));
             }
             InstructionKind::Simd(SimdOp::V128Store { memarg }) => self.op(Op::V128Store(*memarg)),
+            InstructionKind::Simd(SimdOp::V128Store8Lane { memarg, lane }) => self.op(Op::V128Store8Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Store16Lane { memarg, lane }) => self.op(Op::V128Store16Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Store32Lane { memarg, lane }) => self.op(Op::V128Store32Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
+            InstructionKind::Simd(SimdOp::V128Store64Lane { memarg, lane }) => self.op(Op::V128Store64Lane {
+                memarg: *memarg,
+                lane: *lane,
+            }),
             InstructionKind::MemorySize => self.op(Op::MemorySize),
             InstructionKind::MemoryGrow => self.op(Op::MemoryGrow),
             InstructionKind::MemoryCopy => self.op(Op::MemoryCopy),
