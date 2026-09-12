@@ -1801,6 +1801,29 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i16x8_reductions() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result i32 i32 i32 i32)
+                    (local $vector v128)
+                    (local.set $vector (v128.const i16x8 1 -1 -32768 2 3 4 5 -1))
+                    (i16x8.all_true (local.get $vector))
+                    ;; Negative lanes 1, 2 and 7 set bits 1, 2 and 7: 0x86.
+                    (i16x8.bitmask (local.get $vector))
+                    ;; Zeroing positive lane 0 clears all_true but leaves the sign-bit mask unchanged.
+                    (local.set $vector
+                        (i16x8.replace_lane 0 (local.get $vector) (i32.const 0)))
+                    (i16x8.all_true (local.get $vector))
+                    (i16x8.bitmask (local.get $vector))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![Value::I32(1), Value::I32(0x86), Value::I32(0), Value::I32(0x86),]
+        );
+    }
+
+    #[test]
     fn flat_engine_lane_memory_preserves_width_and_neighbours() {
         // The two-byte boundary load replaces only lane 7 of the vector.
         // The unaligned store preserves its adjacent sentinel bytes.

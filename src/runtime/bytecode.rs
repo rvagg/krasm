@@ -42,6 +42,15 @@ pub enum Op {
     V128Xor,
     V128Bitselect,
     V128AnyTrue,
+    // Lane reductions replace one v128 with one i32.
+    I8x16AllTrue,
+    I8x16Bitmask,
+    I16x8AllTrue,
+    I16x8Bitmask,
+    I32x4AllTrue,
+    I32x4Bitmask,
+    I64x2AllTrue,
+    I64x2Bitmask,
     // Scalar splats consume operand-stack values; V128Load*Splat below reads memory.
     I8x16Splat,
     I16x8Splat,
@@ -475,7 +484,16 @@ impl Op {
             Op::I32TruncSatF32S | Op::I32TruncSatF32U | Op::I32TruncSatF64S | Op::I32TruncSatF64U => 0,
             Op::I64TruncSatF32S | Op::I64TruncSatF32U | Op::I64TruncSatF64S | Op::I64TruncSatF64U => 0,
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
-            Op::V128Not | Op::V128AnyTrue => 0,
+            Op::V128Not
+            | Op::V128AnyTrue
+            | Op::I8x16AllTrue
+            | Op::I8x16Bitmask
+            | Op::I16x8AllTrue
+            | Op::I16x8Bitmask
+            | Op::I32x4AllTrue
+            | Op::I32x4Bitmask
+            | Op::I64x2AllTrue
+            | Op::I64x2Bitmask => 0,
             Op::I8x16Splat | Op::I16x8Splat | Op::I32x4Splat | Op::I64x2Splat | Op::F32x4Splat | Op::F64x2Splat => 0,
             Op::I8x16Shuffle(_) | Op::I8x16Swizzle => -1,
             Op::I8x16ExtractLaneS(_)
@@ -748,6 +766,14 @@ impl fmt::Display for Op {
             Op::V128Xor => write!(f, "v128.xor"),
             Op::V128Bitselect => write!(f, "v128.bitselect"),
             Op::V128AnyTrue => write!(f, "v128.any_true"),
+            Op::I8x16AllTrue => write!(f, "i8x16.all_true"),
+            Op::I8x16Bitmask => write!(f, "i8x16.bitmask"),
+            Op::I16x8AllTrue => write!(f, "i16x8.all_true"),
+            Op::I16x8Bitmask => write!(f, "i16x8.bitmask"),
+            Op::I32x4AllTrue => write!(f, "i32x4.all_true"),
+            Op::I32x4Bitmask => write!(f, "i32x4.bitmask"),
+            Op::I64x2AllTrue => write!(f, "i64x2.all_true"),
+            Op::I64x2Bitmask => write!(f, "i64x2.bitmask"),
             Op::I8x16Splat => write!(f, "i8x16.splat"),
             Op::I16x8Splat => write!(f, "i16x8.splat"),
             Op::I32x4Splat => write!(f, "i32x4.splat"),

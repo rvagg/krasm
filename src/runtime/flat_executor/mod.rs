@@ -524,6 +524,14 @@ impl FlatExecutor {
                 Op::V128Xor => stack_op!(ops::simd::v128_xor),
                 Op::V128Bitselect => stack_op!(ops::simd::v128_bitselect),
                 Op::V128AnyTrue => stack_op!(ops::simd::v128_any_true),
+                Op::I8x16AllTrue => stack_op!(ops::simd::i8x16_all_true),
+                Op::I8x16Bitmask => stack_op!(ops::simd::i8x16_bitmask),
+                Op::I16x8AllTrue => stack_op!(ops::simd::i16x8_all_true),
+                Op::I16x8Bitmask => stack_op!(ops::simd::i16x8_bitmask),
+                Op::I32x4AllTrue => stack_op!(ops::simd::i32x4_all_true),
+                Op::I32x4Bitmask => stack_op!(ops::simd::i32x4_bitmask),
+                Op::I64x2AllTrue => stack_op!(ops::simd::i64x2_all_true),
+                Op::I64x2Bitmask => stack_op!(ops::simd::i64x2_bitmask),
 
                 // -- SIMD splat and permutation --
                 Op::I8x16Splat => stack_op!(ops::simd::i8x16_splat),
