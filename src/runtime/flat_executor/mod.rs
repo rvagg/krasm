@@ -525,6 +525,22 @@ impl FlatExecutor {
                 Op::V128Bitselect => stack_op!(ops::simd::v128_bitselect),
                 Op::V128AnyTrue => stack_op!(ops::simd::v128_any_true),
 
+                // -- SIMD lane extraction and replacement --
+                Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
+                Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),
+                Op::I16x8ExtractLaneS(lane) => stack_op!(ops::simd::i16x8_extract_lane_s, *lane),
+                Op::I16x8ExtractLaneU(lane) => stack_op!(ops::simd::i16x8_extract_lane_u, *lane),
+                Op::I32x4ExtractLane(lane) => stack_op!(ops::simd::i32x4_extract_lane, *lane),
+                Op::I64x2ExtractLane(lane) => stack_op!(ops::simd::i64x2_extract_lane, *lane),
+                Op::F32x4ExtractLane(lane) => stack_op!(ops::simd::f32x4_extract_lane, *lane),
+                Op::F64x2ExtractLane(lane) => stack_op!(ops::simd::f64x2_extract_lane, *lane),
+                Op::I8x16ReplaceLane(lane) => stack_op!(ops::simd::i8x16_replace_lane, *lane),
+                Op::I16x8ReplaceLane(lane) => stack_op!(ops::simd::i16x8_replace_lane, *lane),
+                Op::I32x4ReplaceLane(lane) => stack_op!(ops::simd::i32x4_replace_lane, *lane),
+                Op::I64x2ReplaceLane(lane) => stack_op!(ops::simd::i64x2_replace_lane, *lane),
+                Op::F32x4ReplaceLane(lane) => stack_op!(ops::simd::f32x4_replace_lane, *lane),
+                Op::F64x2ReplaceLane(lane) => stack_op!(ops::simd::f64x2_replace_lane, *lane),
+
                 // -- Arithmetic --
                 Op::I32Add => stack_op!(ops::numeric::i32_add),
                 Op::I32Sub => stack_op!(ops::numeric::i32_sub),

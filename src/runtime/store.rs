@@ -1774,11 +1774,41 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_lane_replace_and_extract() {
+        // Replacing the last i16 lane truncates 0x18001 to 0x8001 (little-endian bytes [1, 128]).
+        // Signed extraction yields -32767; unsigned yields 32769. Other lanes stay unchanged.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 i32 i32)
+                    (local $vector v128)
+                    (local.set $vector
+                        (i16x8.replace_lane 7
+                            (v128.const i16x8 1 2 3 4 5 6 7 8)
+                            (i32.const 0x18001)))
+                    (local.get $vector)
+                    (i16x8.extract_lane_s 7 (local.get $vector))
+                    (i16x8.extract_lane_u 7 (local.get $vector))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 1, 128]),
+                Value::I32(-32767),
+                Value::I32(32769),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // Lane extraction remains unsupported by the flat engine.
+        // SIMD arithmetic remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
-                (i32x4.extract_lane 0 (v128.const i32x4 7 0 0 0))))",
+                (i32x4.extract_lane 0
+                    (i32x4.add
+                        (v128.const i32x4 3 0 0 0)
+                        (v128.const i32x4 4 0 0 0)))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -1791,10 +1821,13 @@ mod tests {
     #[test]
     fn flat_engine_selection_is_per_instance() {
         // Instances keep the engine they were created with; the unsupported
-        // instruction runs fine on the structured instance created first.
+        // SIMD arithmetic runs fine on the structured instance created first.
         let mut store = Store::new();
         let wat = "(module (func (export \"run\") (result i32)
-            (i32x4.extract_lane 0 (v128.const i32x4 7 0 0 0))))";
+            (i32x4.extract_lane 0
+                (i32x4.add
+                    (v128.const i32x4 3 0 0 0)
+                    (v128.const i32x4 4 0 0 0)))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();

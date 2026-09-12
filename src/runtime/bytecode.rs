@@ -42,6 +42,23 @@ pub enum Op {
     V128Xor,
     V128Bitselect,
     V128AnyTrue,
+    // Lane indices are validated immediates, not operand-stack values.
+    // Extract: v128 -> scalar, stack delta 0.
+    I8x16ExtractLaneS(u8),
+    I8x16ExtractLaneU(u8),
+    I16x8ExtractLaneS(u8),
+    I16x8ExtractLaneU(u8),
+    I32x4ExtractLane(u8),
+    I64x2ExtractLane(u8),
+    F32x4ExtractLane(u8),
+    F64x2ExtractLane(u8),
+    // Replace: v128 + scalar -> v128, stack delta -1.
+    I8x16ReplaceLane(u8),
+    I16x8ReplaceLane(u8),
+    I32x4ReplaceLane(u8),
+    I64x2ReplaceLane(u8),
+    F32x4ReplaceLane(u8),
+    F64x2ReplaceLane(u8),
 
     // -- i32 arithmetic --
     I32Add,
@@ -416,6 +433,20 @@ impl Op {
             Op::I64TruncSatF32S | Op::I64TruncSatF32U | Op::I64TruncSatF64S | Op::I64TruncSatF64U => 0,
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
             Op::V128Not | Op::V128AnyTrue => 0,
+            Op::I8x16ExtractLaneS(_)
+            | Op::I8x16ExtractLaneU(_)
+            | Op::I16x8ExtractLaneS(_)
+            | Op::I16x8ExtractLaneU(_)
+            | Op::I32x4ExtractLane(_)
+            | Op::I64x2ExtractLane(_)
+            | Op::F32x4ExtractLane(_)
+            | Op::F64x2ExtractLane(_) => 0,
+            Op::I8x16ReplaceLane(_)
+            | Op::I16x8ReplaceLane(_)
+            | Op::I32x4ReplaceLane(_)
+            | Op::I64x2ReplaceLane(_)
+            | Op::F32x4ReplaceLane(_)
+            | Op::F64x2ReplaceLane(_) => -1,
             Op::V128And | Op::V128AndNot | Op::V128Or | Op::V128Xor => -1,
             Op::V128Bitselect => -2,
             Op::Select => -2, // pop condition + one branch, keep the other
@@ -661,6 +692,20 @@ impl fmt::Display for Op {
             Op::V128Xor => write!(f, "v128.xor"),
             Op::V128Bitselect => write!(f, "v128.bitselect"),
             Op::V128AnyTrue => write!(f, "v128.any_true"),
+            Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
+            Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
+            Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),
+            Op::I16x8ExtractLaneU(lane) => write!(f, "i16x8.extract_lane_u {lane}"),
+            Op::I32x4ExtractLane(lane) => write!(f, "i32x4.extract_lane {lane}"),
+            Op::I64x2ExtractLane(lane) => write!(f, "i64x2.extract_lane {lane}"),
+            Op::F32x4ExtractLane(lane) => write!(f, "f32x4.extract_lane {lane}"),
+            Op::F64x2ExtractLane(lane) => write!(f, "f64x2.extract_lane {lane}"),
+            Op::I8x16ReplaceLane(lane) => write!(f, "i8x16.replace_lane {lane}"),
+            Op::I16x8ReplaceLane(lane) => write!(f, "i16x8.replace_lane {lane}"),
+            Op::I32x4ReplaceLane(lane) => write!(f, "i32x4.replace_lane {lane}"),
+            Op::I64x2ReplaceLane(lane) => write!(f, "i64x2.replace_lane {lane}"),
+            Op::F32x4ReplaceLane(lane) => write!(f, "f32x4.replace_lane {lane}"),
+            Op::F64x2ReplaceLane(lane) => write!(f, "f64x2.replace_lane {lane}"),
             Op::Select => write!(f, "select"),
             Op::RefNull(t) => write!(f, "ref.null {t}"),
             Op::RefIsNull => write!(f, "ref.is_null"),
