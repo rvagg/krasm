@@ -1825,6 +1825,67 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i16x8_and_i32x4_comparisons_preserve_signedness_and_masks() {
+        // High-boundary lanes distinguish signed ordering from unsigned ordering.
+        // True lanes fill their complete lane-width masks.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"i16\") (result v128 v128)
+                    (local $a v128)
+                    (local $b v128)
+                    (local.set $a (v128.const i16x8 -32768 -1 32767 0 1 2 3 4))
+                    (local.set $b (v128.const i16x8 32767 0 -32768 0 1 2 3 4))
+                    (i16x8.lt_s (local.get $a) (local.get $b))
+                    (i16x8.lt_u (local.get $a) (local.get $b)))
+                (func (export \"i32\") (result v128 v128)
+                    (local $a v128)
+                    (local $b v128)
+                    (local.set $a (v128.const i32x4 -2147483648 -1 2147483647 0))
+                    (local.set $b (v128.const i32x4 2147483647 0 -2147483648 0))
+                    (i32x4.lt_s (local.get $a) (local.get $b))
+                    (i32x4.lt_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "i16", vec![], None).unwrap(),
+            vec![
+                Value::V128([0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            ]
+        );
+        assert_eq!(
+            store.invoke_export(id, "i32", vec![], None).unwrap(),
+            vec![
+                Value::V128([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn flat_engine_i64x2_comparisons_use_full_width_lanes() {
+        // The high 32 bits determine lane zero, while signedness determines lane one.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128)
+                    (local $a v128)
+                    (local $b v128)
+                    (local.set $a (v128.const i64x2 4294967296 -9223372036854775808))
+                    (local.set $b (v128.const i64x2 0 0))
+                    (i64x2.gt_s (local.get $a) (local.get $b))
+                    (i64x2.lt_s (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_i16x8_reductions() {
         let (mut store, id) = flat_instance(
             "(module

@@ -61,7 +61,7 @@ pub enum Op {
     // Shuffle indices are fixed validated immediates; swizzle indices are runtime values.
     I8x16Shuffle([u8; 16]),
     I8x16Swizzle,
-    // Comparisons produce per-lane masks: 0xff for true, 0x00 for false.
+    // Integer comparisons produce all-ones or all-zeros masks at their lane width.
     I8x16Eq,
     I8x16Ne,
     I8x16LtS,
@@ -72,6 +72,32 @@ pub enum Op {
     I8x16LeU,
     I8x16GeS,
     I8x16GeU,
+    I16x8Eq,
+    I16x8Ne,
+    I16x8LtS,
+    I16x8LtU,
+    I16x8GtS,
+    I16x8GtU,
+    I16x8LeS,
+    I16x8LeU,
+    I16x8GeS,
+    I16x8GeU,
+    I32x4Eq,
+    I32x4Ne,
+    I32x4LtS,
+    I32x4LtU,
+    I32x4GtS,
+    I32x4GtU,
+    I32x4LeS,
+    I32x4LeU,
+    I32x4GeS,
+    I32x4GeU,
+    I64x2Eq,
+    I64x2Ne,
+    I64x2LtS,
+    I64x2GtS,
+    I64x2LeS,
+    I64x2GeS,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -516,7 +542,33 @@ impl Op {
             | Op::I8x16LeS
             | Op::I8x16LeU
             | Op::I8x16GeS
-            | Op::I8x16GeU => -1,
+            | Op::I8x16GeU
+            | Op::I16x8Eq
+            | Op::I16x8Ne
+            | Op::I16x8LtS
+            | Op::I16x8LtU
+            | Op::I16x8GtS
+            | Op::I16x8GtU
+            | Op::I16x8LeS
+            | Op::I16x8LeU
+            | Op::I16x8GeS
+            | Op::I16x8GeU
+            | Op::I32x4Eq
+            | Op::I32x4Ne
+            | Op::I32x4LtS
+            | Op::I32x4LtU
+            | Op::I32x4GtS
+            | Op::I32x4GtU
+            | Op::I32x4LeS
+            | Op::I32x4LeU
+            | Op::I32x4GeS
+            | Op::I32x4GeU
+            | Op::I64x2Eq
+            | Op::I64x2Ne
+            | Op::I64x2LtS
+            | Op::I64x2GtS
+            | Op::I64x2LeS
+            | Op::I64x2GeS => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -820,6 +872,32 @@ impl fmt::Display for Op {
             Op::I8x16LeU => write!(f, "i8x16.le_u"),
             Op::I8x16GeS => write!(f, "i8x16.ge_s"),
             Op::I8x16GeU => write!(f, "i8x16.ge_u"),
+            Op::I16x8Eq => write!(f, "i16x8.eq"),
+            Op::I16x8Ne => write!(f, "i16x8.ne"),
+            Op::I16x8LtS => write!(f, "i16x8.lt_s"),
+            Op::I16x8LtU => write!(f, "i16x8.lt_u"),
+            Op::I16x8GtS => write!(f, "i16x8.gt_s"),
+            Op::I16x8GtU => write!(f, "i16x8.gt_u"),
+            Op::I16x8LeS => write!(f, "i16x8.le_s"),
+            Op::I16x8LeU => write!(f, "i16x8.le_u"),
+            Op::I16x8GeS => write!(f, "i16x8.ge_s"),
+            Op::I16x8GeU => write!(f, "i16x8.ge_u"),
+            Op::I32x4Eq => write!(f, "i32x4.eq"),
+            Op::I32x4Ne => write!(f, "i32x4.ne"),
+            Op::I32x4LtS => write!(f, "i32x4.lt_s"),
+            Op::I32x4LtU => write!(f, "i32x4.lt_u"),
+            Op::I32x4GtS => write!(f, "i32x4.gt_s"),
+            Op::I32x4GtU => write!(f, "i32x4.gt_u"),
+            Op::I32x4LeS => write!(f, "i32x4.le_s"),
+            Op::I32x4LeU => write!(f, "i32x4.le_u"),
+            Op::I32x4GeS => write!(f, "i32x4.ge_s"),
+            Op::I32x4GeU => write!(f, "i32x4.ge_u"),
+            Op::I64x2Eq => write!(f, "i64x2.eq"),
+            Op::I64x2Ne => write!(f, "i64x2.ne"),
+            Op::I64x2LtS => write!(f, "i64x2.lt_s"),
+            Op::I64x2GtS => write!(f, "i64x2.gt_s"),
+            Op::I64x2LeS => write!(f, "i64x2.le_s"),
+            Op::I64x2GeS => write!(f, "i64x2.ge_s"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),
