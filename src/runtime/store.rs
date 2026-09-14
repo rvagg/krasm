@@ -1886,6 +1886,48 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_float_comparisons_handle_nan_zero_and_full_width_masks() {
+        // NaNs are unordered on either side, including when compared with themselves.
+        // Signed zeros compare equal; the finite 1 < 2 lane distinguishes le from eq.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"f32\") (result v128 v128 v128)
+                    (local $a v128) (local $b v128)
+                    (local.set $a (v128.const f32x4 nan 1 0 1))
+                    (local.set $b (v128.const f32x4 1 nan -0 2))
+                    (f32x4.eq (local.get $a) (local.get $b))
+                    (f32x4.ne (local.get $a) (local.get $b))
+                    (f32x4.le (local.get $a) (local.get $b)))
+                (func (export \"f64\") (result v128 v128 v128)
+                    (local $a v128) (local $b v128)
+                    (local.set $a (v128.const f64x2 nan -0))
+                    (local.set $b (v128.const f64x2 nan 0))
+                    (f64x2.eq (local.get $a) (local.get $b))
+                    (f64x2.ne (local.get $a) (local.get $b))
+                    (f64x2.le (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "f32", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]),
+                Value::V128([
+                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff
+                ]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+            ]
+        );
+        assert_eq!(
+            store.invoke_export(id, "f64", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+                Value::V128([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_i16x8_reductions() {
         let (mut store, id) = flat_instance(
             "(module

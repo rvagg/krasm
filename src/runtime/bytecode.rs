@@ -61,7 +61,7 @@ pub enum Op {
     // Shuffle indices are fixed validated immediates; swizzle indices are runtime values.
     I8x16Shuffle([u8; 16]),
     I8x16Swizzle,
-    // Integer comparisons produce all-ones or all-zeros masks at their lane width.
+    // SIMD comparisons produce all-ones or all-zeros masks at their lane width.
     I8x16Eq,
     I8x16Ne,
     I8x16LtS,
@@ -92,12 +92,24 @@ pub enum Op {
     I32x4LeU,
     I32x4GeS,
     I32x4GeU,
+    F32x4Eq,
+    F32x4Ne,
+    F32x4Lt,
+    F32x4Gt,
+    F32x4Le,
+    F32x4Ge,
     I64x2Eq,
     I64x2Ne,
     I64x2LtS,
     I64x2GtS,
     I64x2LeS,
     I64x2GeS,
+    F64x2Eq,
+    F64x2Ne,
+    F64x2Lt,
+    F64x2Gt,
+    F64x2Le,
+    F64x2Ge,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -563,12 +575,24 @@ impl Op {
             | Op::I32x4LeU
             | Op::I32x4GeS
             | Op::I32x4GeU
+            | Op::F32x4Eq
+            | Op::F32x4Ne
+            | Op::F32x4Lt
+            | Op::F32x4Gt
+            | Op::F32x4Le
+            | Op::F32x4Ge
             | Op::I64x2Eq
             | Op::I64x2Ne
             | Op::I64x2LtS
             | Op::I64x2GtS
             | Op::I64x2LeS
-            | Op::I64x2GeS => -1,
+            | Op::I64x2GeS
+            | Op::F64x2Eq
+            | Op::F64x2Ne
+            | Op::F64x2Lt
+            | Op::F64x2Gt
+            | Op::F64x2Le
+            | Op::F64x2Ge => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -892,12 +916,24 @@ impl fmt::Display for Op {
             Op::I32x4LeU => write!(f, "i32x4.le_u"),
             Op::I32x4GeS => write!(f, "i32x4.ge_s"),
             Op::I32x4GeU => write!(f, "i32x4.ge_u"),
+            Op::F32x4Eq => write!(f, "f32x4.eq"),
+            Op::F32x4Ne => write!(f, "f32x4.ne"),
+            Op::F32x4Lt => write!(f, "f32x4.lt"),
+            Op::F32x4Gt => write!(f, "f32x4.gt"),
+            Op::F32x4Le => write!(f, "f32x4.le"),
+            Op::F32x4Ge => write!(f, "f32x4.ge"),
             Op::I64x2Eq => write!(f, "i64x2.eq"),
             Op::I64x2Ne => write!(f, "i64x2.ne"),
             Op::I64x2LtS => write!(f, "i64x2.lt_s"),
             Op::I64x2GtS => write!(f, "i64x2.gt_s"),
             Op::I64x2LeS => write!(f, "i64x2.le_s"),
             Op::I64x2GeS => write!(f, "i64x2.ge_s"),
+            Op::F64x2Eq => write!(f, "f64x2.eq"),
+            Op::F64x2Ne => write!(f, "f64x2.ne"),
+            Op::F64x2Lt => write!(f, "f64x2.lt"),
+            Op::F64x2Gt => write!(f, "f64x2.gt"),
+            Op::F64x2Le => write!(f, "f64x2.le"),
+            Op::F64x2Ge => write!(f, "f64x2.ge"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),

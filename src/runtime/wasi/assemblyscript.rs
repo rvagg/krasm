@@ -69,7 +69,9 @@ fn read_as_string(memory: &Memory, ptr: u32) -> Option<String> {
 
     // Convert from UTF-16LE to String
     let utf16: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
 
