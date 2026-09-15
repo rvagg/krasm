@@ -1951,6 +1951,31 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i16x8_shifts_normalize_count_and_preserve_signedness() {
+        // In 16-bit lanes, counts 16 and 17 wrap to 0 and 1.
+        // Signed right shift fills with the sign bit; unsigned fills with zeros.
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128 v128)
+                    (local $vector v128)
+                    (local.set $vector
+                        (v128.const i16x8 -32768 -1 32767 1 2 0 123 -2))
+                    (i16x8.shl (local.get $vector) (i32.const 16))
+                    (i16x8.shr_s (local.get $vector) (i32.const 17))
+                    (i16x8.shr_u (local.get $vector) (i32.const 17))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 128, 255, 255, 255, 127, 1, 0, 2, 0, 0, 0, 123, 0, 254, 255]),
+                Value::V128([0, 192, 255, 255, 255, 63, 0, 0, 1, 0, 0, 0, 61, 0, 255, 255]),
+                Value::V128([0, 64, 255, 127, 255, 63, 0, 0, 1, 0, 0, 0, 61, 0, 255, 127]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_lane_memory_preserves_width_and_neighbours() {
         // The two-byte boundary load replaces only lane 7 of the vector.
         // The unaligned store preserves its adjacent sentinel bytes.

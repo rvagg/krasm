@@ -592,6 +592,19 @@ impl FlatExecutor {
                 Op::F64x2Splat => stack_op!(ops::simd::f64x2_splat),
                 Op::I8x16Shuffle(mask) => stack_op!(ops::simd::i8x16_shuffle, mask),
                 Op::I8x16Swizzle => stack_op!(ops::simd::i8x16_swizzle),
+                // -- SIMD shifts --
+                Op::I8x16Shl => stack_op!(ops::simd::i8x16_shl),
+                Op::I8x16ShrS => stack_op!(ops::simd::i8x16_shr_s),
+                Op::I8x16ShrU => stack_op!(ops::simd::i8x16_shr_u),
+                Op::I16x8Shl => stack_op!(ops::simd::i16x8_shl),
+                Op::I16x8ShrS => stack_op!(ops::simd::i16x8_shr_s),
+                Op::I16x8ShrU => stack_op!(ops::simd::i16x8_shr_u),
+                Op::I32x4Shl => stack_op!(ops::simd::i32x4_shl),
+                Op::I32x4ShrS => stack_op!(ops::simd::i32x4_shr_s),
+                Op::I32x4ShrU => stack_op!(ops::simd::i32x4_shr_u),
+                Op::I64x2Shl => stack_op!(ops::simd::i64x2_shl),
+                Op::I64x2ShrS => stack_op!(ops::simd::i64x2_shr_s),
+                Op::I64x2ShrU => stack_op!(ops::simd::i64x2_shr_u),
 
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
