@@ -136,8 +136,17 @@ pub enum Op {
     // Arithmetic wraps independently within each lane, without cross-lane carry or borrow.
     I8x16Add,
     I8x16Sub,
+    // Saturating arithmetic clamps each lane at its signed or unsigned bounds.
+    I8x16AddSatS,
+    I8x16AddSatU,
+    I8x16SubSatS,
+    I8x16SubSatU,
     I16x8Add,
     I16x8Sub,
+    I16x8AddSatS,
+    I16x8AddSatU,
+    I16x8SubSatS,
+    I16x8SubSatU,
     I16x8Mul,
     I32x4Add,
     I32x4Sub,
@@ -651,8 +660,16 @@ impl Op {
             | Op::I64x2ShrU => -1,
             Op::I8x16Add
             | Op::I8x16Sub
+            | Op::I8x16AddSatS
+            | Op::I8x16AddSatU
+            | Op::I8x16SubSatS
+            | Op::I8x16SubSatU
             | Op::I16x8Add
             | Op::I16x8Sub
+            | Op::I16x8AddSatS
+            | Op::I16x8AddSatU
+            | Op::I16x8SubSatS
+            | Op::I16x8SubSatU
             | Op::I16x8Mul
             | Op::I32x4Add
             | Op::I32x4Sub
@@ -1024,8 +1041,16 @@ impl fmt::Display for Op {
             Op::I64x2ShrU => write!(f, "i64x2.shr_u"),
             Op::I8x16Add => write!(f, "i8x16.add"),
             Op::I8x16Sub => write!(f, "i8x16.sub"),
+            Op::I8x16AddSatS => write!(f, "i8x16.add_sat_s"),
+            Op::I8x16AddSatU => write!(f, "i8x16.add_sat_u"),
+            Op::I8x16SubSatS => write!(f, "i8x16.sub_sat_s"),
+            Op::I8x16SubSatU => write!(f, "i8x16.sub_sat_u"),
             Op::I16x8Add => write!(f, "i16x8.add"),
             Op::I16x8Sub => write!(f, "i16x8.sub"),
+            Op::I16x8AddSatS => write!(f, "i16x8.add_sat_s"),
+            Op::I16x8AddSatU => write!(f, "i16x8.add_sat_u"),
+            Op::I16x8SubSatS => write!(f, "i16x8.sub_sat_s"),
+            Op::I16x8SubSatU => write!(f, "i16x8.sub_sat_u"),
             Op::I16x8Mul => write!(f, "i16x8.mul"),
             Op::I32x4Add => write!(f, "i32x4.add"),
             Op::I32x4Sub => write!(f, "i32x4.sub"),

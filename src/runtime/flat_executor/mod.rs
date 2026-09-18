@@ -630,6 +630,16 @@ impl FlatExecutor {
                 Op::I64x2Sub => stack_op!(ops::simd::i64x2_sub),
                 Op::I64x2Mul => stack_op!(ops::simd::i64x2_mul),
 
+                // -- SIMD saturating arithmetic --
+                Op::I8x16AddSatS => stack_op!(ops::simd::i8x16_add_sat_s),
+                Op::I8x16AddSatU => stack_op!(ops::simd::i8x16_add_sat_u),
+                Op::I8x16SubSatS => stack_op!(ops::simd::i8x16_sub_sat_s),
+                Op::I8x16SubSatU => stack_op!(ops::simd::i8x16_sub_sat_u),
+                Op::I16x8AddSatS => stack_op!(ops::simd::i16x8_add_sat_s),
+                Op::I16x8AddSatU => stack_op!(ops::simd::i16x8_add_sat_u),
+                Op::I16x8SubSatS => stack_op!(ops::simd::i16x8_sub_sat_s),
+                Op::I16x8SubSatU => stack_op!(ops::simd::i16x8_sub_sat_u),
+
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
                 Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),

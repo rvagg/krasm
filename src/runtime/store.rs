@@ -2093,6 +2093,32 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i16x8_saturating_arithmetic_preserves_signedness_and_operands() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128 v128 v128)
+                (local $a v128) (local $b v128)
+                (local.set $a (v128.const i16x8 -32768 32767 -1 0 100 -100 32760 -32760))
+                (local.set $b (v128.const i16x8 -1 1 1 1 200 200 10 -10))
+                (i16x8.add_sat_s (local.get $a) (local.get $b))
+                (i16x8.add_sat_u (local.get $a) (local.get $b))
+                (i16x8.sub_sat_s (local.get $a) (local.get $b))
+                (i16x8.sub_sat_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 128, 255, 127, 0, 0, 1, 0, 44, 1, 100, 0, 255, 127, 0, 128]),
+                Value::V128([255, 255, 0, 128, 255, 255, 1, 0, 44, 1, 255, 255, 2, 128, 255, 255]),
+                Value::V128([
+                    1, 128, 254, 127, 254, 255, 255, 255, 156, 255, 212, 254, 238, 127, 18, 128
+                ]),
+                Value::V128([0, 0, 254, 127, 254, 255, 0, 0, 0, 0, 212, 254, 238, 127, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.min_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
