@@ -2031,6 +2031,44 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_integer_unary_ops_wrap_and_popcount_per_lane() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128 v128 v128 v128 v128 v128 v128 v128)
+                    (local $i8 v128) (local $i16 v128) (local $i32 v128) (local $i64 v128)
+                    (local.set $i8
+                        (v128.const i8x16 -128 -3 -1 0 1 2 3 127 -127 64 -64 15 -15 85 -86 -2))
+                    (local.set $i16 (v128.const i16x8 -32768 -3 -1 0 1 32767 -2 42))
+                    (local.set $i32 (v128.const i32x4 -2147483648 -3 0 123))
+                    (local.set $i64 (v128.const i64x2 -9223372036854775808 3))
+                    (i8x16.abs (local.get $i8))
+                    (i8x16.neg (local.get $i8))
+                    (i8x16.popcnt (local.get $i8))
+                    (i16x8.abs (local.get $i16))
+                    (i16x8.neg (local.get $i16))
+                    (i32x4.abs (local.get $i32))
+                    (i32x4.neg (local.get $i32))
+                    (i64x2.abs (local.get $i64))
+                    (i64x2.neg (local.get $i64))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([128, 3, 1, 0, 1, 2, 3, 127, 127, 64, 64, 15, 15, 85, 86, 2]),
+                Value::V128([128, 3, 1, 0, 255, 254, 253, 129, 127, 192, 64, 241, 15, 171, 86, 2]),
+                Value::V128([1, 7, 8, 0, 1, 1, 2, 7, 2, 1, 2, 4, 5, 4, 4, 7]),
+                Value::V128([0, 128, 3, 0, 1, 0, 0, 0, 1, 0, 255, 127, 2, 0, 42, 0]),
+                Value::V128([0, 128, 3, 0, 1, 0, 0, 0, 255, 255, 1, 128, 2, 0, 214, 255]),
+                Value::V128([0, 0, 0, 128, 3, 0, 0, 0, 0, 0, 0, 0, 123, 0, 0, 0]),
+                Value::V128([0, 0, 0, 128, 3, 0, 0, 0, 0, 0, 0, 0, 133, 255, 255, 255]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 128, 3, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 128, 253, 255, 255, 255, 255, 255, 255, 255]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_i16x8_wrapping_arithmetic() {
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result v128 v128 v128)
@@ -2056,11 +2094,13 @@ mod tests {
 
     #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // i32x4.abs remains unsupported by the flat engine.
+        // i32x4.min_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
                 (i32x4.extract_lane 0
-                    (i32x4.abs (v128.const i32x4 -7 0 0 0)))))",
+                    (i32x4.min_s
+                        (v128.const i32x4 7 0 0 0)
+                        (v128.const i32x4 9 0 0 0)))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -2072,12 +2112,14 @@ mod tests {
 
     #[test]
     fn flat_engine_selection_is_per_instance() {
-        // Instances keep the engine they were created with; i32x4.abs runs
+        // Instances keep the engine they were created with; i32x4.min_s runs
         // on the structured instance created first but not the flat instance.
         let mut store = Store::new();
         let wat = "(module (func (export \"run\") (result i32)
             (i32x4.extract_lane 0
-                (i32x4.abs (v128.const i32x4 -7 0 0 0)))))";
+                (i32x4.min_s
+                    (v128.const i32x4 7 0 0 0)
+                    (v128.const i32x4 9 0 0 0)))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();

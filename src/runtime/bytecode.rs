@@ -42,6 +42,16 @@ pub enum Op {
     V128Xor,
     V128Bitselect,
     V128AnyTrue,
+    // Integer abs and neg wrap on each signed lane's minimum value.
+    I8x16Abs,
+    I8x16Neg,
+    I8x16Popcnt,
+    I16x8Abs,
+    I16x8Neg,
+    I32x4Abs,
+    I32x4Neg,
+    I64x2Abs,
+    I64x2Neg,
     // Lane reductions replace one v128 with one i32.
     I8x16AllTrue,
     I8x16Bitmask,
@@ -560,6 +570,15 @@ impl Op {
             Op::I32ReinterpretF32 | Op::I64ReinterpretF64 | Op::F32ReinterpretI32 | Op::F64ReinterpretI64 => 0,
             Op::V128Not
             | Op::V128AnyTrue
+            | Op::I8x16Abs
+            | Op::I8x16Neg
+            | Op::I8x16Popcnt
+            | Op::I16x8Abs
+            | Op::I16x8Neg
+            | Op::I32x4Abs
+            | Op::I32x4Neg
+            | Op::I64x2Abs
+            | Op::I64x2Neg
             | Op::I8x16AllTrue
             | Op::I8x16Bitmask
             | Op::I16x8AllTrue
@@ -911,6 +930,15 @@ impl fmt::Display for Op {
             Op::V128Xor => write!(f, "v128.xor"),
             Op::V128Bitselect => write!(f, "v128.bitselect"),
             Op::V128AnyTrue => write!(f, "v128.any_true"),
+            Op::I8x16Abs => write!(f, "i8x16.abs"),
+            Op::I8x16Neg => write!(f, "i8x16.neg"),
+            Op::I8x16Popcnt => write!(f, "i8x16.popcnt"),
+            Op::I16x8Abs => write!(f, "i16x8.abs"),
+            Op::I16x8Neg => write!(f, "i16x8.neg"),
+            Op::I32x4Abs => write!(f, "i32x4.abs"),
+            Op::I32x4Neg => write!(f, "i32x4.neg"),
+            Op::I64x2Abs => write!(f, "i64x2.abs"),
+            Op::I64x2Neg => write!(f, "i64x2.neg"),
             Op::I8x16AllTrue => write!(f, "i8x16.all_true"),
             Op::I8x16Bitmask => write!(f, "i8x16.bitmask"),
             Op::I16x8AllTrue => write!(f, "i16x8.all_true"),

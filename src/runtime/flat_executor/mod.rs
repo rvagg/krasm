@@ -533,6 +533,17 @@ impl FlatExecutor {
                 Op::I64x2AllTrue => stack_op!(ops::simd::i64x2_all_true),
                 Op::I64x2Bitmask => stack_op!(ops::simd::i64x2_bitmask),
 
+                // -- SIMD integer unary --
+                Op::I8x16Abs => stack_op!(ops::simd::i8x16_abs),
+                Op::I8x16Neg => stack_op!(ops::simd::i8x16_neg),
+                Op::I8x16Popcnt => stack_op!(ops::simd::i8x16_popcnt),
+                Op::I16x8Abs => stack_op!(ops::simd::i16x8_abs),
+                Op::I16x8Neg => stack_op!(ops::simd::i16x8_neg),
+                Op::I32x4Abs => stack_op!(ops::simd::i32x4_abs),
+                Op::I32x4Neg => stack_op!(ops::simd::i32x4_neg),
+                Op::I64x2Abs => stack_op!(ops::simd::i64x2_abs),
+                Op::I64x2Neg => stack_op!(ops::simd::i64x2_neg),
+
                 // -- SIMD comparisons --
                 Op::I8x16Eq => stack_op!(ops::simd::i8x16_eq),
                 Op::I8x16Ne => stack_op!(ops::simd::i8x16_ne),
