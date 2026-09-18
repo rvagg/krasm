@@ -606,6 +606,19 @@ impl FlatExecutor {
                 Op::I64x2ShrS => stack_op!(ops::simd::i64x2_shr_s),
                 Op::I64x2ShrU => stack_op!(ops::simd::i64x2_shr_u),
 
+                // -- SIMD wrapping arithmetic --
+                Op::I8x16Add => stack_op!(ops::simd::i8x16_add),
+                Op::I8x16Sub => stack_op!(ops::simd::i8x16_sub),
+                Op::I16x8Add => stack_op!(ops::simd::i16x8_add),
+                Op::I16x8Sub => stack_op!(ops::simd::i16x8_sub),
+                Op::I16x8Mul => stack_op!(ops::simd::i16x8_mul),
+                Op::I32x4Add => stack_op!(ops::simd::i32x4_add),
+                Op::I32x4Sub => stack_op!(ops::simd::i32x4_sub),
+                Op::I32x4Mul => stack_op!(ops::simd::i32x4_mul),
+                Op::I64x2Add => stack_op!(ops::simd::i64x2_add),
+                Op::I64x2Sub => stack_op!(ops::simd::i64x2_sub),
+                Op::I64x2Mul => stack_op!(ops::simd::i64x2_mul),
+
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
                 Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),

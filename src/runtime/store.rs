@@ -2031,14 +2031,36 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i16x8_wrapping_arithmetic() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128 v128)
+                (local $a v128) (local $b v128)
+                (local.set $a (v128.const i16x8 -1 0 32767 -32768 256 -1 3 10))
+                (local.set $b (v128.const i16x8 1 1 1 1 256 2 4 0))
+                (i16x8.add (local.get $a) (local.get $b))
+                (i16x8.sub (local.get $a) (local.get $b))
+                (i16x8.mul (local.get $a) (local.get $b))))",
+            None,
+        );
+        // Carry and borrow do not cross lane boundaries.
+        // Products truncate to their 16-bit lanes.
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 1, 0, 0, 128, 1, 128, 0, 2, 1, 0, 7, 0, 10, 0]),
+                Value::V128([254, 255, 255, 255, 254, 127, 255, 127, 0, 0, 253, 255, 255, 255, 10, 0]),
+                Value::V128([255, 255, 0, 0, 255, 127, 0, 128, 0, 0, 254, 255, 12, 0, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // SIMD arithmetic remains unsupported by the flat engine.
+        // i32x4.abs remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
                 (i32x4.extract_lane 0
-                    (i32x4.add
-                        (v128.const i32x4 3 0 0 0)
-                        (v128.const i32x4 4 0 0 0)))))",
+                    (i32x4.abs (v128.const i32x4 -7 0 0 0)))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -2050,14 +2072,12 @@ mod tests {
 
     #[test]
     fn flat_engine_selection_is_per_instance() {
-        // Instances keep the engine they were created with; the unsupported
-        // SIMD arithmetic runs fine on the structured instance created first.
+        // Instances keep the engine they were created with; i32x4.abs runs
+        // on the structured instance created first but not the flat instance.
         let mut store = Store::new();
         let wat = "(module (func (export \"run\") (result i32)
             (i32x4.extract_lane 0
-                (i32x4.add
-                    (v128.const i32x4 3 0 0 0)
-                    (v128.const i32x4 4 0 0 0)))))";
+                (i32x4.abs (v128.const i32x4 -7 0 0 0)))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();

@@ -123,6 +123,18 @@ pub enum Op {
     I64x2Shl,
     I64x2ShrS,
     I64x2ShrU,
+    // Arithmetic wraps independently within each lane, without cross-lane carry or borrow.
+    I8x16Add,
+    I8x16Sub,
+    I16x8Add,
+    I16x8Sub,
+    I16x8Mul,
+    I32x4Add,
+    I32x4Sub,
+    I32x4Mul,
+    I64x2Add,
+    I64x2Sub,
+    I64x2Mul,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -618,6 +630,17 @@ impl Op {
             | Op::I64x2Shl
             | Op::I64x2ShrS
             | Op::I64x2ShrU => -1,
+            Op::I8x16Add
+            | Op::I8x16Sub
+            | Op::I16x8Add
+            | Op::I16x8Sub
+            | Op::I16x8Mul
+            | Op::I32x4Add
+            | Op::I32x4Sub
+            | Op::I32x4Mul
+            | Op::I64x2Add
+            | Op::I64x2Sub
+            | Op::I64x2Mul => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -971,6 +994,17 @@ impl fmt::Display for Op {
             Op::I64x2Shl => write!(f, "i64x2.shl"),
             Op::I64x2ShrS => write!(f, "i64x2.shr_s"),
             Op::I64x2ShrU => write!(f, "i64x2.shr_u"),
+            Op::I8x16Add => write!(f, "i8x16.add"),
+            Op::I8x16Sub => write!(f, "i8x16.sub"),
+            Op::I16x8Add => write!(f, "i16x8.add"),
+            Op::I16x8Sub => write!(f, "i16x8.sub"),
+            Op::I16x8Mul => write!(f, "i16x8.mul"),
+            Op::I32x4Add => write!(f, "i32x4.add"),
+            Op::I32x4Sub => write!(f, "i32x4.sub"),
+            Op::I32x4Mul => write!(f, "i32x4.mul"),
+            Op::I64x2Add => write!(f, "i64x2.add"),
+            Op::I64x2Sub => write!(f, "i64x2.sub"),
+            Op::I64x2Mul => write!(f, "i64x2.mul"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),
