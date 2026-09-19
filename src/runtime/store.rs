@@ -2143,6 +2143,23 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_unsigned_average_rounds_up_without_overflow() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128)
+                (i16x8.avgr_u
+                    (v128.const i16x8 65535 65534 65535 32768 0 1 2 10)
+                    (v128.const i16x8 65535 65535 0 32768 1 2 4 20))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![Value::V128([
+                255, 255, 255, 255, 0, 128, 0, 128, 1, 0, 2, 0, 3, 0, 15, 0
+            ])]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

@@ -146,6 +146,8 @@ pub enum Op {
     I8x16MinU,
     I8x16MaxS,
     I8x16MaxU,
+    // Unsigned averages round odd sums upward without lane-width overflow.
+    I8x16AvgrU,
     I16x8Add,
     I16x8Sub,
     I16x8AddSatS,
@@ -156,6 +158,7 @@ pub enum Op {
     I16x8MinU,
     I16x8MaxS,
     I16x8MaxU,
+    I16x8AvgrU,
     I16x8Mul,
     I32x4Add,
     I32x4Sub,
@@ -681,6 +684,7 @@ impl Op {
             | Op::I8x16MinU
             | Op::I8x16MaxS
             | Op::I8x16MaxU
+            | Op::I8x16AvgrU
             | Op::I16x8Add
             | Op::I16x8Sub
             | Op::I16x8AddSatS
@@ -691,6 +695,7 @@ impl Op {
             | Op::I16x8MinU
             | Op::I16x8MaxS
             | Op::I16x8MaxU
+            | Op::I16x8AvgrU
             | Op::I16x8Mul
             | Op::I32x4Add
             | Op::I32x4Sub
@@ -1074,6 +1079,7 @@ impl fmt::Display for Op {
             Op::I8x16MinU => write!(f, "i8x16.min_u"),
             Op::I8x16MaxS => write!(f, "i8x16.max_s"),
             Op::I8x16MaxU => write!(f, "i8x16.max_u"),
+            Op::I8x16AvgrU => write!(f, "i8x16.avgr_u"),
             Op::I16x8Add => write!(f, "i16x8.add"),
             Op::I16x8Sub => write!(f, "i16x8.sub"),
             Op::I16x8AddSatS => write!(f, "i16x8.add_sat_s"),
@@ -1084,6 +1090,7 @@ impl fmt::Display for Op {
             Op::I16x8MinU => write!(f, "i16x8.min_u"),
             Op::I16x8MaxS => write!(f, "i16x8.max_s"),
             Op::I16x8MaxU => write!(f, "i16x8.max_u"),
+            Op::I16x8AvgrU => write!(f, "i16x8.avgr_u"),
             Op::I16x8Mul => write!(f, "i16x8.mul"),
             Op::I32x4Add => write!(f, "i32x4.add"),
             Op::I32x4Sub => write!(f, "i32x4.sub"),
