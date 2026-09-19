@@ -544,6 +544,22 @@ impl FlatExecutor {
                 Op::I64x2Abs => stack_op!(ops::simd::i64x2_abs),
                 Op::I64x2Neg => stack_op!(ops::simd::i64x2_neg),
 
+                // -- SIMD floating-point arithmetic --
+                Op::F32x4Abs => stack_op!(ops::simd::f32x4_abs),
+                Op::F32x4Neg => stack_op!(ops::simd::f32x4_neg),
+                Op::F32x4Sqrt => stack_op!(ops::simd::f32x4_sqrt),
+                Op::F32x4Add => stack_op!(ops::simd::f32x4_add),
+                Op::F32x4Sub => stack_op!(ops::simd::f32x4_sub),
+                Op::F32x4Mul => stack_op!(ops::simd::f32x4_mul),
+                Op::F32x4Div => stack_op!(ops::simd::f32x4_div),
+                Op::F64x2Abs => stack_op!(ops::simd::f64x2_abs),
+                Op::F64x2Neg => stack_op!(ops::simd::f64x2_neg),
+                Op::F64x2Sqrt => stack_op!(ops::simd::f64x2_sqrt),
+                Op::F64x2Add => stack_op!(ops::simd::f64x2_add),
+                Op::F64x2Sub => stack_op!(ops::simd::f64x2_sub),
+                Op::F64x2Mul => stack_op!(ops::simd::f64x2_mul),
+                Op::F64x2Div => stack_op!(ops::simd::f64x2_div),
+
                 // -- SIMD comparisons --
                 Op::I8x16Eq => stack_op!(ops::simd::i8x16_eq),
                 Op::I8x16Ne => stack_op!(ops::simd::i8x16_ne),

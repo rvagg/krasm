@@ -170,6 +170,21 @@ pub enum Op {
     I64x2Add,
     I64x2Sub,
     I64x2Mul,
+    // Abs and neg manipulate only sign bits, preserving NaN payloads; sqrt and arithmetic follow floating NaN semantics.
+    F32x4Abs,
+    F32x4Neg,
+    F32x4Sqrt,
+    F32x4Add,
+    F32x4Sub,
+    F32x4Mul,
+    F32x4Div,
+    F64x2Abs,
+    F64x2Neg,
+    F64x2Sqrt,
+    F64x2Add,
+    F64x2Sub,
+    F64x2Mul,
+    F64x2Div,
     // Narrowing packs a and b into the low and high halves, selecting saturation bounds.
     I8x16NarrowI16x8S,
     I8x16NarrowI16x8U,
@@ -644,6 +659,12 @@ impl Op {
             | Op::I32x4Neg
             | Op::I64x2Abs
             | Op::I64x2Neg
+            | Op::F32x4Abs
+            | Op::F32x4Neg
+            | Op::F32x4Sqrt
+            | Op::F64x2Abs
+            | Op::F64x2Neg
+            | Op::F64x2Sqrt
             | Op::I8x16AllTrue
             | Op::I8x16Bitmask
             | Op::I16x8AllTrue
@@ -746,7 +767,15 @@ impl Op {
             | Op::I32x4Mul
             | Op::I64x2Add
             | Op::I64x2Sub
-            | Op::I64x2Mul => -1,
+            | Op::I64x2Mul
+            | Op::F32x4Add
+            | Op::F32x4Sub
+            | Op::F32x4Mul
+            | Op::F32x4Div
+            | Op::F64x2Add
+            | Op::F64x2Sub
+            | Op::F64x2Mul
+            | Op::F64x2Div => -1,
             Op::I8x16NarrowI16x8S | Op::I8x16NarrowI16x8U | Op::I16x8NarrowI32x4S | Op::I16x8NarrowI32x4U => -1,
             Op::I16x8ExtendLowI8x16S
             | Op::I16x8ExtendHighI8x16S
@@ -1172,6 +1201,20 @@ impl fmt::Display for Op {
             Op::I64x2Add => write!(f, "i64x2.add"),
             Op::I64x2Sub => write!(f, "i64x2.sub"),
             Op::I64x2Mul => write!(f, "i64x2.mul"),
+            Op::F32x4Abs => write!(f, "f32x4.abs"),
+            Op::F32x4Neg => write!(f, "f32x4.neg"),
+            Op::F32x4Sqrt => write!(f, "f32x4.sqrt"),
+            Op::F32x4Add => write!(f, "f32x4.add"),
+            Op::F32x4Sub => write!(f, "f32x4.sub"),
+            Op::F32x4Mul => write!(f, "f32x4.mul"),
+            Op::F32x4Div => write!(f, "f32x4.div"),
+            Op::F64x2Abs => write!(f, "f64x2.abs"),
+            Op::F64x2Neg => write!(f, "f64x2.neg"),
+            Op::F64x2Sqrt => write!(f, "f64x2.sqrt"),
+            Op::F64x2Add => write!(f, "f64x2.add"),
+            Op::F64x2Sub => write!(f, "f64x2.sub"),
+            Op::F64x2Mul => write!(f, "f64x2.mul"),
+            Op::F64x2Div => write!(f, "f64x2.div"),
             Op::I8x16NarrowI16x8S => write!(f, "i8x16.narrow_i16x8_s"),
             Op::I8x16NarrowI16x8U => write!(f, "i8x16.narrow_i16x8_u"),
             Op::I16x8NarrowI32x4S => write!(f, "i16x8.narrow_i32x4_s"),

@@ -1928,6 +1928,52 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_f32x4_abs_and_neg_preserve_zero_and_nan_bits() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"run\") (result v128 v128)
+                    (local $vector v128)
+                    (local.set $vector
+                        (v128.const i32x4 0 -2147483648 2139095041 -8388607))
+                    (f32x4.abs (local.get $vector))
+                    (f32x4.neg (local.get $vector))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 128, 127, 1, 0, 128, 127]),
+                Value::V128([0, 0, 0, 128, 0, 0, 0, 0, 1, 0, 128, 255, 1, 0, 128, 127]),
+            ]
+        );
+    }
+
+    #[test]
+    fn flat_engine_f64x2_div_and_sqrt_follow_ieee_edge_cases() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"div\") (result v128)
+                    (f64x2.div
+                        (v128.const f64x2 1 -1)
+                        (v128.const f64x2 0 -0)))
+                (func (export \"sqrt\") (result f64 f64)
+                    (local $root v128)
+                    (local.set $root (f64x2.sqrt (v128.const f64x2 -0 -1)))
+                    (f64x2.extract_lane 0 (local.get $root))
+                    (f64x2.extract_lane 1 (local.get $root))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "div", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 240, 127, 0, 0, 0, 0, 0, 0, 240, 127])]
+        );
+
+        let roots = store.invoke_export(id, "sqrt", vec![], None).unwrap();
+        assert!(matches!(roots[0], Value::F64(value) if value.to_bits() == (-0.0f64).to_bits()));
+        assert!(matches!(roots[1], Value::F64(value) if value.is_nan()));
+    }
+
+    #[test]
     fn flat_engine_i16x8_reductions() {
         let (mut store, id) = flat_instance(
             "(module
