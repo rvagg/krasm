@@ -2354,44 +2354,154 @@ mod tests {
     }
 
     #[test]
-    fn flat_engine_unsupported_instruction_traps() {
-        // i32x4.trunc_sat_f32x4_s remains unsupported by the flat engine.
+    fn flat_engine_simd_min_max_and_pmin_pmax_preserve_nan_order_and_zero_sign() {
         let (mut store, id) = flat_instance(
-            "(module (func (export \"run\") (result i32)
-                (i32x4.extract_lane 0
-                    (i32x4.trunc_sat_f32x4_s
-                        (v128.const f32x4 7 0 0 0)))))",
+            "(module
+                (func (export \"f32min\") (result f32)
+                    (f32x4.extract_lane 0
+                        (f32x4.min (v128.const f32x4 0 0 0 0) (v128.const f32x4 -0 0 0 0))))
+                (func (export \"f32max\") (result f32)
+                    (f32x4.extract_lane 0
+                        (f32x4.max (v128.const f32x4 -0 0 0 0) (v128.const f32x4 0 0 0 0))))
+                (func (export \"f32pmin\") (result f32)
+                    (f32x4.extract_lane 0
+                        (f32x4.pmin (v128.const f32x4 3 0 0 0) (v128.const f32x4 nan 0 0 0))))
+                (func (export \"f32pmin_nan_left\") (result f32)
+                    (f32x4.extract_lane 0
+                        (f32x4.pmin (v128.const f32x4 nan 0 0 0) (v128.const f32x4 3 0 0 0))))
+                (func (export \"f32pmax\") (result f32)
+                    (f32x4.extract_lane 0
+                        (f32x4.pmax (v128.const f32x4 3 0 0 0) (v128.const f32x4 4 0 0 0))))
+                (func (export \"f64min\") (result f64)
+                    (f64x2.extract_lane 0
+                        (f64x2.min (v128.const f64x2 0 0) (v128.const f64x2 -0 0))))
+                (func (export \"f64max\") (result f64)
+                    (f64x2.extract_lane 0
+                        (f64x2.max (v128.const f64x2 -0 0) (v128.const f64x2 0 0))))
+                (func (export \"f64pmin\") (result f64)
+                    (f64x2.extract_lane 0
+                        (f64x2.pmin (v128.const f64x2 3 0) (v128.const f64x2 nan 0))))
+                (func (export \"f64pmin_nan_left\") (result f64)
+                    (f64x2.extract_lane 0
+                        (f64x2.pmin (v128.const f64x2 nan 0) (v128.const f64x2 3 0))))
+                (func (export \"f64pmax\") (result f64)
+                    (f64x2.extract_lane 0
+                        (f64x2.pmax (v128.const f64x2 3 0) (v128.const f64x2 4 0)))))",
             None,
         );
-        let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
-        assert!(
-            err.to_string().contains("not yet supported by the flat engine"),
-            "unexpected error: {err}"
+
+        assert!(matches!(
+            store.invoke_export(id, "f32min", vec![], None).unwrap().as_slice(),
+            [Value::F32(value)] if value.to_bits() == (-0.0f32).to_bits()
+        ));
+        assert!(matches!(
+            store.invoke_export(id, "f32max", vec![], None).unwrap().as_slice(),
+            [Value::F32(value)] if value.to_bits() == 0.0f32.to_bits()
+        ));
+        assert_eq!(
+            store.invoke_export(id, "f32pmin", vec![], None).unwrap(),
+            vec![Value::F32(3.0)]
+        );
+        assert!(matches!(
+            store.invoke_export(id, "f32pmin_nan_left", vec![], None).unwrap().as_slice(),
+            [Value::F32(value)] if value.is_nan()
+        ));
+        assert_eq!(
+            store.invoke_export(id, "f32pmax", vec![], None).unwrap(),
+            vec![Value::F32(4.0)]
+        );
+        assert!(matches!(
+            store.invoke_export(id, "f64min", vec![], None).unwrap().as_slice(),
+            [Value::F64(value)] if value.to_bits() == (-0.0f64).to_bits()
+        ));
+        assert!(matches!(
+            store.invoke_export(id, "f64max", vec![], None).unwrap().as_slice(),
+            [Value::F64(value)] if value.to_bits() == 0.0f64.to_bits()
+        ));
+        assert_eq!(
+            store.invoke_export(id, "f64pmin", vec![], None).unwrap(),
+            vec![Value::F64(3.0)]
+        );
+        assert!(matches!(
+            store.invoke_export(id, "f64pmin_nan_left", vec![], None).unwrap().as_slice(),
+            [Value::F64(value)] if value.is_nan()
+        ));
+        assert_eq!(
+            store.invoke_export(id, "f64pmax", vec![], None).unwrap(),
+            vec![Value::F64(4.0)]
         );
     }
 
     #[test]
-    fn flat_engine_selection_is_per_instance() {
-        // Instances keep the engine they were created with;
-        // i32x4.trunc_sat_f32x4_s runs on the structured instance created first
-        // but not the flat instance.
-        let mut store = Store::new();
-        let wat = "(module (func (export \"run\") (result i32)
-            (i32x4.extract_lane 0
-                (i32x4.trunc_sat_f32x4_s
-                    (v128.const f32x4 7 0 0 0)))))";
-
-        let structured = crate::wat::parse(wat).expect("WAT parse failed");
-        let structured_id = store.create_instance(Arc::new(structured), None).unwrap();
-
-        store.set_engine(EngineKind::Flat);
-        let flat = crate::wat::parse(wat).expect("WAT parse failed");
-        let flat_id = store.create_instance(Arc::new(flat), None).unwrap();
+    fn flat_engine_simd_conversions_saturate_and_select_low_lanes() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"f32s\") (result v128)
+                    (i32x4.trunc_sat_f32x4_s (v128.const f32x4 nan -1.5 2147483648 -2147483648)))
+                (func (export \"f32u\") (result v128)
+                    (i32x4.trunc_sat_f32x4_u (v128.const f32x4 nan -1 4294967296 42.9)))
+                (func (export \"i32s\") (result v128)
+                    (f32x4.convert_i32x4_s (v128.const i32x4 -1 2 -3 4)))
+                (func (export \"i32u\") (result v128)
+                    (f32x4.convert_i32x4_u (v128.const i32x4 -1 2 -3 4)))
+                (func (export \"f64s\") (result v128)
+                    (i32x4.trunc_sat_f64x2_s_zero (v128.const f64x2 nan -2147483649)))
+                (func (export \"f64u\") (result v128)
+                    (i32x4.trunc_sat_f64x2_u_zero (v128.const f64x2 nan 4294967296)))
+                (func (export \"low_s\") (result v128)
+                    (f64x2.convert_low_i32x4_s (v128.const i32x4 -1 2 99 99)))
+                (func (export \"low_u\") (result v128)
+                    (f64x2.convert_low_i32x4_u (v128.const i32x4 -1 2 99 99)))
+                (func (export \"demote\") (result v128)
+                    (f32x4.demote_f64x2_zero (v128.const f64x2 1.5 -2.25)))
+                (func (export \"promote\") (result v128)
+                    (f64x2.promote_low_f32x4 (v128.const f32x4 1.5 -2.25 99 99))))",
+            None,
+        );
 
         assert_eq!(
-            store.invoke_export(structured_id, "run", vec![], None).unwrap(),
-            vec![Value::I32(7)]
+            store.invoke_export(id, "f32s", vec![], None).unwrap(),
+            vec![Value::V128([
+                0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 127, 0, 0, 0, 128
+            ])]
         );
-        assert!(store.invoke_export(flat_id, "run", vec![], None).is_err());
+        assert_eq!(
+            store.invoke_export(id, "f32u", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 42, 0, 0, 0])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "i32s", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 128, 191, 0, 0, 0, 64, 0, 0, 64, 192, 0, 0, 128, 64])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "i32u", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 128, 79, 0, 0, 0, 64, 0, 0, 128, 79, 0, 0, 128, 64])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "f64s", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 0])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "f64u", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "low_s", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 240, 191, 0, 0, 0, 0, 0, 0, 0, 64])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "low_u", vec![], None).unwrap(),
+            vec![Value::V128([
+                0, 0, 224, 255, 255, 255, 239, 65, 0, 0, 0, 0, 0, 0, 0, 64
+            ])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "demote", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 192, 63, 0, 0, 16, 192, 0, 0, 0, 0, 0, 0, 0, 0])]
+        );
+        assert_eq!(
+            store.invoke_export(id, "promote", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 248, 63, 0, 0, 0, 0, 0, 0, 2, 192])]
+        );
     }
 }

@@ -539,6 +539,24 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Simd(SimdOp::F64x2Sub) => self.op(Op::F64x2Sub),
             InstructionKind::Simd(SimdOp::F64x2Mul) => self.op(Op::F64x2Mul),
             InstructionKind::Simd(SimdOp::F64x2Div) => self.op(Op::F64x2Div),
+            InstructionKind::Simd(SimdOp::F32x4Min) => self.op(Op::F32x4Min),
+            InstructionKind::Simd(SimdOp::F32x4Max) => self.op(Op::F32x4Max),
+            InstructionKind::Simd(SimdOp::F32x4PMin) => self.op(Op::F32x4PMin),
+            InstructionKind::Simd(SimdOp::F32x4PMax) => self.op(Op::F32x4PMax),
+            InstructionKind::Simd(SimdOp::F64x2Min) => self.op(Op::F64x2Min),
+            InstructionKind::Simd(SimdOp::F64x2Max) => self.op(Op::F64x2Max),
+            InstructionKind::Simd(SimdOp::F64x2PMin) => self.op(Op::F64x2PMin),
+            InstructionKind::Simd(SimdOp::F64x2PMax) => self.op(Op::F64x2PMax),
+            InstructionKind::Simd(SimdOp::I32x4TruncSatF32x4S) => self.op(Op::I32x4TruncSatF32x4S),
+            InstructionKind::Simd(SimdOp::I32x4TruncSatF32x4U) => self.op(Op::I32x4TruncSatF32x4U),
+            InstructionKind::Simd(SimdOp::F32x4ConvertI32x4S) => self.op(Op::F32x4ConvertI32x4S),
+            InstructionKind::Simd(SimdOp::F32x4ConvertI32x4U) => self.op(Op::F32x4ConvertI32x4U),
+            InstructionKind::Simd(SimdOp::I32x4TruncSatF64x2SZero) => self.op(Op::I32x4TruncSatF64x2SZero),
+            InstructionKind::Simd(SimdOp::I32x4TruncSatF64x2UZero) => self.op(Op::I32x4TruncSatF64x2UZero),
+            InstructionKind::Simd(SimdOp::F64x2ConvertLowI32x4S) => self.op(Op::F64x2ConvertLowI32x4S),
+            InstructionKind::Simd(SimdOp::F64x2ConvertLowI32x4U) => self.op(Op::F64x2ConvertLowI32x4U),
+            InstructionKind::Simd(SimdOp::F32x4DemoteF64x2Zero) => self.op(Op::F32x4DemoteF64x2Zero),
+            InstructionKind::Simd(SimdOp::F64x2PromoteLowF32x4) => self.op(Op::F64x2PromoteLowF32x4),
             InstructionKind::Simd(SimdOp::I8x16NarrowI16x8S) => self.op(Op::I8x16NarrowI16x8S),
             InstructionKind::Simd(SimdOp::I8x16NarrowI16x8U) => self.op(Op::I8x16NarrowI16x8U),
             InstructionKind::Simd(SimdOp::I16x8NarrowI32x4S) => self.op(Op::I16x8NarrowI32x4S),
@@ -934,10 +952,11 @@ impl<'a> CompileContext<'a> {
             InstructionKind::MemoryInit { data_idx } => self.op(Op::MemoryInit { data_idx: *data_idx }),
             InstructionKind::DataDrop { data_idx } => self.op(Op::DataDrop { data_idx: *data_idx }),
 
-            // Not yet compiled: emit a named placeholder so execution
-            // traps with exactly which instruction is missing, rather than
-            // computing anything silently wrong.
-            other => self.op(Op::Unsupported(other.mnemonic())),
+            InstructionKind::Block { .. }
+            | InstructionKind::Loop { .. }
+            | InstructionKind::If { .. }
+            | InstructionKind::Else
+            | InstructionKind::End => unreachable!("structured control instruction passed to emit_plain"),
         }
     }
 

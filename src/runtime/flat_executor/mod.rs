@@ -556,6 +556,10 @@ impl FlatExecutor {
                 Op::F32x4Sub => stack_op!(ops::simd::f32x4_sub),
                 Op::F32x4Mul => stack_op!(ops::simd::f32x4_mul),
                 Op::F32x4Div => stack_op!(ops::simd::f32x4_div),
+                Op::F32x4Min => stack_op!(ops::simd::f32x4_min),
+                Op::F32x4Max => stack_op!(ops::simd::f32x4_max),
+                Op::F32x4PMin => stack_op!(ops::simd::f32x4_pmin),
+                Op::F32x4PMax => stack_op!(ops::simd::f32x4_pmax),
                 Op::F64x2Abs => stack_op!(ops::simd::f64x2_abs),
                 Op::F64x2Neg => stack_op!(ops::simd::f64x2_neg),
                 Op::F64x2Sqrt => stack_op!(ops::simd::f64x2_sqrt),
@@ -567,6 +571,10 @@ impl FlatExecutor {
                 Op::F64x2Sub => stack_op!(ops::simd::f64x2_sub),
                 Op::F64x2Mul => stack_op!(ops::simd::f64x2_mul),
                 Op::F64x2Div => stack_op!(ops::simd::f64x2_div),
+                Op::F64x2Min => stack_op!(ops::simd::f64x2_min),
+                Op::F64x2Max => stack_op!(ops::simd::f64x2_max),
+                Op::F64x2PMin => stack_op!(ops::simd::f64x2_pmin),
+                Op::F64x2PMax => stack_op!(ops::simd::f64x2_pmax),
 
                 // -- SIMD comparisons --
                 Op::I8x16Eq => stack_op!(ops::simd::i8x16_eq),
@@ -723,6 +731,18 @@ impl FlatExecutor {
                 // -- SIMD dot product and fixed-point multiply --
                 Op::I32x4DotI16x8S => stack_op!(ops::simd::i32x4_dot_i16x8_s),
                 Op::I16x8Q15MulrSatS => stack_op!(ops::simd::i16x8_q15mulr_sat_s),
+
+                // -- SIMD truncation and conversion --
+                Op::I32x4TruncSatF32x4S => stack_op!(ops::simd::i32x4_trunc_sat_f32x4_s),
+                Op::I32x4TruncSatF32x4U => stack_op!(ops::simd::i32x4_trunc_sat_f32x4_u),
+                Op::F32x4ConvertI32x4S => stack_op!(ops::simd::f32x4_convert_i32x4_s),
+                Op::F32x4ConvertI32x4U => stack_op!(ops::simd::f32x4_convert_i32x4_u),
+                Op::I32x4TruncSatF64x2SZero => stack_op!(ops::simd::i32x4_trunc_sat_f64x2_s_zero),
+                Op::I32x4TruncSatF64x2UZero => stack_op!(ops::simd::i32x4_trunc_sat_f64x2_u_zero),
+                Op::F64x2ConvertLowI32x4S => stack_op!(ops::simd::f64x2_convert_low_i32x4_s),
+                Op::F64x2ConvertLowI32x4U => stack_op!(ops::simd::f64x2_convert_low_i32x4_u),
+                Op::F32x4DemoteF64x2Zero => stack_op!(ops::simd::f32x4_demote_f64x2_zero),
+                Op::F64x2PromoteLowF32x4 => stack_op!(ops::simd::f64x2_promote_low_f32x4),
 
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
@@ -1289,11 +1309,6 @@ impl FlatExecutor {
                 }
                 Op::Unreachable => {
                     return Err(RuntimeError::Trap("unreachable".to_string()));
-                }
-                Op::Unsupported(name) => {
-                    return Err(RuntimeError::Trap(format!(
-                        "instruction not yet supported by the flat engine: {name}"
-                    )));
                 }
             }
         }

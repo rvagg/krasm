@@ -183,6 +183,11 @@ pub enum Op {
     F32x4Sub,
     F32x4Mul,
     F32x4Div,
+    // Min/max canonicalize NaNs and signed zero; pseudo-min/max select an operand instead.
+    F32x4Min,
+    F32x4Max,
+    F32x4PMin,
+    F32x4PMax,
     F64x2Abs,
     F64x2Neg,
     F64x2Sqrt,
@@ -194,6 +199,21 @@ pub enum Op {
     F64x2Sub,
     F64x2Mul,
     F64x2Div,
+    F64x2Min,
+    F64x2Max,
+    F64x2PMin,
+    F64x2PMax,
+    // Low forms consume only low source lanes; zero forms clear all remaining destination lanes.
+    I32x4TruncSatF32x4S,
+    I32x4TruncSatF32x4U,
+    F32x4ConvertI32x4S,
+    F32x4ConvertI32x4U,
+    I32x4TruncSatF64x2SZero,
+    I32x4TruncSatF64x2UZero,
+    F64x2ConvertLowI32x4S,
+    F64x2ConvertLowI32x4U,
+    F32x4DemoteF64x2Zero,
+    F64x2PromoteLowF32x4,
     // Narrowing packs a and b into the low and high halves, selecting saturation bounds.
     I8x16NarrowI16x8S,
     I8x16NarrowI16x8U,
@@ -560,10 +580,6 @@ pub enum Op {
 
     /// Unreachable trap.
     Unreachable,
-    /// Placeholder for an instruction the flat compiler does not support
-    /// yet. Traps with the instruction's mnemonic, so a failing program
-    /// names exactly what is missing.
-    Unsupported(&'static str),
 
     /// Drop top of stack.
     Drop,
@@ -789,10 +805,18 @@ impl Op {
             | Op::F32x4Sub
             | Op::F32x4Mul
             | Op::F32x4Div
+            | Op::F32x4Min
+            | Op::F32x4Max
+            | Op::F32x4PMin
+            | Op::F32x4PMax
             | Op::F64x2Add
             | Op::F64x2Sub
             | Op::F64x2Mul
-            | Op::F64x2Div => -1,
+            | Op::F64x2Div
+            | Op::F64x2Min
+            | Op::F64x2Max
+            | Op::F64x2PMin
+            | Op::F64x2PMax => -1,
             Op::I8x16NarrowI16x8S | Op::I8x16NarrowI16x8U | Op::I16x8NarrowI32x4S | Op::I16x8NarrowI32x4U => -1,
             Op::I16x8ExtendLowI8x16S
             | Op::I16x8ExtendHighI8x16S
@@ -822,7 +846,18 @@ impl Op {
             | Op::I16x8ExtAddPairwiseI8x16U
             | Op::I32x4ExtAddPairwiseI16x8S
             | Op::I32x4ExtAddPairwiseI16x8U => 0,
-            Op::I32x4DotI16x8S | Op::I16x8Q15MulrSatS => -1,
+            Op::I32x4DotI16x8S
+            | Op::I16x8Q15MulrSatS
+            | Op::I32x4TruncSatF32x4S
+            | Op::I32x4TruncSatF32x4U
+            | Op::F32x4ConvertI32x4S
+            | Op::F32x4ConvertI32x4U
+            | Op::I32x4TruncSatF64x2SZero
+            | Op::I32x4TruncSatF64x2UZero
+            | Op::F64x2ConvertLowI32x4S
+            | Op::F64x2ConvertLowI32x4U
+            | Op::F32x4DemoteF64x2Zero
+            | Op::F64x2PromoteLowF32x4 => 0,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -901,7 +936,7 @@ impl Op {
             Op::Br { .. } => 0,           // unreachable after, depth irrelevant
             Op::BrIf { .. } => -1,        // pops condition
             Op::BrTable { .. } => -1,     // pops index
-            Op::Return | Op::End | Op::Unreachable | Op::Unsupported(_) => 0,
+            Op::Return | Op::End | Op::Unreachable => 0,
             Op::Nop | Op::Label { .. } => 0,
             Op::Drop => -1,
         }
@@ -1229,6 +1264,10 @@ impl fmt::Display for Op {
             Op::F32x4Sub => write!(f, "f32x4.sub"),
             Op::F32x4Mul => write!(f, "f32x4.mul"),
             Op::F32x4Div => write!(f, "f32x4.div"),
+            Op::F32x4Min => write!(f, "f32x4.min"),
+            Op::F32x4Max => write!(f, "f32x4.max"),
+            Op::F32x4PMin => write!(f, "f32x4.pmin"),
+            Op::F32x4PMax => write!(f, "f32x4.pmax"),
             Op::F64x2Abs => write!(f, "f64x2.abs"),
             Op::F64x2Neg => write!(f, "f64x2.neg"),
             Op::F64x2Sqrt => write!(f, "f64x2.sqrt"),
@@ -1240,6 +1279,20 @@ impl fmt::Display for Op {
             Op::F64x2Sub => write!(f, "f64x2.sub"),
             Op::F64x2Mul => write!(f, "f64x2.mul"),
             Op::F64x2Div => write!(f, "f64x2.div"),
+            Op::F64x2Min => write!(f, "f64x2.min"),
+            Op::F64x2Max => write!(f, "f64x2.max"),
+            Op::F64x2PMin => write!(f, "f64x2.pmin"),
+            Op::F64x2PMax => write!(f, "f64x2.pmax"),
+            Op::I32x4TruncSatF32x4S => write!(f, "i32x4.trunc_sat_f32x4_s"),
+            Op::I32x4TruncSatF32x4U => write!(f, "i32x4.trunc_sat_f32x4_u"),
+            Op::F32x4ConvertI32x4S => write!(f, "f32x4.convert_i32x4_s"),
+            Op::F32x4ConvertI32x4U => write!(f, "f32x4.convert_i32x4_u"),
+            Op::I32x4TruncSatF64x2SZero => write!(f, "i32x4.trunc_sat_f64x2_s_zero"),
+            Op::I32x4TruncSatF64x2UZero => write!(f, "i32x4.trunc_sat_f64x2_u_zero"),
+            Op::F64x2ConvertLowI32x4S => write!(f, "f64x2.convert_low_i32x4_s"),
+            Op::F64x2ConvertLowI32x4U => write!(f, "f64x2.convert_low_i32x4_u"),
+            Op::F32x4DemoteF64x2Zero => write!(f, "f32x4.demote_f64x2_zero"),
+            Op::F64x2PromoteLowF32x4 => write!(f, "f64x2.promote_low_f32x4"),
             Op::I8x16NarrowI16x8S => write!(f, "i8x16.narrow_i16x8_s"),
             Op::I8x16NarrowI16x8U => write!(f, "i8x16.narrow_i16x8_u"),
             Op::I16x8NarrowI32x4S => write!(f, "i16x8.narrow_i32x4_s"),
@@ -1424,7 +1477,6 @@ impl fmt::Display for Op {
             Op::End => write!(f, "end"),
             Op::Label { end_target } => write!(f, "label (end -> {end_target})"),
             Op::Unreachable => write!(f, "unreachable"),
-            Op::Unsupported(name) => write!(f, "unsupported <{name}>"),
             Op::Drop => write!(f, "drop"),
         }
     }
