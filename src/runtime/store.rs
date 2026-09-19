@@ -2180,6 +2180,29 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i32x4_extension_selects_half_and_signedness() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128 v128 v128)
+                (local $a v128)
+                (local.set $a (v128.const i16x8 -32768 -1 4660 32767 42 -2 -32768 -1))
+                (i32x4.extend_low_i16x8_s (local.get $a))
+                (i32x4.extend_high_i16x8_s (local.get $a))
+                (i32x4.extend_low_i16x8_u (local.get $a))
+                (i32x4.extend_high_i16x8_u (local.get $a))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 128, 255, 255, 255, 255, 255, 255, 52, 18, 0, 0, 255, 127, 0, 0]),
+                Value::V128([42, 0, 0, 0, 254, 255, 255, 255, 0, 128, 255, 255, 255, 255, 255, 255]),
+                Value::V128([0, 128, 0, 0, 255, 255, 0, 0, 52, 18, 0, 0, 255, 127, 0, 0]),
+                Value::V128([42, 0, 0, 0, 254, 255, 0, 0, 0, 128, 0, 0, 255, 255, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

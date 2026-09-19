@@ -170,12 +170,24 @@ pub enum Op {
     I64x2Add,
     I64x2Sub,
     I64x2Mul,
-    // Pack narrowed a lanes into the low half and b lanes into the high half.
-    // Both forms read signed source lanes; the suffix selects destination saturation bounds.
+    // Narrowing packs a and b into the low and high halves, selecting saturation bounds.
     I8x16NarrowI16x8S,
     I8x16NarrowI16x8U,
     I16x8NarrowI32x4S,
     I16x8NarrowI32x4U,
+    // Extension selects the source low or high half, then sign- or zero-extends each lane.
+    I16x8ExtendLowI8x16S,
+    I16x8ExtendHighI8x16S,
+    I16x8ExtendLowI8x16U,
+    I16x8ExtendHighI8x16U,
+    I32x4ExtendLowI16x8S,
+    I32x4ExtendHighI16x8S,
+    I32x4ExtendLowI16x8U,
+    I32x4ExtendHighI16x8U,
+    I64x2ExtendLowI32x4S,
+    I64x2ExtendHighI32x4S,
+    I64x2ExtendLowI32x4U,
+    I64x2ExtendHighI32x4U,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -714,6 +726,18 @@ impl Op {
             | Op::I64x2Sub
             | Op::I64x2Mul => -1,
             Op::I8x16NarrowI16x8S | Op::I8x16NarrowI16x8U | Op::I16x8NarrowI32x4S | Op::I16x8NarrowI32x4U => -1,
+            Op::I16x8ExtendLowI8x16S
+            | Op::I16x8ExtendHighI8x16S
+            | Op::I16x8ExtendLowI8x16U
+            | Op::I16x8ExtendHighI8x16U
+            | Op::I32x4ExtendLowI16x8S
+            | Op::I32x4ExtendHighI16x8S
+            | Op::I32x4ExtendLowI16x8U
+            | Op::I32x4ExtendHighI16x8U
+            | Op::I64x2ExtendLowI32x4S
+            | Op::I64x2ExtendHighI32x4S
+            | Op::I64x2ExtendLowI32x4U
+            | Op::I64x2ExtendHighI32x4U => 0,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -1113,6 +1137,18 @@ impl fmt::Display for Op {
             Op::I8x16NarrowI16x8U => write!(f, "i8x16.narrow_i16x8_u"),
             Op::I16x8NarrowI32x4S => write!(f, "i16x8.narrow_i32x4_s"),
             Op::I16x8NarrowI32x4U => write!(f, "i16x8.narrow_i32x4_u"),
+            Op::I16x8ExtendLowI8x16S => write!(f, "i16x8.extend_low_i8x16_s"),
+            Op::I16x8ExtendHighI8x16S => write!(f, "i16x8.extend_high_i8x16_s"),
+            Op::I16x8ExtendLowI8x16U => write!(f, "i16x8.extend_low_i8x16_u"),
+            Op::I16x8ExtendHighI8x16U => write!(f, "i16x8.extend_high_i8x16_u"),
+            Op::I32x4ExtendLowI16x8S => write!(f, "i32x4.extend_low_i16x8_s"),
+            Op::I32x4ExtendHighI16x8S => write!(f, "i32x4.extend_high_i16x8_s"),
+            Op::I32x4ExtendLowI16x8U => write!(f, "i32x4.extend_low_i16x8_u"),
+            Op::I32x4ExtendHighI16x8U => write!(f, "i32x4.extend_high_i16x8_u"),
+            Op::I64x2ExtendLowI32x4S => write!(f, "i64x2.extend_low_i32x4_s"),
+            Op::I64x2ExtendHighI32x4S => write!(f, "i64x2.extend_high_i32x4_s"),
+            Op::I64x2ExtendLowI32x4U => write!(f, "i64x2.extend_low_i32x4_u"),
+            Op::I64x2ExtendHighI32x4U => write!(f, "i64x2.extend_high_i32x4_u"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),
