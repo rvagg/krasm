@@ -2203,6 +2203,30 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i64x2_extmul_selects_half_and_extends_before_multiplying() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128 v128 v128)
+                (local $a v128) (local $b v128)
+                (local.set $a (v128.const i32x4 -2147483648 -1 2 -3))
+                (local.set $b (v128.const i32x4 -2147483648 -1 3 -4))
+                (i64x2.extmul_low_i32x4_s (local.get $a) (local.get $b))
+                (i64x2.extmul_high_i32x4_s (local.get $a) (local.get $b))
+                (i64x2.extmul_low_i32x4_u (local.get $a) (local.get $b))
+                (i64x2.extmul_high_i32x4_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 64, 1, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([6, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0]),
+                Value::V128([0, 0, 0, 0, 0, 0, 0, 64, 1, 0, 0, 0, 254, 255, 255, 255]),
+                Value::V128([6, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 249, 255, 255, 255]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

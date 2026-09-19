@@ -664,19 +664,31 @@ impl FlatExecutor {
                 Op::I16x8NarrowI32x4S => stack_op!(ops::simd::i16x8_narrow_i32x4_s),
                 Op::I16x8NarrowI32x4U => stack_op!(ops::simd::i16x8_narrow_i32x4_u),
 
-                // -- SIMD widening extension --
+                // -- SIMD widening extension and multiply --
                 Op::I16x8ExtendLowI8x16S => stack_op!(ops::simd::i16x8_extend_low_i8x16_s),
                 Op::I16x8ExtendHighI8x16S => stack_op!(ops::simd::i16x8_extend_high_i8x16_s),
                 Op::I16x8ExtendLowI8x16U => stack_op!(ops::simd::i16x8_extend_low_i8x16_u),
                 Op::I16x8ExtendHighI8x16U => stack_op!(ops::simd::i16x8_extend_high_i8x16_u),
+                Op::I16x8ExtMulLowI8x16S => stack_op!(ops::simd::i16x8_extmul_low_i8x16_s),
+                Op::I16x8ExtMulHighI8x16S => stack_op!(ops::simd::i16x8_extmul_high_i8x16_s),
+                Op::I16x8ExtMulLowI8x16U => stack_op!(ops::simd::i16x8_extmul_low_i8x16_u),
+                Op::I16x8ExtMulHighI8x16U => stack_op!(ops::simd::i16x8_extmul_high_i8x16_u),
                 Op::I32x4ExtendLowI16x8S => stack_op!(ops::simd::i32x4_extend_low_i16x8_s),
                 Op::I32x4ExtendHighI16x8S => stack_op!(ops::simd::i32x4_extend_high_i16x8_s),
                 Op::I32x4ExtendLowI16x8U => stack_op!(ops::simd::i32x4_extend_low_i16x8_u),
                 Op::I32x4ExtendHighI16x8U => stack_op!(ops::simd::i32x4_extend_high_i16x8_u),
+                Op::I32x4ExtMulLowI16x8S => stack_op!(ops::simd::i32x4_extmul_low_i16x8_s),
+                Op::I32x4ExtMulHighI16x8S => stack_op!(ops::simd::i32x4_extmul_high_i16x8_s),
+                Op::I32x4ExtMulLowI16x8U => stack_op!(ops::simd::i32x4_extmul_low_i16x8_u),
+                Op::I32x4ExtMulHighI16x8U => stack_op!(ops::simd::i32x4_extmul_high_i16x8_u),
                 Op::I64x2ExtendLowI32x4S => stack_op!(ops::simd::i64x2_extend_low_i32x4_s),
                 Op::I64x2ExtendHighI32x4S => stack_op!(ops::simd::i64x2_extend_high_i32x4_s),
                 Op::I64x2ExtendLowI32x4U => stack_op!(ops::simd::i64x2_extend_low_i32x4_u),
                 Op::I64x2ExtendHighI32x4U => stack_op!(ops::simd::i64x2_extend_high_i32x4_u),
+                Op::I64x2ExtMulLowI32x4S => stack_op!(ops::simd::i64x2_extmul_low_i32x4_s),
+                Op::I64x2ExtMulHighI32x4S => stack_op!(ops::simd::i64x2_extmul_high_i32x4_s),
+                Op::I64x2ExtMulLowI32x4U => stack_op!(ops::simd::i64x2_extmul_low_i32x4_u),
+                Op::I64x2ExtMulHighI32x4U => stack_op!(ops::simd::i64x2_extmul_high_i32x4_u),
 
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
