@@ -690,6 +690,12 @@ impl FlatExecutor {
                 Op::I64x2ExtMulLowI32x4U => stack_op!(ops::simd::i64x2_extmul_low_i32x4_u),
                 Op::I64x2ExtMulHighI32x4U => stack_op!(ops::simd::i64x2_extmul_high_i32x4_u),
 
+                // -- SIMD pairwise widening add --
+                Op::I16x8ExtAddPairwiseI8x16S => stack_op!(ops::simd::i16x8_extadd_pairwise_i8x16_s),
+                Op::I16x8ExtAddPairwiseI8x16U => stack_op!(ops::simd::i16x8_extadd_pairwise_i8x16_u),
+                Op::I32x4ExtAddPairwiseI16x8S => stack_op!(ops::simd::i32x4_extadd_pairwise_i16x8_s),
+                Op::I32x4ExtAddPairwiseI16x8U => stack_op!(ops::simd::i32x4_extadd_pairwise_i16x8_u),
+
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
                 Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),

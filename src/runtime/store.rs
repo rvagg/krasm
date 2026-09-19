@@ -2227,6 +2227,25 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_pairwise_add_widens_adjacent_signed_or_unsigned_lanes() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128)
+                (local $a v128)
+                (local.set $a (v128.const i16x8 -32768 -32768 -1 -1 32767 32767 100 -20))
+                (i32x4.extadd_pairwise_i16x8_s (local.get $a))
+                (i32x4.extadd_pairwise_i16x8_u (local.get $a))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 255, 255, 254, 255, 255, 255, 254, 255, 0, 0, 80, 0, 0, 0]),
+                Value::V128([0, 0, 1, 0, 254, 255, 1, 0, 254, 255, 0, 0, 80, 0, 1, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
