@@ -2160,6 +2160,26 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_narrowing_clamps_signed_sources_and_packs_in_order() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128)
+                (local $a v128) (local $b v128)
+                (local.set $a (v128.const i16x8 -32768 -129 -128 -1 0 127 128 255))
+                (local.set $b (v128.const i16x8 256 32767 1 2 3 4 5 -2))
+                (i8x16.narrow_i16x8_s (local.get $a) (local.get $b))
+                (i8x16.narrow_i16x8_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([128, 128, 128, 255, 0, 127, 127, 127, 127, 127, 1, 2, 3, 4, 5, 254]),
+                Value::V128([0, 0, 0, 0, 0, 127, 128, 255, 255, 255, 1, 2, 3, 4, 5, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
         // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(

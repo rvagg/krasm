@@ -658,6 +658,12 @@ impl FlatExecutor {
                 Op::I8x16AvgrU => stack_op!(ops::simd::i8x16_avgr_u),
                 Op::I16x8AvgrU => stack_op!(ops::simd::i16x8_avgr_u),
 
+                // -- SIMD saturating narrowing --
+                Op::I8x16NarrowI16x8S => stack_op!(ops::simd::i8x16_narrow_i16x8_s),
+                Op::I8x16NarrowI16x8U => stack_op!(ops::simd::i8x16_narrow_i16x8_u),
+                Op::I16x8NarrowI32x4S => stack_op!(ops::simd::i16x8_narrow_i32x4_s),
+                Op::I16x8NarrowI32x4U => stack_op!(ops::simd::i16x8_narrow_i32x4_u),
+
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
                 Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),
