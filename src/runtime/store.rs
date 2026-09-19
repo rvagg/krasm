@@ -2119,14 +2119,38 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_i32x4_minmax_preserves_signedness_and_lanes() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128 v128 v128 v128)
+                (local $a v128) (local $b v128)
+                (local.set $a (v128.const i32x4 -2147483648 -1 7 42))
+                (local.set $b (v128.const i32x4 1 2147483647 7 9))
+                (i32x4.min_s (local.get $a) (local.get $b))
+                (i32x4.min_u (local.get $a) (local.get $b))
+                (i32x4.max_s (local.get $a) (local.get $b))
+                (i32x4.max_u (local.get $a) (local.get $b))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 128, 255, 255, 255, 255, 7, 0, 0, 0, 9, 0, 0, 0]),
+                Value::V128([1, 0, 0, 0, 255, 255, 255, 127, 7, 0, 0, 0, 9, 0, 0, 0]),
+                Value::V128([1, 0, 0, 0, 255, 255, 255, 127, 7, 0, 0, 0, 42, 0, 0, 0]),
+                Value::V128([0, 0, 0, 128, 255, 255, 255, 255, 7, 0, 0, 0, 42, 0, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // i32x4.min_s remains unsupported by the flat engine.
+        // i32x4.dot_i16x8_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
                 (i32x4.extract_lane 0
-                    (i32x4.min_s
-                        (v128.const i32x4 7 0 0 0)
-                        (v128.const i32x4 9 0 0 0)))))",
+                    (i32x4.dot_i16x8_s
+                        (v128.const i16x8 1 2 0 0 0 0 0 0)
+                        (v128.const i16x8 3 2 0 0 0 0 0 0)))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -2138,14 +2162,15 @@ mod tests {
 
     #[test]
     fn flat_engine_selection_is_per_instance() {
-        // Instances keep the engine they were created with; i32x4.min_s runs
-        // on the structured instance created first but not the flat instance.
+        // Instances keep the engine they were created with;
+        // i32x4.dot_i16x8_s runs on the structured instance created first
+        // but not the flat instance.
         let mut store = Store::new();
         let wat = "(module (func (export \"run\") (result i32)
             (i32x4.extract_lane 0
-                (i32x4.min_s
-                    (v128.const i32x4 7 0 0 0)
-                    (v128.const i32x4 9 0 0 0)))))";
+                (i32x4.dot_i16x8_s
+                    (v128.const i16x8 1 2 0 0 0 0 0 0)
+                    (v128.const i16x8 3 2 0 0 0 0 0 0)))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();

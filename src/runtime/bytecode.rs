@@ -141,15 +141,28 @@ pub enum Op {
     I8x16AddSatU,
     I8x16SubSatS,
     I8x16SubSatU,
+    // Min and max select each lane using the specified signed or unsigned ordering.
+    I8x16MinS,
+    I8x16MinU,
+    I8x16MaxS,
+    I8x16MaxU,
     I16x8Add,
     I16x8Sub,
     I16x8AddSatS,
     I16x8AddSatU,
     I16x8SubSatS,
     I16x8SubSatU,
+    I16x8MinS,
+    I16x8MinU,
+    I16x8MaxS,
+    I16x8MaxU,
     I16x8Mul,
     I32x4Add,
     I32x4Sub,
+    I32x4MinS,
+    I32x4MinU,
+    I32x4MaxS,
+    I32x4MaxU,
     I32x4Mul,
     I64x2Add,
     I64x2Sub,
@@ -664,15 +677,27 @@ impl Op {
             | Op::I8x16AddSatU
             | Op::I8x16SubSatS
             | Op::I8x16SubSatU
+            | Op::I8x16MinS
+            | Op::I8x16MinU
+            | Op::I8x16MaxS
+            | Op::I8x16MaxU
             | Op::I16x8Add
             | Op::I16x8Sub
             | Op::I16x8AddSatS
             | Op::I16x8AddSatU
             | Op::I16x8SubSatS
             | Op::I16x8SubSatU
+            | Op::I16x8MinS
+            | Op::I16x8MinU
+            | Op::I16x8MaxS
+            | Op::I16x8MaxU
             | Op::I16x8Mul
             | Op::I32x4Add
             | Op::I32x4Sub
+            | Op::I32x4MinS
+            | Op::I32x4MinU
+            | Op::I32x4MaxS
+            | Op::I32x4MaxU
             | Op::I32x4Mul
             | Op::I64x2Add
             | Op::I64x2Sub
@@ -1045,15 +1070,27 @@ impl fmt::Display for Op {
             Op::I8x16AddSatU => write!(f, "i8x16.add_sat_u"),
             Op::I8x16SubSatS => write!(f, "i8x16.sub_sat_s"),
             Op::I8x16SubSatU => write!(f, "i8x16.sub_sat_u"),
+            Op::I8x16MinS => write!(f, "i8x16.min_s"),
+            Op::I8x16MinU => write!(f, "i8x16.min_u"),
+            Op::I8x16MaxS => write!(f, "i8x16.max_s"),
+            Op::I8x16MaxU => write!(f, "i8x16.max_u"),
             Op::I16x8Add => write!(f, "i16x8.add"),
             Op::I16x8Sub => write!(f, "i16x8.sub"),
             Op::I16x8AddSatS => write!(f, "i16x8.add_sat_s"),
             Op::I16x8AddSatU => write!(f, "i16x8.add_sat_u"),
             Op::I16x8SubSatS => write!(f, "i16x8.sub_sat_s"),
             Op::I16x8SubSatU => write!(f, "i16x8.sub_sat_u"),
+            Op::I16x8MinS => write!(f, "i16x8.min_s"),
+            Op::I16x8MinU => write!(f, "i16x8.min_u"),
+            Op::I16x8MaxS => write!(f, "i16x8.max_s"),
+            Op::I16x8MaxU => write!(f, "i16x8.max_u"),
             Op::I16x8Mul => write!(f, "i16x8.mul"),
             Op::I32x4Add => write!(f, "i32x4.add"),
             Op::I32x4Sub => write!(f, "i32x4.sub"),
+            Op::I32x4MinS => write!(f, "i32x4.min_s"),
+            Op::I32x4MinU => write!(f, "i32x4.min_u"),
+            Op::I32x4MaxS => write!(f, "i32x4.max_s"),
+            Op::I32x4MaxU => write!(f, "i32x4.max_u"),
             Op::I32x4Mul => write!(f, "i32x4.mul"),
             Op::I64x2Add => write!(f, "i64x2.add"),
             Op::I64x2Sub => write!(f, "i64x2.sub"),

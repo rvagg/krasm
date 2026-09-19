@@ -630,6 +630,20 @@ impl FlatExecutor {
                 Op::I64x2Sub => stack_op!(ops::simd::i64x2_sub),
                 Op::I64x2Mul => stack_op!(ops::simd::i64x2_mul),
 
+                // -- SIMD min/max --
+                Op::I8x16MinS => stack_op!(ops::simd::i8x16_min_s),
+                Op::I8x16MinU => stack_op!(ops::simd::i8x16_min_u),
+                Op::I8x16MaxS => stack_op!(ops::simd::i8x16_max_s),
+                Op::I8x16MaxU => stack_op!(ops::simd::i8x16_max_u),
+                Op::I16x8MinS => stack_op!(ops::simd::i16x8_min_s),
+                Op::I16x8MinU => stack_op!(ops::simd::i16x8_min_u),
+                Op::I16x8MaxS => stack_op!(ops::simd::i16x8_max_s),
+                Op::I16x8MaxU => stack_op!(ops::simd::i16x8_max_u),
+                Op::I32x4MinS => stack_op!(ops::simd::i32x4_min_s),
+                Op::I32x4MinU => stack_op!(ops::simd::i32x4_min_u),
+                Op::I32x4MaxS => stack_op!(ops::simd::i32x4_max_s),
+                Op::I32x4MaxU => stack_op!(ops::simd::i32x4_max_u),
+
                 // -- SIMD saturating arithmetic --
                 Op::I8x16AddSatS => stack_op!(ops::simd::i8x16_add_sat_s),
                 Op::I8x16AddSatU => stack_op!(ops::simd::i8x16_add_sat_u),
