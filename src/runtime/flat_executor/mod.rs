@@ -696,6 +696,10 @@ impl FlatExecutor {
                 Op::I32x4ExtAddPairwiseI16x8S => stack_op!(ops::simd::i32x4_extadd_pairwise_i16x8_s),
                 Op::I32x4ExtAddPairwiseI16x8U => stack_op!(ops::simd::i32x4_extadd_pairwise_i16x8_u),
 
+                // -- SIMD dot product and fixed-point multiply --
+                Op::I32x4DotI16x8S => stack_op!(ops::simd::i32x4_dot_i16x8_s),
+                Op::I16x8Q15MulrSatS => stack_op!(ops::simd::i16x8_q15mulr_sat_s),
+
                 // -- SIMD lane extraction and replacement --
                 Op::I8x16ExtractLaneS(lane) => stack_op!(ops::simd::i8x16_extract_lane_s, *lane),
                 Op::I8x16ExtractLaneU(lane) => stack_op!(ops::simd::i8x16_extract_lane_u, *lane),

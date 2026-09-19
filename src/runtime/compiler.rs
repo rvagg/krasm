@@ -549,6 +549,8 @@ impl<'a> CompileContext<'a> {
             InstructionKind::Simd(SimdOp::I16x8ExtAddPairwiseI8x16U) => self.op(Op::I16x8ExtAddPairwiseI8x16U),
             InstructionKind::Simd(SimdOp::I32x4ExtAddPairwiseI16x8S) => self.op(Op::I32x4ExtAddPairwiseI16x8S),
             InstructionKind::Simd(SimdOp::I32x4ExtAddPairwiseI16x8U) => self.op(Op::I32x4ExtAddPairwiseI16x8U),
+            InstructionKind::Simd(SimdOp::I32x4DotI16x8S) => self.op(Op::I32x4DotI16x8S),
+            InstructionKind::Simd(SimdOp::I16x8Q15MulrSatS) => self.op(Op::I16x8Q15MulrSatS),
             InstructionKind::Simd(SimdOp::V128Not) => self.op(Op::V128Not),
             InstructionKind::Simd(SimdOp::V128And) => self.op(Op::V128And),
             InstructionKind::Simd(SimdOp::V128AndNot) => self.op(Op::V128AndNot),

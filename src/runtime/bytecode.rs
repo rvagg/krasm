@@ -206,6 +206,10 @@ pub enum Op {
     I16x8ExtAddPairwiseI8x16U,
     I32x4ExtAddPairwiseI16x8S,
     I32x4ExtAddPairwiseI16x8U,
+    // Sum adjacent signed i16 products, wrapping the sum to i32.
+    I32x4DotI16x8S,
+    // Q15 product: round to nearest (ties toward positive infinity), then saturate to i16.
+    I16x8Q15MulrSatS,
     // Lane indices are validated immediates, not operand-stack values.
     // Extract: v128 -> scalar, stack delta 0.
     I8x16ExtractLaneS(u8),
@@ -772,6 +776,7 @@ impl Op {
             | Op::I16x8ExtAddPairwiseI8x16U
             | Op::I32x4ExtAddPairwiseI16x8S
             | Op::I32x4ExtAddPairwiseI16x8U => 0,
+            Op::I32x4DotI16x8S | Op::I16x8Q15MulrSatS => -1,
             Op::I8x16ExtractLaneS(_)
             | Op::I8x16ExtractLaneU(_)
             | Op::I16x8ExtractLaneS(_)
@@ -1199,6 +1204,8 @@ impl fmt::Display for Op {
             Op::I16x8ExtAddPairwiseI8x16U => write!(f, "i16x8.extadd_pairwise_i8x16_u"),
             Op::I32x4ExtAddPairwiseI16x8S => write!(f, "i32x4.extadd_pairwise_i16x8_s"),
             Op::I32x4ExtAddPairwiseI16x8U => write!(f, "i32x4.extadd_pairwise_i16x8_u"),
+            Op::I32x4DotI16x8S => write!(f, "i32x4.dot_i16x8_s"),
+            Op::I16x8Q15MulrSatS => write!(f, "i16x8.q15mulr_sat_s"),
             Op::I8x16ExtractLaneS(lane) => write!(f, "i8x16.extract_lane_s {lane}"),
             Op::I8x16ExtractLaneU(lane) => write!(f, "i8x16.extract_lane_u {lane}"),
             Op::I16x8ExtractLaneS(lane) => write!(f, "i16x8.extract_lane_s {lane}"),

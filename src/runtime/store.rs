@@ -2246,14 +2246,45 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_dot_product_pairs_signed_products_and_wraps_sum() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128)
+                (i32x4.dot_i16x8_s
+                    (v128.const i16x8 -32768 -32768 -1 2 100 -100 32767 -32768)
+                    (v128.const i16x8 -32768 -32768 3 4 100 100 32767 32767))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 128, 5, 0, 0, 0, 0, 0, 0, 0, 1, 128, 255, 255])]
+        );
+    }
+
+    #[test]
+    fn flat_engine_q15_multiply_rounds_ties_up_and_saturates() {
+        let (mut store, id) = flat_instance(
+            "(module (func (export \"run\") (result v128)
+                (i16x8.q15mulr_sat_s
+                    (v128.const i16x8 -32768 1 -1 1 -1 32767 -32768 16384)
+                    (v128.const i16x8 -32768 16384 16384 16383 16385 32767 32767 16384))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![Value::V128([
+                255, 127, 1, 0, 0, 0, 0, 0, 255, 255, 254, 127, 1, 128, 0, 32
+            ])]
+        );
+    }
+
+    #[test]
     fn flat_engine_unsupported_instruction_traps() {
-        // i32x4.dot_i16x8_s remains unsupported by the flat engine.
+        // i32x4.trunc_sat_f32x4_s remains unsupported by the flat engine.
         let (mut store, id) = flat_instance(
             "(module (func (export \"run\") (result i32)
                 (i32x4.extract_lane 0
-                    (i32x4.dot_i16x8_s
-                        (v128.const i16x8 1 2 0 0 0 0 0 0)
-                        (v128.const i16x8 3 2 0 0 0 0 0 0)))))",
+                    (i32x4.trunc_sat_f32x4_s
+                        (v128.const f32x4 7 0 0 0)))))",
             None,
         );
         let err = store.invoke_export(id, "run", vec![], None).unwrap_err();
@@ -2266,14 +2297,13 @@ mod tests {
     #[test]
     fn flat_engine_selection_is_per_instance() {
         // Instances keep the engine they were created with;
-        // i32x4.dot_i16x8_s runs on the structured instance created first
+        // i32x4.trunc_sat_f32x4_s runs on the structured instance created first
         // but not the flat instance.
         let mut store = Store::new();
         let wat = "(module (func (export \"run\") (result i32)
             (i32x4.extract_lane 0
-                (i32x4.dot_i16x8_s
-                    (v128.const i16x8 1 2 0 0 0 0 0 0)
-                    (v128.const i16x8 3 2 0 0 0 0 0 0)))))";
+                (i32x4.trunc_sat_f32x4_s
+                    (v128.const f32x4 7 0 0 0)))))";
 
         let structured = crate::wat::parse(wat).expect("WAT parse failed");
         let structured_id = store.create_instance(Arc::new(structured), None).unwrap();
