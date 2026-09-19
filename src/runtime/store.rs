@@ -1974,6 +1974,36 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_simd_float_rounding_observes_directions_ties_and_signed_zero() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (func (export \"f32\") (result v128 v128 v128 v128)
+                    (local $vector v128)
+                    (local.set $vector (v128.const f32x4 -0.5 0.5 1.5 2.5))
+                    (f32x4.ceil (local.get $vector))
+                    (f32x4.floor (local.get $vector))
+                    (f32x4.trunc (local.get $vector))
+                    (f32x4.nearest (local.get $vector)))
+                (func (export \"f64\") (result v128)
+                    (f64x2.nearest (v128.const f64x2 -1.5 -2.5))))",
+            None,
+        );
+        assert_eq!(
+            store.invoke_export(id, "f32", vec![], None).unwrap(),
+            vec![
+                Value::V128([0, 0, 0, 128, 0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64]),
+                Value::V128([0, 0, 128, 191, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 64]),
+                Value::V128([0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 64]),
+                Value::V128([0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 64]),
+            ]
+        );
+        assert_eq!(
+            store.invoke_export(id, "f64", vec![], None).unwrap(),
+            vec![Value::V128([0, 0, 0, 0, 0, 0, 0, 192, 0, 0, 0, 0, 0, 0, 0, 192])]
+        );
+    }
+
+    #[test]
     fn flat_engine_i16x8_reductions() {
         let (mut store, id) = flat_instance(
             "(module

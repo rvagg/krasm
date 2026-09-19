@@ -174,6 +174,11 @@ pub enum Op {
     F32x4Abs,
     F32x4Neg,
     F32x4Sqrt,
+    // Rounding produces integral floating lanes; nearest breaks ties to even.
+    F32x4Ceil,
+    F32x4Floor,
+    F32x4Trunc,
+    F32x4Nearest,
     F32x4Add,
     F32x4Sub,
     F32x4Mul,
@@ -181,6 +186,10 @@ pub enum Op {
     F64x2Abs,
     F64x2Neg,
     F64x2Sqrt,
+    F64x2Ceil,
+    F64x2Floor,
+    F64x2Trunc,
+    F64x2Nearest,
     F64x2Add,
     F64x2Sub,
     F64x2Mul,
@@ -662,9 +671,17 @@ impl Op {
             | Op::F32x4Abs
             | Op::F32x4Neg
             | Op::F32x4Sqrt
+            | Op::F32x4Ceil
+            | Op::F32x4Floor
+            | Op::F32x4Trunc
+            | Op::F32x4Nearest
             | Op::F64x2Abs
             | Op::F64x2Neg
             | Op::F64x2Sqrt
+            | Op::F64x2Ceil
+            | Op::F64x2Floor
+            | Op::F64x2Trunc
+            | Op::F64x2Nearest
             | Op::I8x16AllTrue
             | Op::I8x16Bitmask
             | Op::I16x8AllTrue
@@ -1204,6 +1221,10 @@ impl fmt::Display for Op {
             Op::F32x4Abs => write!(f, "f32x4.abs"),
             Op::F32x4Neg => write!(f, "f32x4.neg"),
             Op::F32x4Sqrt => write!(f, "f32x4.sqrt"),
+            Op::F32x4Ceil => write!(f, "f32x4.ceil"),
+            Op::F32x4Floor => write!(f, "f32x4.floor"),
+            Op::F32x4Trunc => write!(f, "f32x4.trunc"),
+            Op::F32x4Nearest => write!(f, "f32x4.nearest"),
             Op::F32x4Add => write!(f, "f32x4.add"),
             Op::F32x4Sub => write!(f, "f32x4.sub"),
             Op::F32x4Mul => write!(f, "f32x4.mul"),
@@ -1211,6 +1232,10 @@ impl fmt::Display for Op {
             Op::F64x2Abs => write!(f, "f64x2.abs"),
             Op::F64x2Neg => write!(f, "f64x2.neg"),
             Op::F64x2Sqrt => write!(f, "f64x2.sqrt"),
+            Op::F64x2Ceil => write!(f, "f64x2.ceil"),
+            Op::F64x2Floor => write!(f, "f64x2.floor"),
+            Op::F64x2Trunc => write!(f, "f64x2.trunc"),
+            Op::F64x2Nearest => write!(f, "f64x2.nearest"),
             Op::F64x2Add => write!(f, "f64x2.add"),
             Op::F64x2Sub => write!(f, "f64x2.sub"),
             Op::F64x2Mul => write!(f, "f64x2.mul"),
