@@ -359,10 +359,15 @@ impl Instance {
 
     /// Set an instruction budget limit for execution
     ///
-    /// When set, execution returns `RuntimeError::InstructionBudgetExhausted`
-    /// after the given number of instructions have been executed. Pass `None`
-    /// to remove the limit.
+    /// Each interpreter operation consumes one unit; exhaustion traps before
+    /// the next operation. Counts depend on the engine's representation.
+    /// The limit covers this instance only, persists across calls and
+    /// suspension, and excludes host work. Pass `None` to remove it.
     pub fn set_instruction_budget(&mut self, budget: Option<u64>) {
-        self.executor.set_instruction_budget(budget);
+        if let Some(flat) = &mut self.flat {
+            flat.executor.set_instruction_budget(budget);
+        } else {
+            self.executor.set_instruction_budget(budget);
+        }
     }
 }

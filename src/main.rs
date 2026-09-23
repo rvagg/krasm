@@ -35,7 +35,7 @@ enum Commands {
         #[arg(long = "dir", value_name = "PATH")]
         dirs: Vec<String>,
 
-        /// Interpreter engine (flat is experimental with partial coverage)
+        /// Interpreter engine
         #[arg(long, value_enum, default_value_t = EngineArg::Structured)]
         engine: EngineArg,
 

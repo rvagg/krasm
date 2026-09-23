@@ -351,6 +351,7 @@ pub struct FlatExecutor {
     stack: Stack,
     call_stack: Vec<CallFrame>,
     suspended: Option<SuspendedState>,
+    instruction_budget: Option<u64>,
 }
 
 impl Default for FlatExecutor {
@@ -365,11 +366,20 @@ impl FlatExecutor {
             stack: Stack::new(),
             call_stack: Vec::new(),
             suspended: None,
+            instruction_budget: None,
         }
     }
 
-    /// Discard all execution state, returning the executor to a reusable
-    /// idle state after an error.
+    /// Limit bytecode operations, including labels and function ends.
+    ///
+    /// The remaining budget survives calls and suspension. `None` disables
+    /// the limit; exhaustion traps before the next operation executes.
+    pub(crate) fn set_instruction_budget(&mut self, budget: Option<u64>) {
+        self.instruction_budget = budget;
+    }
+
+    /// Discard stack and suspension state after an error or before a new
+    /// invocation, without changing the instruction budget.
     fn reset(&mut self) {
         self.stack.clear();
         self.call_stack.clear();
@@ -466,6 +476,7 @@ impl FlatExecutor {
             stack,
             call_stack,
             suspended,
+            instruction_budget,
         } = self;
 
         let CallFrame {
@@ -503,6 +514,13 @@ impl FlatExecutor {
             let ops_slice = &funcs[current_func_idx].ops;
             if pc >= ops_slice.len() {
                 break;
+            }
+
+            if let Some(remaining) = instruction_budget {
+                if *remaining == 0 {
+                    return Err(RuntimeError::InstructionBudgetExhausted);
+                }
+                *remaining -= 1;
             }
 
             match &ops_slice[pc] {

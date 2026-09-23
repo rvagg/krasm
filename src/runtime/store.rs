@@ -805,8 +805,12 @@ impl<T> Store<T> {
     ///
     /// This is the recommended way to invoke functions when cross-module calls may occur.
     ///
-    /// If `instruction_budget` is `Some(n)`, execution will stop with
-    /// `RuntimeError::InstructionBudgetExhausted` after `n` instructions.
+    /// `Some(n)` allows up to `n` interpreter operations in this instance;
+    /// attempting the next returns `RuntimeError::InstructionBudgetExhausted`.
+    /// Counts are engine-dependent: flat execution includes bytecode labels
+    /// and function ends. Calls and suspension preserve the remaining budget.
+    /// Host work and execution in other instances are not charged.
+    /// `None` disables the limit; the budget is cleared after execution.
     pub fn invoke_export(
         &mut self,
         instance_id: usize,
@@ -1673,6 +1677,89 @@ mod tests {
     }
 
     #[test]
+    fn flat_engine_budget_boundary_and_reuse() {
+        let (mut store, id) = flat_instance("(module (func (export \"run\") (result i32) (i32.const 7)))", None);
+        assert!(matches!(
+            store.invoke_export(id, "run", vec![], Some(0)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
+        // The constant and function end each consume one bytecode operation.
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], Some(2)).unwrap(),
+            vec![Value::I32(7)]
+        );
+        assert!(matches!(
+            store.invoke_export(id, "run", vec![], Some(1)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
+        let addr = store.get_instance(id).unwrap().get_function_addr("run").unwrap();
+        // Direct execution does not install a fresh budget.
+        assert_eq!(store.execute(addr, vec![]).unwrap(), vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn flat_engine_budget_spans_local_calls() {
+        let (mut store, id) = flat_instance(
+            "(module
+                (type $value (func (result i32)))
+                (table 1 funcref)
+                (elem (i32.const 0) $one)
+                (func $one (type $value) (i32.const 1))
+                (func (export \"direct\") (result i32)
+                    (i32.add (i32.add (call $one) (call $one)) (call $one)))
+                (func (export \"indirect\") (result i32)
+                    (i32.add (call_indirect (type $value) (i32.const 0)) (i32.const 2))))",
+            None,
+        );
+        assert!(matches!(
+            store.invoke_export(id, "direct", vec![], Some(4)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
+        assert_eq!(
+            store.invoke_export(id, "direct", vec![], None).unwrap(),
+            vec![Value::I32(3)]
+        );
+        assert!(matches!(
+            store.invoke_export(id, "indirect", vec![], Some(3)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
+        assert_eq!(
+            store.invoke_export(id, "indirect", vec![], None).unwrap(),
+            vec![Value::I32(3)]
+        );
+    }
+
+    #[test]
+    fn flat_engine_budget_survives_host_calls() {
+        let mut store = Store::with_data(0u32);
+        store.set_engine(EngineKind::Flat);
+        let tick = store.wrap_with_caller(|caller: &mut Caller<'_, u32>| {
+            *caller.data_mut() += 1;
+        });
+        let mut imports = ImportObject::new();
+        imports.add_function("env", "tick", tick);
+        let module = crate::wat::parse(
+            "(module
+                (import \"env\" \"tick\" (func $tick))
+                (func (export \"run\") (result i32)
+                    (call $tick) (call $tick) (i32.const 7)))",
+        )
+        .unwrap();
+        let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+        assert!(matches!(
+            store.invoke_export(id, "run", vec![], Some(1)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
+        // The first call is charged before suspension; the second never runs.
+        assert_eq!(*store.data(), 1);
+        assert_eq!(
+            store.invoke_export(id, "run", vec![], None).unwrap(),
+            vec![Value::I32(7)]
+        );
+        assert_eq!(*store.data(), 3);
+    }
+
+    #[test]
     fn flat_engine_host_call_round_trip() {
         // wasm (flat) -> host -> resume wasm, through Store::execute
         let mut store = Store::new();
@@ -1720,6 +1807,10 @@ mod tests {
         .expect("WAT parse failed");
         let caller_id = store.create_instance(Arc::new(caller), Some(&imports)).unwrap();
 
+        assert!(matches!(
+            store.invoke_export(caller_id, "run", vec![], Some(1)),
+            Err(RuntimeError::InstructionBudgetExhausted)
+        ));
         let result = store.invoke_export(caller_id, "run", vec![], None);
         assert_eq!(result.unwrap(), vec![Value::I32(110)]);
     }

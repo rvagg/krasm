@@ -35,13 +35,10 @@ pub use value::Value;
 /// engine at creation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EngineKind {
-    /// Structured-tree interpreter: full instruction coverage, the default.
+    /// Structured-tree interpreter, the default.
     #[default]
     Structured,
-    /// Flat bytecode interpreter: faster dispatch, partial instruction
-    /// coverage while under development. Instructions the flat compiler
-    /// does not yet support trap with `unreachable` at execution time.
-    /// Instruction budgets are not yet enforced on this engine.
+    /// Flat bytecode interpreter with pre-resolved branches.
     Flat,
 }
 
