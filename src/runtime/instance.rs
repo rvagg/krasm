@@ -34,13 +34,10 @@ pub struct Instance {
     table_addresses: Vec<TableAddr>,
     /// Maps local global index to global GlobalAddr
     global_addresses: Vec<GlobalAddr>,
-    executor: Executor,
+    engine: Engine,
     /// Per-instance segment state, produced at instantiation and mutated by
     /// bulk-memory instructions.
     segments: SegmentState,
-    /// Flat bytecode engine, present when the instance was created with
-    /// `EngineKind::Flat`. Drives function invocation and resumption.
-    flat: Option<FlatEngine>,
 }
 
 /// Per-instance segment state, produced at instantiation and mutated by the
@@ -53,6 +50,12 @@ pub(crate) struct SegmentState {
     /// Data segments dropped via data.drop (active segments are logically
     /// dropped after initialisation, per spec).
     pub(crate) dropped_data: HashSet<u32>,
+}
+
+/// Only the selected interpreter's execution state is constructed.
+enum Engine {
+    Structured(Executor),
+    Flat(FlatEngine),
 }
 
 /// Flat-bytecode execution state for an instance.
@@ -86,16 +89,14 @@ impl Instance {
             }
         }
 
-        let executor = Executor::new_unlinked(
-            Arc::clone(&module),
-            memory_addresses.clone(),
-            table_addresses.clone(),
-            global_addresses.clone(),
-        )?;
-
-        let flat = match engine {
-            EngineKind::Structured => None,
-            EngineKind::Flat => Some(FlatEngine {
+        let engine = match engine {
+            EngineKind::Structured => Engine::Structured(Executor::new_unlinked(
+                Arc::clone(&module),
+                memory_addresses.clone(),
+                table_addresses.clone(),
+                global_addresses.clone(),
+            )?),
+            EngineKind::Flat => Engine::Flat(FlatEngine {
                 funcs: compile_module(&module),
                 entries: Vec::new(),
                 executor: FlatExecutor::new(),
@@ -109,9 +110,8 @@ impl Instance {
             memory_addresses,
             table_addresses,
             global_addresses,
-            executor,
+            engine,
             segments: SegmentState::default(),
-            flat,
         })
     }
 
@@ -125,9 +125,9 @@ impl Instance {
         function_addresses: Vec<FuncAddr>,
         resources: &mut Resources,
     ) -> Result<(), RuntimeError> {
-        self.executor.link_function_addresses(function_addresses.clone());
-        if let Some(flat) = &mut self.flat {
-            flat.entries = build_func_entries(&self.module, &function_addresses);
+        match &mut self.engine {
+            Engine::Structured(executor) => executor.link_function_addresses(function_addresses.clone()),
+            Engine::Flat(flat) => flat.entries = build_func_entries(&self.module, &function_addresses),
         }
         self.function_addresses = function_addresses;
 
@@ -206,35 +206,38 @@ impl Instance {
             }
         }
 
-        if let Some(flat) = &mut self.flat {
-            let mut ctx = ExecContext {
-                resources,
-                global_addrs: &self.global_addresses,
-                memory_addrs: &self.memory_addresses,
-                table_addrs: &self.table_addresses,
-                types: &self.module.types.types,
-                functions: &flat.entries,
-                num_imported: num_imported_functions,
-                segments: &mut self.segments,
-                data_segments: &self.module.data.data,
-            };
-            return flat.executor.invoke(&flat.funcs, code_idx, &args, Some(&mut ctx));
+        match &mut self.engine {
+            Engine::Flat(flat) => {
+                let mut ctx = ExecContext {
+                    resources,
+                    global_addrs: &self.global_addresses,
+                    memory_addrs: &self.memory_addresses,
+                    table_addrs: &self.table_addresses,
+                    types: &self.module.types.types,
+                    functions: &flat.entries,
+                    num_imported: num_imported_functions,
+                    segments: &mut self.segments,
+                    data_segments: &self.module.data.data,
+                };
+                flat.executor.invoke(&flat.funcs, code_idx, &args, Some(&mut ctx))
+            }
+            Engine::Structured(executor) => {
+                let body = self
+                    .module
+                    .code
+                    .get(code_idx as u32)
+                    .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))?;
+
+                executor.execute_function_with_locals(
+                    &body.body,
+                    args,
+                    &func_type.return_types,
+                    Some(&body.locals),
+                    resources,
+                    &mut self.segments,
+                )
+            }
         }
-
-        let body = self
-            .module
-            .code
-            .get(code_idx as u32)
-            .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))?;
-
-        self.executor.execute_function_with_locals(
-            &body.body,
-            args,
-            &func_type.return_types,
-            Some(&body.locals),
-            resources,
-            &mut self.segments,
-        )
     }
 
     /// Resume execution after an external call completes
@@ -245,22 +248,23 @@ impl Instance {
         results: Vec<Value>,
         resources: &mut Resources,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        if let Some(flat) = &mut self.flat {
-            let mut ctx = ExecContext {
-                resources,
-                global_addrs: &self.global_addresses,
-                memory_addrs: &self.memory_addresses,
-                table_addrs: &self.table_addresses,
-                types: &self.module.types.types,
-                functions: &flat.entries,
-                num_imported: self.module.imports.function_count(),
-                segments: &mut self.segments,
-                data_segments: &self.module.data.data,
-            };
-            return flat.executor.resume_with_results(&flat.funcs, results, Some(&mut ctx));
+        match &mut self.engine {
+            Engine::Flat(flat) => {
+                let mut ctx = ExecContext {
+                    resources,
+                    global_addrs: &self.global_addresses,
+                    memory_addrs: &self.memory_addresses,
+                    table_addrs: &self.table_addresses,
+                    types: &self.module.types.types,
+                    functions: &flat.entries,
+                    num_imported: self.module.imports.function_count(),
+                    segments: &mut self.segments,
+                    data_segments: &self.module.data.data,
+                };
+                flat.executor.resume_with_results(&flat.funcs, results, Some(&mut ctx))
+            }
+            Engine::Structured(executor) => executor.resume_with_results(results, resources, &mut self.segments),
         }
-        self.executor
-            .resume_with_results(results, resources, &mut self.segments)
     }
 
     /// Get the FuncAddr for an exported function by name
@@ -290,10 +294,22 @@ impl Instance {
     /// - `UnknownExport` if the export doesn't exist or isn't a global
     pub fn get_global_export(&self, name: &str, resources: &Resources) -> Result<Value, RuntimeError> {
         if let ExportIndex::Global(global_idx) = self.find_export(name)? {
-            self.executor.get_global(global_idx, resources)
+            self.get_global(global_idx, resources)
         } else {
             Err(RuntimeError::UnknownExport(format!("{} is not a global export", name)))
         }
+    }
+
+    fn get_global(&self, global_idx: u32, resources: &Resources) -> Result<Value, RuntimeError> {
+        let addr = self
+            .global_addresses
+            .get(global_idx as usize)
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))?;
+        resources
+            .globals
+            .get(addr.0)
+            .copied()
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))
     }
 
     /// Look up an export by name, returning its ExportIndex.
@@ -357,10 +373,9 @@ impl Instance {
     /// The limit covers this instance only, persists across calls and
     /// suspension, and excludes host work. Pass `None` to remove it.
     pub fn set_instruction_budget(&mut self, budget: Option<u64>) {
-        if let Some(flat) = &mut self.flat {
-            flat.executor.set_instruction_budget(budget);
-        } else {
-            self.executor.set_instruction_budget(budget);
+        match &mut self.engine {
+            Engine::Flat(flat) => flat.executor.set_instruction_budget(budget),
+            Engine::Structured(executor) => executor.set_instruction_budget(budget),
         }
     }
 
@@ -517,17 +532,7 @@ impl Instance {
                 InstructionKind::I64Const { value } => Ok(Value::I64(*value)),
                 InstructionKind::F32Const { value } => Ok(Value::F32(*value)),
                 InstructionKind::F64Const { value } => Ok(Value::F64(*value)),
-                InstructionKind::GlobalGet { global_idx } => {
-                    let addr = self
-                        .global_addresses
-                        .get(*global_idx as usize)
-                        .ok_or(RuntimeError::GlobalIndexOutOfBounds(*global_idx))?;
-                    resources
-                        .globals
-                        .get(addr.0)
-                        .copied()
-                        .ok_or(RuntimeError::GlobalIndexOutOfBounds(*global_idx))
-                }
+                InstructionKind::GlobalGet { global_idx } => self.get_global(*global_idx, resources),
                 InstructionKind::RefNull { ref_type } => match ref_type {
                     ValueType::FuncRef => Ok(Value::FuncRef(None)),
                     ValueType::ExternRef => Ok(Value::ExternRef(None)),
@@ -643,6 +648,9 @@ impl Instance {
         // Initialise data sections (writes module data into memory)
         instance.initialise_data_sections(&mut resources)?;
 
-        Ok((instance.executor, resources, instance.segments))
+        let Engine::Structured(executor) = instance.engine else {
+            unreachable!("test instances use the structured engine");
+        };
+        Ok((executor, resources, instance.segments))
     }
 }

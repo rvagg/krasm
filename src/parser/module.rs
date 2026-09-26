@@ -124,10 +124,14 @@ impl Module {
         }
     }
 
+    /// Get a table type by index, with imported tables preceding local tables.
     pub fn get_table(&self, index: u32) -> Option<&TableType> {
-        self.imports
-            .get_table(index)
-            .or_else(|| self.table.tables.get(index as usize))
+        let import_count = self.imports.table_count() as u32;
+        if index < import_count {
+            self.imports.get_table(index)
+        } else {
+            self.table.tables.get((index - import_count) as usize)
+        }
     }
 
     pub fn get_function_name(&self, index: u32) -> Option<String> {

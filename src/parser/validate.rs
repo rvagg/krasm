@@ -1261,7 +1261,9 @@ impl Validator for CodeValidator<'_> {
             TableInit { elem_idx, table_idx } => {
                 self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
                     .ok_or(ValidationError::TypeMismatch)?;
-                let table_ref_type = get_table_ref_type(self.module, *table_idx)
+                let table = self
+                    .module
+                    .get_table(*table_idx)
                     .ok_or(ValidationError::UnknownTableWithIndex(*table_idx))?;
                 let elem = self
                     .module
@@ -1269,7 +1271,7 @@ impl Validator for CodeValidator<'_> {
                     .elements
                     .get(*elem_idx as usize)
                     .ok_or(ValidationError::UnknownElement)?;
-                if elem.ref_type != table_ref_type {
+                if elem.ref_type != table.ref_type {
                     return Err(ValidationError::TypeMismatch);
                 }
                 Ok(())
@@ -1882,9 +1884,8 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 return Err(ValidationError::UnknownTableWithIndex(*table_index));
             }
             // Element ref_type must match target table's ref_type
-            let table_ref_type = get_table_ref_type(module, *table_index);
-            if let Some(trt) = table_ref_type
-                && trt != elem.ref_type
+            if let Some(table) = module.get_table(*table_index)
+                && table.ref_type != elem.ref_type
             {
                 return Err(ValidationError::TypeMismatch);
             }
@@ -1995,26 +1996,6 @@ fn validate_structured(body: &[StructuredInstruction], validator: &mut impl Vali
         }
     }
     Ok(())
-}
-
-// Look up a table's ref_type by index (imports first, then local tables).
-fn get_table_ref_type(module: &Module, table_index: u32) -> Option<RefType> {
-    let import_table_count = module.imports.table_count() as u32;
-    if table_index < import_table_count {
-        let mut table_idx = 0u32;
-        for import in &module.imports.imports {
-            if let ExternalKind::Table(tt) = &import.external_kind {
-                if table_idx == table_index {
-                    return Some(tt.ref_type);
-                }
-                table_idx += 1;
-            }
-        }
-        None
-    } else {
-        let local_idx = (table_index - import_table_count) as usize;
-        module.table.tables.get(local_idx).map(|t| t.ref_type)
-    }
 }
 
 // Validate limits: min <= max (if present), and both <= absolute_max.

@@ -313,22 +313,6 @@ impl Executor {
             .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))
     }
 
-    /// Get a global value by index
-    ///
-    /// # Errors
-    /// - Returns `GlobalIndexOutOfBounds` if global_idx is invalid
-    pub fn get_global(&self, global_idx: u32, resources: &Resources) -> Result<Value, RuntimeError> {
-        let addr = self
-            .global_addresses
-            .get(global_idx as usize)
-            .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))?;
-        resources
-            .globals
-            .get(addr.0)
-            .copied()
-            .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))
-    }
-
     /// Resolve the Store-level index for memory 0 (the only memory in Wasm 1.0/2.0).
     fn resolve_memory_idx(&self) -> Result<usize, RuntimeError> {
         self.memory_addresses
