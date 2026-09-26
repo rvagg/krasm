@@ -488,6 +488,7 @@ impl FlatExecutor {
             mut stack_base,
             mut locals,
         } = frame;
+        let mut ops_slice = funcs[current_func_idx].ops.as_slice();
 
         // One-line dispatch for ops that only touch the operand stack.
         macro_rules! stack_op {
@@ -511,7 +512,6 @@ impl FlatExecutor {
         }
 
         loop {
-            let ops_slice = &funcs[current_func_idx].ops;
             if pc >= ops_slice.len() {
                 break;
             }
@@ -1072,6 +1072,7 @@ impl FlatExecutor {
                     };
                     let callee = enter_local_call(stack, call_stack, funcs, local_idx, *func_idx, caller)?;
                     current_func_idx = callee.func_idx;
+                    ops_slice = funcs[current_func_idx].ops.as_slice();
                     pc = callee.pc;
                     stack_base = callee.stack_base;
                     locals = callee.locals;
@@ -1140,6 +1141,7 @@ impl FlatExecutor {
                             let callee =
                                 enter_local_call(stack, call_stack, funcs, local_idx, module_idx as u32, caller)?;
                             current_func_idx = callee.func_idx;
+                            ops_slice = funcs[current_func_idx].ops.as_slice();
                             pc = callee.pc;
                             stack_base = callee.stack_base;
                             locals = callee.locals;
@@ -1162,6 +1164,7 @@ impl FlatExecutor {
                 Op::Return | Op::End => {
                     if let Some(frame) = call_stack.pop() {
                         current_func_idx = frame.func_idx;
+                        ops_slice = funcs[current_func_idx].ops.as_slice();
                         pc = frame.pc;
                         stack_base = frame.stack_base;
                         locals = frame.locals;
