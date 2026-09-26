@@ -1,5 +1,5 @@
 //! Flat executor unit tests. Mechanical per-op coverage lives in the
-//! wast suite (`KRASM_FLAT=1 cargo test --test wast_tests`); these tests
+//! wast suite (`cargo test --test wast_tests -- flat`); these tests
 //! cover the executor machinery itself.
 
 use super::*;

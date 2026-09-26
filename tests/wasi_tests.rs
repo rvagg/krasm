@@ -2,11 +2,12 @@
 
 mod common;
 
-use common::CapturedWriter;
+use common::{CapturedWriter, temp_dir};
 use krasm::parser;
 use krasm::parser::reader::Reader;
 use krasm::wasi::{WasiContext, add_assemblyscript_imports, create_wasi_imports};
-use krasm::{Module, Store};
+use krasm::{EngineKind, Module, Store};
+use rstest::rstest;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
@@ -15,8 +16,10 @@ fn parse_wat(wat: &str) -> Module {
     krasm::wat::parse(wat).expect("Failed to parse WAT")
 }
 
-#[test]
-fn test_hello_wasi() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_hello_wasi(#[case] engine: EngineKind) {
     let wat = r#"
     ;; Smoke test for fd_write - prints "Hello from WASI!" to stdout
     (module
@@ -56,6 +59,7 @@ fn test_hello_wasi() {
 
     // Create store and imports
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
 
     // Create instance
@@ -72,8 +76,10 @@ fn test_hello_wasi() {
     assert_eq!(&*output, b"Hello from WASI!\n");
 }
 
-#[test]
-fn test_fd_read_stdin() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_read_stdin(#[case] engine: EngineKind) {
     let wat = r#"
     (module
       (import "wasi_snapshot_preview1" "fd_read"
@@ -124,6 +130,7 @@ fn test_fd_read_stdin() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -137,8 +144,10 @@ fn test_fd_read_stdin() {
     assert_eq!(&*output, b"test input\n");
 }
 
-#[test]
-fn test_args() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_args(#[case] engine: EngineKind) {
     let wat = r#"
     (module
       (import "wasi_snapshot_preview1" "args_sizes_get"
@@ -189,6 +198,7 @@ fn test_args() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -202,8 +212,10 @@ fn test_args() {
     assert_eq!(&*output, b"prog");
 }
 
-#[test]
-fn test_assemblyscript_hello() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_assemblyscript_hello(#[case] engine: EngineKind) {
     // Test the pre-built AssemblyScript hello world example
     let wasm = std::fs::read("examples/assemblyscript/build/release.wasm")
         .expect("Failed to read AssemblyScript wasm - run `npm run asbuild` in examples/assemblyscript first");
@@ -222,6 +234,7 @@ fn test_assemblyscript_hello() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let mut imports = create_wasi_imports(&mut store, ctx.clone());
     // AssemblyScript requires env.abort
     add_assemblyscript_imports(&mut store, &mut imports, ctx.clone());
@@ -242,8 +255,10 @@ fn test_assemblyscript_hello() {
     );
 }
 
-#[test]
-fn test_proc_exit() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_proc_exit(#[case] engine: EngineKind) {
     let wat = r#"
     (module
       (import "wasi_snapshot_preview1" "proc_exit"
@@ -261,6 +276,7 @@ fn test_proc_exit() {
     let ctx = Arc::new(WasiContext::builder().build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -274,8 +290,10 @@ fn test_proc_exit() {
     assert_eq!(ctx.exit_code(), Some(42));
 }
 
-#[test]
-fn test_multiple_iovecs() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_multiple_iovecs(#[case] engine: EngineKind) {
     // Test scatter/gather I/O with multiple iovec entries
     let wat = r#"
     (module
@@ -315,6 +333,7 @@ fn test_multiple_iovecs() {
     let ctx = Arc::new(WasiContext::builder().stdout(Box::new(stdout)).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -327,8 +346,10 @@ fn test_multiple_iovecs() {
     assert_eq!(&*output, b"Hello, World!");
 }
 
-#[test]
-fn test_fd_read_eof() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_read_eof(#[case] engine: EngineKind) {
     // Test that reading from empty stdin returns 0 bytes (EOF)
     let wat = r#"
     (module
@@ -363,6 +384,7 @@ fn test_fd_read_eof() {
     let ctx = Arc::new(WasiContext::builder().stdin(Box::new(stdin)).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -381,8 +403,10 @@ fn test_fd_read_eof() {
     }
 }
 
-#[test]
-fn test_environ() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_environ(#[case] engine: EngineKind) {
     // Test environment variable access - get sizes, fetch values, print them
     let wat = r#"
     (module
@@ -471,6 +495,7 @@ fn test_environ() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -503,8 +528,10 @@ fn test_environ() {
     );
 }
 
-#[test]
-fn test_fd_prestat_returns_badf() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_prestat_returns_badf(#[case] engine: EngineKind) {
     // Test that fd_prestat_get returns EBADF (no preopened directories)
     let wat = r#"
     (module
@@ -527,6 +554,7 @@ fn test_fd_prestat_returns_badf() {
     let ctx = Arc::new(WasiContext::builder().build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -545,8 +573,10 @@ fn test_fd_prestat_returns_badf() {
     }
 }
 
-#[test]
-fn test_preopen_enumerate() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_preopen_enumerate(#[case] engine: EngineKind) {
     // fd_prestat_get(3) succeeds with a preopen, fd_prestat_get(4) returns EBADF
     let wat = r#"
     (module
@@ -595,7 +625,8 @@ fn test_preopen_enumerate() {
     let stdout_buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
     let stdout = CapturedWriter(stdout_buffer.clone());
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let dir_str = dir.to_str().unwrap();
 
     let ctx = Arc::new(
@@ -606,6 +637,7 @@ fn test_preopen_enumerate() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -628,8 +660,10 @@ fn test_preopen_enumerate() {
     assert_eq!(output_str, dir_str);
 }
 
-#[test]
-fn test_path_open_and_read() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_path_open_and_read(#[case] engine: EngineKind) {
     // Open a file via path_open, read its contents, write to stdout
     let wat = r#"
     (module
@@ -716,7 +750,8 @@ fn test_path_open_and_read() {
     let module = parse_wat(wat);
 
     // Create a temp file with known content
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let file_path = dir.join("test_read.txt");
     std::fs::write(&file_path, "file contents here").expect("Failed to write test file");
 
@@ -732,6 +767,7 @@ fn test_path_open_and_read() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -747,13 +783,12 @@ fn test_path_open_and_read() {
 
     let output = stdout_buffer.lock().unwrap();
     assert_eq!(&*output, b"file contents here");
-
-    // Clean up
-    let _ = std::fs::remove_file(&file_path);
 }
 
-#[test]
-fn test_path_open_write() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_path_open_write(#[case] engine: EngineKind) {
     // Open a file for writing via path_open with O_CREAT
     let wat = r#"
     (module
@@ -810,15 +845,15 @@ fn test_path_open_write() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let file_path = dir.join("test_write.txt");
-    // Remove if exists from previous run
-    let _ = std::fs::remove_file(&file_path);
 
     let dir_str = dir.to_str().unwrap();
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -835,13 +870,12 @@ fn test_path_open_write() {
     // Verify file was written on host
     let contents = std::fs::read_to_string(&file_path).expect("Failed to read written file");
     assert_eq!(contents, "written by wasm");
-
-    // Clean up
-    let _ = std::fs::remove_file(&file_path);
 }
 
-#[test]
-fn test_fd_close_then_read_fails() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_close_then_read_fails(#[case] engine: EngineKind) {
     // Open a file, close it, then attempt to read (should return EBADF)
     let wat = r#"
     (module
@@ -889,7 +923,8 @@ fn test_fd_close_then_read_fails() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let file_path = dir.join("test_close.txt");
     std::fs::write(&file_path, "data").expect("Failed to write test file");
 
@@ -897,6 +932,7 @@ fn test_fd_close_then_read_fails() {
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -909,12 +945,12 @@ fn test_fd_close_then_read_fails() {
     if let krasm::runtime::Value::I32(errno) = values[0] {
         assert_eq!(errno, 8, "Expected EBADF (8) for closed fd, got {}", errno);
     }
-
-    let _ = std::fs::remove_file(&file_path);
 }
 
-#[test]
-fn test_path_traversal_blocked() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_path_traversal_blocked(#[case] engine: EngineKind) {
     // Attempt to open ../../../etc/passwd should return EACCES
     let wat = r#"
     (module
@@ -947,11 +983,13 @@ fn test_path_traversal_blocked() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let dir_str = dir.to_str().unwrap();
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -967,8 +1005,10 @@ fn test_path_traversal_blocked() {
     }
 }
 
-#[test]
-fn test_path_open_nonexistent_file() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_path_open_nonexistent_file(#[case] engine: EngineKind) {
     // Opening a file that doesn't exist without O_CREAT returns ENOENT
     let wat = r#"
     (module
@@ -996,11 +1036,13 @@ fn test_path_open_nonexistent_file() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let dir_str = dir.to_str().unwrap();
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1015,8 +1057,10 @@ fn test_path_open_nonexistent_file() {
     }
 }
 
-#[test]
-fn test_fd_seek() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_seek(#[case] engine: EngineKind) {
     // Open a file, seek to offset 6, read from there
     let wat = r#"
     (module
@@ -1084,7 +1128,8 @@ fn test_fd_seek() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let file_path = dir.join("test_seek.txt");
     std::fs::write(&file_path, "Hello,World!").expect("Failed to write test file");
 
@@ -1100,6 +1145,7 @@ fn test_fd_seek() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1116,12 +1162,12 @@ fn test_fd_seek() {
     // After seeking to offset 6, reading "Hello,World!" should give "World!"
     let output = stdout_buffer.lock().unwrap();
     assert_eq!(&*output, b"World!");
-
-    let _ = std::fs::remove_file(&file_path);
 }
 
-#[test]
-fn test_fd_fdstat_get() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_fdstat_get(#[case] engine: EngineKind) {
     // Verify fd_fdstat_get returns correct file types
     let wat = r#"
     (module
@@ -1158,7 +1204,8 @@ fn test_fd_fdstat_get() {
 
     let module = parse_wat(wat);
 
-    let dir = std::env::temp_dir();
+    let temp = temp_dir();
+    let dir = temp.path();
     let dir_str = dir.to_str().unwrap();
     let ctx = Arc::new(
         WasiContext::builder()
@@ -1168,6 +1215,7 @@ fn test_fd_fdstat_get() {
     );
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1191,8 +1239,10 @@ fn test_fd_fdstat_get() {
     }
 }
 
-#[test]
-fn test_return_from_nested_block_preserves_caller() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_return_from_nested_block_preserves_caller(#[case] engine: EngineKind) {
     // This tests the fix for a bug where returning from within a nested block
     // did not properly pop the call frame, causing the caller's execution
     // context to be corrupted.
@@ -1230,6 +1280,7 @@ fn test_return_from_nested_block_preserves_caller() {
     let module = parse_wat(wat);
 
     let mut store = Store::new();
+    store.set_engine(engine);
     let instance_id = store
         .create_instance(Arc::new(module), None)
         .expect("Failed to create instance");
@@ -1245,8 +1296,10 @@ fn test_return_from_nested_block_preserves_caller() {
     }
 }
 
-#[test]
-fn test_clock_time_get() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_clock_time_get(#[case] engine: EngineKind) {
     // clock_time_get should return success (0) for CLOCK_REALTIME (0)
     // and write a non-zero timestamp
     let wat = r#"
@@ -1278,6 +1331,7 @@ fn test_clock_time_get() {
     let module = parse_wat(wat);
     let ctx = Arc::new(WasiContext::builder().build());
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1286,8 +1340,10 @@ fn test_clock_time_get() {
     assert!(result.is_ok(), "clock_time_get failed: {:?}", result);
 }
 
-#[test]
-fn test_random_get() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_random_get(#[case] engine: EngineKind) {
     // random_get should fill a buffer with non-zero bytes (probabilistically)
     let wat = r#"
     (module
@@ -1330,6 +1386,7 @@ fn test_random_get() {
     let module = parse_wat(wat);
     let ctx = Arc::new(WasiContext::builder().build());
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1338,12 +1395,13 @@ fn test_random_get() {
     assert!(result.is_ok(), "random_get failed: {:?}", result);
 }
 
-#[test]
-fn test_fd_tell() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_tell(#[case] engine: EngineKind) {
     // Open a file, write to it, then fd_tell should report the current position
-    let dir = std::env::temp_dir().join("krasm_test_fd_tell");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp = temp_dir();
+    let dir = temp.path();
     std::fs::write(dir.join("tell_test.txt"), "Hello, World!").unwrap();
 
     let dir_str = dir.to_str().unwrap();
@@ -1407,6 +1465,7 @@ fn test_fd_tell() {
     let module = parse_wat(wat);
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1421,12 +1480,13 @@ fn test_fd_tell() {
     );
 }
 
-#[test]
-fn test_fd_readdir() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_fd_readdir(#[case] engine: EngineKind) {
     // Create a directory with known files, open it, and read entries via fd_readdir
-    let dir = std::env::temp_dir().join("krasm_test_fd_readdir");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp = temp_dir();
+    let dir = temp.path();
     std::fs::write(dir.join("alpha.txt"), "a").unwrap();
     std::fs::write(dir.join("beta.txt"), "b").unwrap();
     std::fs::create_dir(dir.join("gamma")).unwrap();
@@ -1497,6 +1557,7 @@ fn test_fd_readdir() {
     let module = parse_wat(wat);
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))
@@ -1512,12 +1573,13 @@ fn test_fd_readdir() {
     );
 }
 
-#[test]
-fn test_path_open_directory() {
+#[rstest]
+#[case::structured(EngineKind::Structured)]
+#[case::flat(EngineKind::Flat)]
+fn test_path_open_directory(#[case] engine: EngineKind) {
     // Open a subdirectory via path_open, then fd_readdir on the opened fd
-    let dir = std::env::temp_dir().join("krasm_test_path_open_dir");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp = temp_dir();
+    let dir = temp.path();
     let sub = dir.join("mydir");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("file1.txt"), "one").unwrap();
@@ -1601,6 +1663,7 @@ fn test_path_open_directory() {
     let module = parse_wat(wat);
     let ctx = Arc::new(WasiContext::builder().preopen_dir(dir_str, dir_str).build());
     let mut store = Store::new();
+    store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
         .create_instance(Arc::new(module), Some(&imports))

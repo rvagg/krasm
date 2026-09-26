@@ -9,10 +9,11 @@
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use krasm::parser::module::{ExportIndex, ValueType};
 use krasm::parser::{self, reader::Reader};
-use krasm::runtime::{Store, Value};
+use krasm::runtime::{EngineKind, Store, Value};
 
 /// Configuration for generated module
 #[derive(Debug, Arbitrary)]
@@ -88,8 +89,8 @@ enum Instruction {
     Nop,
 
     // Memory operations (if memory exists)
-    I32Load(u8),   // offset
-    I32Store(u8),  // offset
+    I32Load(u8),  // offset
+    I32Store(u8), // offset
     I64Load(u8),
     I64Store(u8),
     MemorySize,
@@ -305,10 +306,11 @@ fn generate_module(config: &ModuleConfig) -> Vec<u8> {
     // Memory section (if enabled)
     if has_memory {
         module.push(0x05); // memory section
-        module.push(0x03); // size
+        module.push(0x04); // size
         module.push(0x01); // 1 memory
-        module.push(0x00); // no max
+        module.push(0x01); // minimum and maximum
         encode_uleb128(memory_pages as u64, &mut module);
+        encode_uleb128(4, &mut module); // Bound memory.grow as well as initial allocation.
     }
 
     // Export section
@@ -398,32 +400,33 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return, // Generated module was invalid (shouldn't happen often)
     };
 
-    let mut store = Store::new();
-    let instance_id = match store.create_instance(&module, None) {
-        Ok(id) => id,
-        Err(_) => return,
-    };
+    let module = Arc::new(module);
+    for engine in [EngineKind::Structured, EngineKind::Flat] {
+        let mut store = Store::new();
+        store.set_engine(engine);
+        let instance_id = match store.create_instance(Arc::clone(&module), None) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
 
-    // Execute main function with generated arguments
-    for export in &module.exports.exports {
-        if let ExportIndex::Function(func_idx) = export.index {
-            if let Some(func_type) = module.get_function_type_by_idx(func_idx) {
-                let mut args = Vec::new();
-                for (i, param_type) in func_type.parameters.iter().enumerate() {
-                    let arg_val = config.args.get(i).copied().unwrap_or(0);
-                    let val = match param_type {
-                        ValueType::I32 => Value::I32(arg_val as i32),
-                        ValueType::I64 => Value::I64(arg_val),
-                        ValueType::F32 => Value::F32(arg_val as f32),
-                        ValueType::F64 => Value::F64(arg_val as f64),
-                        ValueType::FuncRef => Value::FuncRef(None),
-                        ValueType::ExternRef => Value::ExternRef(None),
-                        ValueType::V128 => continue, // SIMD not yet supported
-                    };
-                    args.push(val);
+        for export in &module.exports.exports {
+            if let ExportIndex::Function(func_idx) = export.index {
+                if let Some(func_type) = module.get_function_type_by_idx(func_idx) {
+                    let args = func_type
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(i, param_type)| {
+                            let arg = config.args.get(i).copied().unwrap_or(0);
+                            match param_type {
+                                ValueType::I32 => Value::I32(arg as i32),
+                                ValueType::I64 => Value::I64(arg),
+                                _ => unreachable!("generated parameters are integers"),
+                            }
+                        })
+                        .collect();
+                    let _ = store.invoke_export(instance_id, &export.name, args, Some(100_000));
                 }
-                // Use an instruction budget to prevent infinite loops from hanging the fuzzer
-                let _ = store.invoke_export(instance_id, &export.name, args, Some(100_000));
             }
         }
     }

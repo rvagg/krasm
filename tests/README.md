@@ -1,13 +1,18 @@
-# KASM Test Infrastructure
+# krasm Test Infrastructure
 
-This directory contains the test infrastructure for the KASM WebAssembly parser.
+Tests cover parsing, encoding, disassembly, execution and WASI integration.
 
 ## Test Files
 
-- `parser_tests.rs` - Main test harness that runs WebAssembly spec tests
+- `wast_tests.rs` - Native WAST runner for pinned spec files and local regressions
+- `wasi_tests.rs` - WASI integration scenarios
+- `encoder_tests.rs` - Binary round trips
+- `dump_tests.rs` - Disassembly fixture comparisons
 - `compile_test.mjs` - Compiles .wast files to .json format for testing
 - `extract_utf8_tests.mjs` - Extracts UTF-8 validation tests to Rust unit tests
 - `spec/` - Directory containing compiled test fixtures in JSON format
+- `spec/wast/` - Pinned upstream WAST fixtures
+- `regressions/` - Local WAST regression cases
 
 ## Running Tests
 
@@ -16,9 +21,17 @@ This directory contains the test infrastructure for the KASM WebAssembly parser.
 cargo test
 ```
 
-### Spec Tests Only
+### Execution Tests
+
+Every WAST file and WASI scenario runs explicitly on both structured and flat
+engines, independently of the library default. WASI filesystem cases own isolated
+temporary directories so the engine cases can run concurrently.
+
 ```bash
-cargo test --test parser_tests
+cargo test --test wast_tests
+cargo test --test wasi_tests
+cargo test --test wast_tests -- structured
+cargo test --test wast_tests -- flat
 ```
 
 ### UTF-8 Tests Only
@@ -28,13 +41,13 @@ cargo test utf8_validation
 
 ## Adding New Tests
 
-1. Copy the .wast file from wasm-spec/test/core/
-2. Compile it to JSON:
-   ```bash
-   node compile_test.mjs ../wasm-spec/test/core/testname.wast ./spec/testname.json
-   ```
-3. Run the tests to see failures
-4. Fix parser/validation issues until tests pass
+For runtime regressions, add a `.wast` file to `regressions/`; the native runner
+discovers it automatically and runs both engines. Keep upstream fixtures pinned.
+For dump fixtures, compile upstream WAST to JSON:
+
+```bash
+node compile_test.mjs ../wasm-spec/test/core/testname.wast ./spec/testname.json
+```
 
 ## UTF-8 Validation Tests
 

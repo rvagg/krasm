@@ -36,7 +36,7 @@ enum Commands {
         dirs: Vec<String>,
 
         /// Interpreter engine
-        #[arg(long, value_enum, default_value_t = EngineArg::Structured)]
+        #[arg(long, value_enum, default_value_t = EngineArg::Flat)]
         engine: EngineArg,
 
         /// Arguments to pass to the module (after --)

@@ -1792,6 +1792,7 @@ mod tests {
         // Callee instantiated on the structured engine, caller on the flat
         // engine: the Store's dispatch loop bridges the two.
         let mut store = Store::new();
+        store.set_engine(EngineKind::Structured);
 
         let callee = crate::wat::parse("(module (func (export \"ten\") (result i32) (i32.const 10)))")
             .expect("WAT parse failed");

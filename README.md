@@ -9,12 +9,12 @@ An experimental & educational WebAssembly runtime implementation in Rust that pr
 - **Binary parser** with full section support and validation
 - **WAT parser** for the WebAssembly text format
 - **Binary encoder** producing spec-compliant `.wasm` from any parsed Module
-- **State machine interpreter** supporting WebAssembly 2.0
+- **Flat bytecode interpreter** supporting WebAssembly 2.0
 - **Full SIMD (v128)** support: all v128 instructions across integer, float, bitwise, comparison, shuffle, conversion, and memory operations
 - **WASI preview1** support: fd_read/write, args, environ, proc_exit, filesystem preopens
 - **AssemblyScript** compatibility (env.abort with UTF-16 string extraction)
 - Disassembler compatible with WABT wasm-objdump format
-- Structured control flow execution following WebAssembly design intent
+- Structured-tree interpreter retained for explicit selection and comparison
 - Linear memory with bounds checking and page-based growth
 - Tables with indirect function calls (call_indirect)
 - Cross-module linking via Store-based architecture
@@ -28,6 +28,7 @@ An experimental & educational WebAssembly runtime implementation in Rust that pr
 krasm run examples/hello.wat
 krasm run module.wasm -- arg1 arg2
 krasm run module.wasm --dir ./data -- arg1
+krasm run module.wasm --engine structured      # select the alternative interpreter
 
 # Compile WAT to binary
 krasm compile examples/hello.wat              # produces examples/hello.wasm
@@ -46,6 +47,14 @@ cargo run --bin krasm -- run examples/hello.wat
 cargo run --bin krasm -- compile examples/hello.wat
 cargo run --bin krasm -- dump module.wasm -d
 ```
+
+The CLI and library default to the flat bytecode engine. Library callers can
+select `EngineKind::Structured` with `Store::set_engine()` before creating an
+instance; existing instances retain their engine. Start functions use their
+instance's engine, and cross-module calls can bridge both engines.
+
+Instruction budgets count engine operations, not portable WebAssembly fuel.
+The same budget can stop at different points on the two engines.
 
 ## Project Structure
 
@@ -67,6 +76,11 @@ fuzz/               Fuzz targets (binary parser, executor, WAT lexer/parser)
 cargo test              # Run all tests
 cargo bench             # Run benchmarks
 ```
+
+WAST and WASI integration tests explicitly exercise both engines. Execution
+benchmarks compare both through the Store API, with instantiation timed
+separately. See [performance notes](docs/PERFORMANCE.md) for the switchover
+measurements and bounded fuzzing coverage.
 
 ## License
 

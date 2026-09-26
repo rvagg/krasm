@@ -27,16 +27,12 @@ mod tests {
     }
 
     impl WastRunner {
-        fn new() -> Self {
+        fn new(engine: EngineKind) -> Self {
             let mut module_registry = HashMap::new();
             module_registry.insert("spectest".to_string(), create_spectest_module());
 
             let mut store = Store::new();
-            // KRASM_FLAT=1 runs the whole suite on the flat bytecode engine,
-            // as a differential harness against the structured default.
-            if std::env::var_os("KRASM_FLAT").is_some_and(|v| v == "1") {
-                store.set_engine(EngineKind::Flat);
-            }
+            store.set_engine(engine);
             let spectest_imports = create_spectest_imports(&mut store);
 
             WastRunner {
@@ -290,14 +286,14 @@ mod tests {
         false
     }
 
-    fn run_wast_file(path: &PathBuf) {
+    fn run_wast_file(path: &PathBuf, engine: EngineKind) {
         let file_name = path.file_name().unwrap().to_str().unwrap();
 
         let source = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
         let script = parse_script(&source).unwrap_or_else(|e| panic!("failed to parse {file_name}: {e}"));
 
-        let mut runner = WastRunner::new();
+        let mut runner = WastRunner::new(engine);
         let mut stats = Stats::default();
         let mut failures: Vec<String> = Vec::new();
         let mut module_broken = false; // Set when a module fails to instantiate
@@ -503,7 +499,7 @@ mod tests {
                 String::new()
             };
             println!(
-                "PASS {file_name}: {} modules, {} assert_return, {} assert_trap, \
+                "PASS {file_name} ({engine:?}): {} modules, {} assert_return, {} assert_trap, \
                  {} assert_invalid, {} assert_malformed, {} assert_unlinkable, \
                  {} assert_uninstantiable, {} assert_exhaustion, \
                  {} registers, {} actions{skipped_msg}",
@@ -533,7 +529,7 @@ mod tests {
                 String::new()
             };
             panic!(
-                "FAIL {file_name}: {total_passed} passed, {} failed{skipped_msg}\n  {}",
+                "FAIL {file_name} ({engine:?}): {total_passed} passed, {} failed{skipped_msg}\n  {}",
                 failures.len(),
                 failures.join("\n  ")
             );
@@ -572,17 +568,23 @@ mod tests {
     }
 
     #[rstest]
-    fn test_core_wast(#[files("tests/spec/wast/*.wast")] path: PathBuf) {
-        run_wast_file(&path);
+    #[case::structured(EngineKind::Structured)]
+    #[case::flat(EngineKind::Flat)]
+    fn test_core_wast(#[case] engine: EngineKind, #[files("tests/spec/wast/*.wast")] path: PathBuf) {
+        run_wast_file(&path, engine);
     }
 
     #[rstest]
-    fn test_simd_wast(#[files("tests/spec/wast/simd/*.wast")] path: PathBuf) {
-        run_wast_file(&path);
+    #[case::structured(EngineKind::Structured)]
+    #[case::flat(EngineKind::Flat)]
+    fn test_simd_wast(#[case] engine: EngineKind, #[files("tests/spec/wast/simd/*.wast")] path: PathBuf) {
+        run_wast_file(&path, engine);
     }
 
     #[rstest]
-    fn test_regression_wast(#[files("tests/regressions/*.wast")] path: PathBuf) {
-        run_wast_file(&path);
+    #[case::structured(EngineKind::Structured)]
+    #[case::flat(EngineKind::Flat)]
+    fn test_regression_wast(#[case] engine: EngineKind, #[files("tests/regressions/*.wast")] path: PathBuf) {
+        run_wast_file(&path, engine);
     }
 }

@@ -35,10 +35,10 @@ pub use value::Value;
 /// engine at creation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EngineKind {
-    /// Structured-tree interpreter, the default.
-    #[default]
+    /// Structured-tree interpreter.
     Structured,
-    /// Flat bytecode interpreter with pre-resolved branches.
+    /// Flat bytecode interpreter with pre-resolved branches, the default.
+    #[default]
     Flat,
 }
 

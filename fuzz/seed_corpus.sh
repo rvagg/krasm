@@ -78,9 +78,21 @@ done
 
 echo "  Processed $json_count JSON files"
 
-# Copy parse_module corpus to execute_module (it parses first anyway)
-echo "Copying to execute_module corpus..."
-cp -n "$SCRIPT_DIR/corpus/parse_module"/* "$SCRIPT_DIR/corpus/execute_module/" 2>/dev/null || true
+# execute_module reserves a 64-byte suffix for typed function arguments.
+echo "Seeding execute_module with argument suffixes..."
+python3 - "$SCRIPT_DIR/corpus/parse_module" "$SCRIPT_DIR/corpus/execute_module" <<'PYTHON'
+import hashlib
+import sys
+from pathlib import Path
+
+source, destination = map(Path, sys.argv[1:])
+for path in source.iterdir():
+    if path.is_file():
+        data = path.read_bytes() + bytes(64)
+        target = destination / hashlib.sha1(data).hexdigest()
+        if not target.exists():
+            target.write_bytes(data)
+PYTHON
 
 # Create minimal seeds for generate_module (uses arbitrary, not raw wasm)
 echo "Creating minimal seeds for generate_module..."

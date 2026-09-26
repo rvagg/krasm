@@ -4,9 +4,7 @@
 //! and overall execution throughput.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use krasm::runtime::compiler::compile_module;
-use krasm::runtime::flat_executor::execute_flat;
-use krasm::{Module, Store, Value};
+use krasm::{EngineKind, Module, Store, Value};
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -18,8 +16,9 @@ fn load_module(name: &str) -> Module {
 }
 
 /// Create a store and instantiate a module
-fn instantiate(module: Arc<Module>) -> (Store, usize) {
+fn instantiate(module: Arc<Module>, engine: EngineKind) -> (Store, usize) {
     let mut store = Store::new();
+    store.set_engine(engine);
     let instance_id = store.create_instance(module, None).expect("Failed to instantiate");
     (store, instance_id)
 }
@@ -35,11 +34,11 @@ fn execute(
 }
 
 /// Verify module correctness before benchmarking
-fn verify_modules() {
+fn verify_modules(engine: EngineKind) {
     // noop_loop: run(n) should return n
     {
         let module = Arc::new(load_module("noop_loop"));
-        let (mut store, instance_id) = instantiate(Arc::clone(&module));
+        let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
         let result = execute(&mut store, instance_id, "run", vec![Value::I32(1000)]).unwrap();
         assert_eq!(result, vec![Value::I32(1000)], "noop_loop(1000) should be 1000");
     }
@@ -47,7 +46,7 @@ fn verify_modules() {
     // fib_iterative: verify known values
     {
         let module = Arc::new(load_module("fib_iterative"));
-        let (mut store, instance_id) = instantiate(Arc::clone(&module));
+        let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
 
         let cases = [(0, 0), (1, 1), (10, 55), (20, 6765), (40, 102334155)];
         for (n, expected) in cases {
@@ -65,7 +64,7 @@ fn verify_modules() {
     // fib_recursive: verify known values
     {
         let module = Arc::new(load_module("fib_recursive"));
-        let (mut store, instance_id) = instantiate(Arc::clone(&module));
+        let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
 
         let cases = [(0, 0), (1, 1), (10, 55), (20, 6765)];
         for (n, expected) in cases {
@@ -83,7 +82,7 @@ fn verify_modules() {
     // memcpy: fill, copy, verify
     {
         let module = Arc::new(load_module("memcpy"));
-        let (mut store, instance_id) = instantiate(Arc::clone(&module));
+        let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
 
         // Fill source with pattern
         let result = execute(
@@ -119,11 +118,10 @@ fn verify_modules() {
     // primes: verify known counts
     {
         let module = Arc::new(load_module("primes"));
+        let (mut store, instance_id) = instantiate(module, engine);
 
         let cases = [(10, 4), (100, 25), (1000, 168), (10000, 1229)];
         for (limit, expected) in cases {
-            // Need fresh instance since sieve modifies memory
-            let (mut store, instance_id) = instantiate(Arc::clone(&module));
             let result = execute(&mut store, instance_id, "count_primes", vec![Value::I32(limit)]).unwrap();
             assert_eq!(
                 result,
@@ -135,16 +133,15 @@ fn verify_modules() {
         }
     }
 
-    println!("All module correctness checks passed.");
+    println!("{engine:?}: all module correctness checks passed.");
 }
 
-fn bench_noop_loop(c: &mut Criterion) {
+fn bench_noop_loop(c: &mut Criterion, engine: EngineKind) {
     let module = Arc::new(load_module("noop_loop"));
-
-    let mut group = c.benchmark_group("dispatch");
+    let mut group = c.benchmark_group(format!("dispatch/{engine:?}"));
     for iterations in [1_000, 10_000, 100_000, 1_000_000] {
         group.bench_with_input(BenchmarkId::new("noop_loop", iterations), &iterations, |b, &n| {
-            let (mut store, instance_id) = instantiate(Arc::clone(&module));
+            let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
             b.iter(|| {
                 let result = execute(&mut store, instance_id, "run", vec![Value::I32(n)]).unwrap();
                 black_box(result)
@@ -154,13 +151,12 @@ fn bench_noop_loop(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_fib_iterative(c: &mut Criterion) {
+fn bench_fib_iterative(c: &mut Criterion, engine: EngineKind) {
     let module = Arc::new(load_module("fib_iterative"));
-
-    let mut group = c.benchmark_group("compute");
+    let mut group = c.benchmark_group(format!("compute/{engine:?}"));
     for n in [10, 20, 30, 40, 46] {
         group.bench_with_input(BenchmarkId::new("fib_iterative", n), &n, |b, &n| {
-            let (mut store, instance_id) = instantiate(Arc::clone(&module));
+            let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
             b.iter(|| {
                 let result = execute(&mut store, instance_id, "fib", vec![Value::I32(n)]).unwrap();
                 black_box(result)
@@ -170,15 +166,12 @@ fn bench_fib_iterative(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_fib_recursive(c: &mut Criterion) {
+fn bench_fib_recursive(c: &mut Criterion, engine: EngineKind) {
     let module = Arc::new(load_module("fib_recursive"));
-
-    let mut group = c.benchmark_group("call_overhead");
-    // Note: n=30 makes ~2.7M calls, n=35 makes ~29M calls
-    // Keep n small for reasonable benchmark times
+    let mut group = c.benchmark_group(format!("call_overhead/{engine:?}"));
     for n in [10, 15, 20, 25] {
         group.bench_with_input(BenchmarkId::new("fib_recursive", n), &n, |b, &n| {
-            let (mut store, instance_id) = instantiate(Arc::clone(&module));
+            let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
             b.iter(|| {
                 let result = execute(&mut store, instance_id, "fib", vec![Value::I32(n)]).unwrap();
                 black_box(result)
@@ -188,14 +181,12 @@ fn bench_fib_recursive(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_memcpy(c: &mut Criterion) {
+fn bench_memcpy(c: &mut Criterion, engine: EngineKind) {
     let module = Arc::new(load_module("memcpy"));
-
-    let mut group = c.benchmark_group("memory");
+    let mut group = c.benchmark_group(format!("memory/{engine:?}"));
     for size in [100, 1000, 4000] {
         group.bench_with_input(BenchmarkId::new("memcpy", size), &size, |b, &size| {
-            let (mut store, instance_id) = instantiate(Arc::clone(&module));
-            // Pre-fill source buffer
+            let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
             execute(
                 &mut store,
                 instance_id,
@@ -218,15 +209,14 @@ fn bench_memcpy(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_primes(c: &mut Criterion) {
+fn bench_primes(c: &mut Criterion, engine: EngineKind) {
     let module = Arc::new(load_module("primes"));
-
-    let mut group = c.benchmark_group("mixed");
+    let mut group = c.benchmark_group(format!("mixed/{engine:?}"));
     for limit in [1000, 10000, 50000] {
         group.bench_with_input(BenchmarkId::new("primes", limit), &limit, |b, &limit| {
+            // count_primes clears its sieve on every invocation.
+            let (mut store, instance_id) = instantiate(Arc::clone(&module), engine);
             b.iter(|| {
-                // Fresh instance each time (sieve modifies memory)
-                let (mut store, instance_id) = instantiate(Arc::clone(&module));
                 let result = execute(&mut store, instance_id, "count_primes", vec![Value::I32(limit)]).unwrap();
                 black_box(result)
             });
@@ -235,67 +225,25 @@ fn bench_primes(c: &mut Criterion) {
     group.finish();
 }
 
-// -- Flat bytecode executor benchmarks --
-
-fn bench_flat_noop_loop(c: &mut Criterion) {
-    let module = load_module("noop_loop");
-    let funcs = compile_module(&module);
-
-    let mut group = c.benchmark_group("flat_dispatch");
-    for iterations in [1_000, 10_000, 100_000, 1_000_000] {
-        group.bench_with_input(BenchmarkId::new("noop_loop", iterations), &iterations, |b, &n| {
-            b.iter(|| {
-                let result = execute_flat(&funcs, 0, &[Value::I32(n)], None).unwrap();
-                black_box(result)
-            });
-        });
+fn bench_instantiation(c: &mut Criterion, engine: EngineKind) {
+    let mut group = c.benchmark_group(format!("instantiation/{engine:?}"));
+    for name in ["noop_loop", "fib_iterative", "fib_recursive", "memcpy", "primes"] {
+        let module = Arc::new(load_module(name));
+        group.bench_function(name, |b| b.iter(|| black_box(instantiate(Arc::clone(&module), engine))));
     }
     group.finish();
 }
 
-fn bench_flat_fib_iterative(c: &mut Criterion) {
-    let module = load_module("fib_iterative");
-    let funcs = compile_module(&module);
-
-    let mut group = c.benchmark_group("flat_compute");
-    for n in [10, 20, 30, 40, 46] {
-        group.bench_with_input(BenchmarkId::new("fib_iterative", n), &n, |b, &n| {
-            b.iter(|| {
-                let result = execute_flat(&funcs, 0, &[Value::I32(n)], None).unwrap();
-                black_box(result)
-            });
-        });
-    }
-    group.finish();
-}
-
-fn bench_flat_fib_recursive(c: &mut Criterion) {
-    let module = load_module("fib_recursive");
-    let funcs = compile_module(&module);
-
-    let mut group = c.benchmark_group("flat_call_overhead");
-    for n in [10, 15, 20, 25] {
-        group.bench_with_input(BenchmarkId::new("fib_recursive", n), &n, |b, &n| {
-            b.iter(|| {
-                let result = execute_flat(&funcs, 0, &[Value::I32(n)], None).unwrap();
-                black_box(result)
-            });
-        });
-    }
-    group.finish();
-}
-
-// Run verification before benchmarks
 fn verify_and_bench(c: &mut Criterion) {
-    verify_modules();
-    bench_noop_loop(c);
-    bench_fib_iterative(c);
-    bench_fib_recursive(c);
-    bench_memcpy(c);
-    bench_primes(c);
-    bench_flat_noop_loop(c);
-    bench_flat_fib_iterative(c);
-    bench_flat_fib_recursive(c);
+    for engine in [EngineKind::Structured, EngineKind::Flat] {
+        verify_modules(engine);
+        bench_noop_loop(c, engine);
+        bench_fib_iterative(c, engine);
+        bench_fib_recursive(c, engine);
+        bench_memcpy(c, engine);
+        bench_primes(c, engine);
+        bench_instantiation(c, engine);
+    }
 }
 
 criterion_group!(benches, verify_and_bench);
