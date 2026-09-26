@@ -792,6 +792,36 @@ fn local_tee() {
 }
 
 #[test]
+fn local_tee_errors_clear_operand_stack() {
+    let mut executor = FlatExecutor::new();
+    let valid = compile_wat("(module (func (result i32) i32.const 9))");
+    for has_values in [false, true] {
+        let mut ops = Vec::new();
+        if has_values {
+            ops.extend([Op::I32Const(9), Op::I32Const(42)]);
+        }
+        ops.push(Op::LocalTee { index: 1 });
+        let funcs = [CompiledFunction {
+            ops,
+            local_defaults: vec![Value::I32(0)],
+            param_count: 0,
+            result_count: 0,
+        }];
+        let error = executor.invoke(&funcs, 0, &[], None).unwrap_err();
+        if has_values {
+            assert!(matches!(error, RuntimeError::LocalIndexOutOfBounds(1)));
+        } else {
+            assert!(matches!(error, RuntimeError::StackUnderflow));
+        }
+        assert_eq!(executor.stack.len(), 0);
+        assert_eq!(
+            expect_complete(executor.invoke(&valid, 0, &[], None).unwrap()),
+            vec![Value::I32(9)]
+        );
+    }
+}
+
+#[test]
 fn locals_default_to_zero() {
     let result = compile_and_run(
         "(module (func (result i32)

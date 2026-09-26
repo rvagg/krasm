@@ -921,28 +921,28 @@ impl FlatExecutor {
                 // -- Local variables --
                 // These interact with the locals array directly; no ops function.
                 Op::LocalGet { index } => {
-                    let val = locals
-                        .get(*index as usize)
-                        .copied()
-                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    let Some(&val) = locals.get(*index as usize) else {
+                        return Err(RuntimeError::LocalIndexOutOfBounds(*index));
+                    };
                     stack.push(val);
                     pc += 1;
                 }
                 Op::LocalSet { index } => {
                     let val = stack.pop()?;
-                    let slot = locals
-                        .get_mut(*index as usize)
-                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    let Some(slot) = locals.get_mut(*index as usize) else {
+                        return Err(RuntimeError::LocalIndexOutOfBounds(*index));
+                    };
                     *slot = val;
                     pc += 1;
                 }
                 Op::LocalTee { index } => {
-                    let val = stack.pop()?;
-                    let slot = locals
-                        .get_mut(*index as usize)
-                        .ok_or(RuntimeError::LocalIndexOutOfBounds(*index))?;
+                    let Some(&val) = stack.peek() else {
+                        return Err(RuntimeError::StackUnderflow);
+                    };
+                    let Some(slot) = locals.get_mut(*index as usize) else {
+                        return Err(RuntimeError::LocalIndexOutOfBounds(*index));
+                    };
                     *slot = val;
-                    stack.push(val);
                     pc += 1;
                 }
 
