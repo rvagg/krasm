@@ -9,6 +9,17 @@ pub struct Stack {
     values: Vec<Value>,
 }
 
+macro_rules! typed_pop {
+    ($name:ident, $variant:ident, $ty:ty) => {
+        pub fn $name(&mut self) -> Result<$ty, RuntimeError> {
+            match self.pop()? {
+                Value::$variant(value) => Ok(value),
+                value => Err(type_mismatch(ValueType::$variant, value.typ())),
+            }
+        }
+    };
+}
+
 impl Stack {
     pub fn new() -> Self {
         Stack { values: Vec::new() }
@@ -19,65 +30,27 @@ impl Stack {
     }
 
     pub fn pop(&mut self) -> Result<Value, RuntimeError> {
-        self.values.pop().ok_or(RuntimeError::StackUnderflow)
+        // Construct the error only on underflow; eager errors can retain drop glue.
+        match self.values.pop() {
+            Some(value) => Ok(value),
+            None => Err(RuntimeError::StackUnderflow),
+        }
     }
 
     /// Pop a value and check its type, returning `TypeMismatch` on failure.
     pub fn pop_typed(&mut self, expected_type: ValueType) -> Result<Value, RuntimeError> {
         let value = self.pop()?;
         if value.typ() != expected_type {
-            return Err(RuntimeError::TypeMismatch {
-                expected: format!("{expected_type:?}"),
-                actual: format!("{:?}", value.typ()),
-            });
+            return Err(type_mismatch(expected_type, value.typ()));
         }
         Ok(value)
     }
 
-    pub fn pop_i32(&mut self) -> Result<i32, RuntimeError> {
-        self.pop_typed(ValueType::I32)?
-            .as_i32()
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                expected: "i32".to_string(),
-                actual: "non-i32".to_string(),
-            })
-    }
-
-    pub fn pop_i64(&mut self) -> Result<i64, RuntimeError> {
-        self.pop_typed(ValueType::I64)?
-            .as_i64()
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                expected: "i64".to_string(),
-                actual: "non-i64".to_string(),
-            })
-    }
-
-    pub fn pop_f32(&mut self) -> Result<f32, RuntimeError> {
-        self.pop_typed(ValueType::F32)?
-            .as_f32()
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                expected: "f32".to_string(),
-                actual: "non-f32".to_string(),
-            })
-    }
-
-    pub fn pop_f64(&mut self) -> Result<f64, RuntimeError> {
-        self.pop_typed(ValueType::F64)?
-            .as_f64()
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                expected: "f64".to_string(),
-                actual: "non-f64".to_string(),
-            })
-    }
-
-    pub fn pop_v128(&mut self) -> Result<[u8; 16], RuntimeError> {
-        self.pop_typed(ValueType::V128)?
-            .as_v128()
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                expected: "v128".to_string(),
-                actual: "non-v128".to_string(),
-            })
-    }
+    typed_pop!(pop_i32, I32, i32);
+    typed_pop!(pop_i64, I64, i64);
+    typed_pop!(pop_f32, F32, f32);
+    typed_pop!(pop_f64, F64, f64);
+    typed_pop!(pop_v128, V128, [u8; 16]);
 
     pub fn len(&self) -> usize {
         self.values.len()
@@ -94,6 +67,14 @@ impl Stack {
     /// Peek at the top value without popping.
     pub fn peek(&self) -> Option<&Value> {
         self.values.last()
+    }
+}
+
+#[cold]
+fn type_mismatch(expected: ValueType, actual: ValueType) -> RuntimeError {
+    RuntimeError::TypeMismatch {
+        expected: format!("{expected:?}"),
+        actual: format!("{actual:?}"),
     }
 }
 
@@ -141,6 +122,43 @@ mod tests {
 
         stack.push(Value::F64(2.5));
         assert_eq!(stack.pop_f64().unwrap(), 2.5);
+    }
+
+    #[test]
+    fn test_typed_pop_mismatches_consume_only_top() {
+        fn check<T: std::fmt::Debug>(pop: fn(&mut Stack) -> Result<T, RuntimeError>, expected_type: ValueType) {
+            for value in [
+                Value::I32(1),
+                Value::I64(1),
+                Value::F32(1.0),
+                Value::F64(1.0),
+                Value::V128([1; 16]),
+                Value::FuncRef(None),
+                Value::ExternRef(None),
+            ] {
+                if value.typ() == expected_type {
+                    continue;
+                }
+                let mut stack = Stack::new();
+                stack.push(Value::I32(91));
+                stack.push(value);
+                match pop(&mut stack).unwrap_err() {
+                    RuntimeError::TypeMismatch { expected, actual } => {
+                        assert_eq!(expected, format!("{expected_type:?}"));
+                        assert_eq!(actual, format!("{:?}", value.typ()));
+                    }
+                    other => panic!("expected type mismatch, got {other:?}"),
+                }
+                assert_eq!(stack.pop().unwrap(), Value::I32(91));
+                assert!(matches!(pop(&mut stack), Err(RuntimeError::StackUnderflow)));
+            }
+        }
+
+        check(Stack::pop_i32, ValueType::I32);
+        check(Stack::pop_i64, ValueType::I64);
+        check(Stack::pop_f32, ValueType::F32);
+        check(Stack::pop_f64, ValueType::F64);
+        check(Stack::pop_v128, ValueType::V128);
     }
 
     #[test]
