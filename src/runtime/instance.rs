@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// 1. `new_unlinked` — allocate with resource addresses
 /// 2. `link_functions` — populate function addresses, then initialise globals,
 ///    element segments, and data sections
-/// 3. `execute_start` — run the start function if present
+/// 3. `get_start_function_addr` — resolve the start function for Store to execute
 pub struct Instance {
     module: Arc<Module>,
     exports: HashMap<String, u32>, // Maps export name to function index
@@ -39,8 +39,7 @@ pub struct Instance {
     /// bulk-memory instructions.
     segments: SegmentState,
     /// Flat bytecode engine, present when the instance was created with
-    /// `EngineKind::Flat`. Local start functions still use the structured
-    /// executor; exported calls and resumption use the selected engine.
+    /// `EngineKind::Flat`. Drives function invocation and resumption.
     flat: Option<FlatEngine>,
 }
 
@@ -141,42 +140,17 @@ impl Instance {
         Ok(())
     }
 
-    /// Execute the start function if present.
-    ///
-    /// Returns `Some(FuncAddr)` if the start function is imported and needs
-    /// external execution. Returns `None` if handled locally or no start function.
-    pub(super) fn execute_start(&mut self, resources: &mut Resources) -> Result<Option<FuncAddr>, RuntimeError> {
-        if self.module.start.has_position() {
-            let start_func_idx = self.module.start.start;
-            let num_imported_functions = self.module.imports.function_count();
-
-            if (start_func_idx as usize) < num_imported_functions {
-                // Imported start function — return FuncAddr for the Store to execute
-                let func_addr = self
-                    .function_addresses
-                    .get(start_func_idx as usize)
-                    .copied()
-                    .ok_or(RuntimeError::FunctionIndexOutOfBounds(start_func_idx))?;
-                return Ok(Some(func_addr));
-            }
-
-            let code_idx = start_func_idx as usize - num_imported_functions;
-            let func_body = self
-                .module
-                .code
-                .get(code_idx as u32)
-                .ok_or(RuntimeError::FunctionIndexOutOfBounds(start_func_idx))?;
-
-            self.executor.execute_function_with_locals(
-                &func_body.body,
-                vec![],
-                &[],
-                Some(&func_body.locals),
-                resources,
-                &mut self.segments,
-            )?;
+    /// Resolve the start function's address for Store to execute, if present.
+    pub(super) fn get_start_function_addr(&self) -> Result<Option<FuncAddr>, RuntimeError> {
+        if !self.module.start.has_position() {
+            return Ok(None);
         }
-        Ok(None)
+        let func_idx = self.module.start.start;
+        self.function_addresses
+            .get(func_idx as usize)
+            .copied()
+            .map(Some)
+            .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))
     }
 
     /// Invoke a function by its local function index

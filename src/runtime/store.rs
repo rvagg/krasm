@@ -658,20 +658,10 @@ impl<T> Store<T> {
 
     /// Execute the start function for a newly instantiated module.
     fn execute_start_function(&mut self, instance_id: usize) -> Result<(), RuntimeError> {
-        // Execute start in a scoped borrow so instance/resources are released before dispatch
-        let start_result = {
-            let instance = &mut self.instances[instance_id];
-            let resources = &mut self.resources;
-            instance.execute_start(resources)?
-        };
-
-        match start_result {
-            Some(func_addr) => {
-                // Imported start function -- dispatch through Store
-                self.execute_one(func_addr, vec![], Some(instance_id)).map(|_| ())
-            }
-            None => Ok(()),
+        if let Some(func_addr) = self.instances[instance_id].get_start_function_addr()? {
+            self.execute_with_caller(func_addr, vec![], Some(instance_id))?;
         }
+        Ok(())
     }
 
     /// Get a reference to an instance by ID
@@ -769,12 +759,25 @@ impl<T> Store<T> {
     ///                                       -> A completes -> return results
     /// ```
     pub fn execute(&mut self, addr: FuncAddr, args: Vec<Value>) -> Result<Vec<Value>, RuntimeError> {
+        self.execute_with_caller(addr, args, None)
+    }
+
+    /// Run the dispatch loop with an optional initial caller for a host function.
+    /// Suspended Wasm callers supply their own context for subsequent calls.
+    fn execute_with_caller(
+        &mut self,
+        addr: FuncAddr,
+        args: Vec<Value>,
+        calling_instance: Option<usize>,
+    ) -> Result<Vec<Value>, RuntimeError> {
         let mut call_stack: Vec<usize> = Vec::new();
         let mut action = PendingAction::Call(addr, args);
 
         loop {
             let (outcome, source_instance) = match action {
-                PendingAction::Call(addr, args) => self.execute_one(addr, args, call_stack.last().copied())?,
+                PendingAction::Call(addr, args) => {
+                    self.execute_one(addr, args, call_stack.last().copied().or(calling_instance))?
+                }
                 PendingAction::Resume(instance_id, results) => {
                     let instance = &mut self.instances[instance_id];
                     let resources = &mut self.resources;
@@ -1858,6 +1861,179 @@ mod tests {
                 store.invoke_export(id, "indirect", vec![], None).unwrap(),
                 vec![Value::I32(31)]
             );
+        }
+    }
+
+    #[test]
+    fn start_resumes_after_host_and_indirect_foreign_calls() {
+        for (engine, provider_engine) in [
+            (EngineKind::Structured, EngineKind::Flat),
+            (EngineKind::Flat, EngineKind::Structured),
+        ] {
+            let mut store = Store::with_data(Vec::<u32>::new());
+            let advance = store.wrap_with_caller(
+                |caller: &mut Caller<'_, Vec<u32>>, delta: i32| -> Result<i32, RuntimeError> {
+                    let memory = caller.memory_mut().unwrap();
+                    let next = memory.read_u32(0)? + delta as u32;
+                    memory.write_u32(0, next)?;
+                    caller.data_mut().push(next);
+                    Ok(next as i32)
+                },
+            );
+            let mut imports = ImportObject::new();
+            imports.add_function("host", "advance", advance);
+            store.set_engine(provider_engine);
+            let provider = crate::wat::parse(
+                "(module
+                    (import \"host\" \"advance\" (func $advance (param i32) (result i32)))
+                    (memory (export \"memory\") 1)
+                    (data (i32.const 0) \"\\64\")
+                    (func (export \"work\") (result i32)
+                        (i32.add (call $advance (i32.const 20)) (i32.const 1))))",
+            )
+            .unwrap();
+            let provider_id = store.create_instance(Arc::new(provider), Some(&imports)).unwrap();
+            store.register_exports(provider_id, "provider", &mut imports).unwrap();
+            store.set_engine(engine);
+            let consumer = crate::wat::parse(
+                "(module
+                    (type $value (func (result i32)))
+                    (import \"host\" \"advance\" (func $advance (param i32) (result i32)))
+                    (import \"provider\" \"work\" (func $work (type $value)))
+                    (memory 1)
+                    (data (i32.const 0) \"\\05\")
+                    (table 1 funcref)
+                    (elem (i32.const 0) func $work)
+                    (func $boot (local $saved i32)
+                        (local.set $saved (call $advance (i32.const 2)))
+                        (i32.store (i32.const 4)
+                            (i32.add (local.get $saved) (call_indirect (type $value) (i32.const 0))))
+                        (drop (call $advance (i32.const 3))))
+                    (start $boot)
+                    (func (export \"read\") (result i32 i32)
+                        (i32.load (i32.const 0)) (i32.load (i32.const 4))))",
+            )
+            .unwrap();
+            let id = store.create_instance(Arc::new(consumer), Some(&imports)).unwrap();
+            assert_eq!(
+                store.invoke_export(id, "read", vec![], None).unwrap(),
+                vec![Value::I32(10), Value::I32(128)]
+            );
+            assert_eq!(store.data(), &[7, 120, 10]);
+            let memory = store
+                .get_instance(provider_id)
+                .unwrap()
+                .get_memory_addr("memory")
+                .unwrap();
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 120);
+        }
+    }
+
+    #[test]
+    fn imported_host_start_has_initialised_caller_memory() {
+        for engine in [EngineKind::Structured, EngineKind::Flat] {
+            let mut store = Store::with_data(0_u32);
+            store.set_engine(engine);
+            let decoy = store.allocate_memory(Memory::new(1, None).unwrap());
+            store.get_memory_mut(decoy).unwrap().write_u32(0, 17).unwrap();
+            let boot = store.wrap_with_caller(|caller: &mut Caller<'_, u32>| -> Result<(), RuntimeError> {
+                let memory = caller.memory_mut().unwrap();
+                let initial = memory.read_u32(0)?;
+                memory.write_u32(0, 42)?;
+                *caller.data_mut() = initial;
+                Ok(())
+            });
+            let mut imports = ImportObject::new();
+            imports.add_function("host", "boot", boot);
+            let module = crate::wat::parse(
+                "(module
+                    (import \"host\" \"boot\" (func $boot))
+                    (memory (export \"memory\") 1)
+                    (data (i32.const 0) \"\\09\")
+                    (start $boot))",
+            )
+            .unwrap();
+            let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+            let memory = store.get_instance(id).unwrap().get_memory_addr("memory").unwrap();
+            assert_eq!(*store.data(), 9);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 42);
+            assert_eq!(store.get_memory(decoy).unwrap().read_u32(0).unwrap(), 17);
+        }
+    }
+
+    #[test]
+    fn imported_wasm_start_propagates_traps_and_preserves_side_effects() {
+        for (engine, provider_engine) in [
+            (EngineKind::Structured, EngineKind::Flat),
+            (EngineKind::Flat, EngineKind::Structured),
+        ] {
+            let mut store = Store::with_data(false);
+            let touch = store.wrap_with_caller(|caller: &mut Caller<'_, bool>| -> Result<(), RuntimeError> {
+                let memory = caller.memory_mut().unwrap();
+                memory.write_u32(0, memory.read_u32(0)? + 1)?;
+                if *caller.data() {
+                    return Err(RuntimeError::Trap("host start failed".into()));
+                }
+                Ok(())
+            });
+            let mut imports = ImportObject::new();
+            imports.add_function("host", "touch", touch);
+            store.set_engine(provider_engine);
+            let provider = crate::wat::parse(
+                "(module
+                    (import \"host\" \"touch\" (func $touch))
+                    (memory (export \"memory\") 1)
+                    (global $divisor (export \"divisor\") (mut i32) (i32.const 1))
+                    (func (export \"boot\")
+                        (call $touch)
+                        (drop (i32.div_u (i32.const 1) (global.get $divisor)))
+                        (i32.store (i32.const 4)
+                            (i32.add (i32.load (i32.const 4)) (i32.const 1)))))",
+            )
+            .unwrap();
+            let provider_id = store.create_instance(Arc::new(provider), Some(&imports)).unwrap();
+            store.register_exports(provider_id, "provider", &mut imports).unwrap();
+            let provider = store.get_instance(provider_id).unwrap();
+            let memory = provider.get_memory_addr("memory").unwrap();
+            let divisor = provider.get_global_addr("divisor").unwrap();
+            store.set_engine(engine);
+            let consumer = Arc::new(
+                crate::wat::parse(
+                    "(module
+                        (import \"provider\" \"boot\" (func $boot))
+                        (memory (export \"memory\") 1)
+                        (data (i32.const 0) \"\\ff\")
+                        (start $boot))",
+                )
+                .unwrap(),
+            );
+            let id = store.create_instance(Arc::clone(&consumer), Some(&imports)).unwrap();
+            let consumer_memory = store.get_instance(id).unwrap().get_memory_addr("memory").unwrap();
+            assert_eq!(store.get_memory(consumer_memory).unwrap().read_u32(0).unwrap(), 255);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 1);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 1);
+
+            store.set_global(divisor, Value::I32(0)).unwrap();
+            assert!(matches!(
+                store.create_instance(Arc::clone(&consumer), Some(&imports)),
+                Err(RuntimeError::DivisionByZero)
+            ));
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 2);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 1);
+
+            store.set_global(divisor, Value::I32(1)).unwrap();
+            *store.data_mut() = true;
+            assert!(matches!(
+                store.create_instance(Arc::clone(&consumer), Some(&imports)),
+                Err(RuntimeError::Trap(_))
+            ));
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 3);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 1);
+
+            *store.data_mut() = false;
+            store.create_instance(consumer, Some(&imports)).unwrap();
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 4);
+            assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 2);
         }
     }
 
