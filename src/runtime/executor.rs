@@ -21,14 +21,14 @@ use super::{
     control::{Label, LabelStack, LabelType},
     frame::CallFrame,
     imports::{default_value_for_type, is_global_mutable},
+    instance::SegmentState,
     ops,
     stack::Stack,
     store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr},
 };
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
-use crate::parser::module::{DataMode, ElementMode, ExternalKind, FunctionType, Locals, Module, ValueType};
+use crate::parser::module::{ExternalKind, FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{BlockEnd, StructuredFunction, StructuredInstruction};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Maximum call stack depth to prevent stack overflow
@@ -158,8 +158,7 @@ pub struct Executor {
     stack: Stack,
     /// Call stack for managing function calls (always has at least one frame during execution)
     call_stack: Vec<CallFrame>,
-    /// Segment state shared with the flat engine via `segments_mut()`
-    segments: SegmentState,
+
     /// Number of imported functions (cached from module, hot path)
     num_imported_functions: usize,
     /// Maps local function index to global FuncAddr (empty until linked)
@@ -176,18 +175,6 @@ pub struct Executor {
     saved_return_types: Vec<ValueType>,
     /// Optional instruction budget - execution stops when exhausted
     instruction_budget: Option<u64>,
-}
-
-/// Per-instance segment state, produced at instantiation and mutated by the
-/// bulk-memory instructions. Owned by the structured executor (which runs
-/// instantiation for every engine) and borrowed by the flat engine.
-#[derive(Default)]
-pub(crate) struct SegmentState {
-    /// Runtime element segments for table.init; elem.drop empties them.
-    pub(crate) element_segments: Vec<Vec<Option<Value>>>,
-    /// Data segments dropped via data.drop (active segments are logically
-    /// dropped after initialisation, per spec).
-    pub(crate) dropped_data: HashSet<u32>,
 }
 
 impl Executor {
@@ -208,7 +195,6 @@ impl Executor {
             module,
             stack: Stack::new(),
             call_stack: Vec::new(),
-            segments: SegmentState::default(),
             num_imported_functions,
             function_addresses: Vec::new(),
             memory_addresses,
@@ -218,269 +204,6 @@ impl Executor {
             saved_return_types: Vec::new(),
             instruction_budget: None,
         })
-    }
-
-    /// Create a standalone executor with its own Resources (test-only)
-    ///
-    /// Allocates memories, tables, and globals from the module definition into a
-    /// fresh Resources struct. Returns both the executor and its resources.
-    #[cfg(test)]
-    pub fn new(module: Arc<Module>) -> Result<(Self, Resources), RuntimeError> {
-        use super::memory::Memory;
-        use super::table::Table;
-
-        let mut resources = Resources::new();
-
-        // Allocate memories from module definition
-        let mut memory_addresses = Vec::new();
-        if !module.memory.memory.is_empty() {
-            if module.memory.memory.len() > 1 {
-                return Err(RuntimeError::MemoryError("multiple memories not supported".to_string()));
-            }
-            let mem_def = &module.memory.memory[0];
-            let memory = Memory::new(mem_def.limits.min, mem_def.limits.max)?;
-            let addr = MemoryAddr(resources.memories.len());
-            resources.memories.push(memory);
-            memory_addresses.push(addr);
-        }
-
-        // Allocate tables (imported + local)
-        let mut table_addresses = Vec::new();
-        for import in &module.imports.imports {
-            if let ExternalKind::Table(table_type) = &import.external_kind {
-                let table = Table::new(table_type.ref_type, table_type.limits)?;
-                let addr = TableAddr(resources.tables.len());
-                resources.tables.push(table);
-                table_addresses.push(addr);
-            }
-        }
-        for table_type in &module.table.tables {
-            let table = Table::new(table_type.ref_type, table_type.limits)?;
-            let addr = TableAddr(resources.tables.len());
-            resources.tables.push(table);
-            table_addresses.push(addr);
-        }
-
-        // Allocate globals (imported + local)
-        let mut global_addresses = Vec::new();
-        for import in &module.imports.imports {
-            if let ExternalKind::Global(global_type) = &import.external_kind {
-                let initial = default_value_for_type(global_type.value_type);
-                let addr = GlobalAddr(resources.globals.len());
-                resources.globals.push(initial);
-                global_addresses.push(addr);
-            }
-        }
-        for global in &module.globals.globals {
-            let default = default_value_for_type(global.global_type.value_type);
-            let addr = GlobalAddr(resources.globals.len());
-            resources.globals.push(default);
-            global_addresses.push(addr);
-        }
-
-        let mut executor = Self::new_unlinked(module, memory_addresses, table_addresses, global_addresses)?;
-
-        // Initialise data sections (writes module data into memory)
-        executor.initialise_data_sections(&mut resources)?;
-
-        Ok((executor, resources))
-    }
-
-    /// Initialise module globals with their init expressions
-    ///
-    /// This must be called after function_addresses have been linked, as global init
-    /// expressions can contain ref.func instructions that need the address mapping.
-    pub(super) fn initialise_globals(&mut self, resources: &mut Resources) -> Result<(), RuntimeError> {
-        // Calculate how many imported globals there are
-        let num_imported_globals = self
-            .module
-            .imports
-            .imports
-            .iter()
-            .filter(|import| matches!(import.external_kind, ExternalKind::Global(_)))
-            .count();
-
-        // Initialise module's own globals with their init expressions.
-        // Later globals can reference earlier ones, so order matters.
-        for (idx, global) in self.module.globals.globals.iter().enumerate() {
-            let global_idx = num_imported_globals + idx;
-
-            let initial_value = if global.init.is_empty() {
-                continue;
-            } else {
-                self.evaluate_const_expr(&global.init, resources)?
-            };
-
-            let addr = self.global_addresses[global_idx];
-            resources.globals[addr.0] = initial_value;
-        }
-
-        Ok(())
-    }
-
-    /// Initialise tables with element segments
-    ///
-    /// This must be called after function_addresses have been linked, as element
-    /// segments can contain ref.func instructions that need the address mapping.
-    pub(super) fn initialise_element_segments(&mut self, resources: &mut Resources) -> Result<(), RuntimeError> {
-        for element in &self.module.elements.elements {
-            let mut values = Vec::new();
-            for init_expr in &element.init {
-                let val = self.evaluate_const_expr(init_expr, resources)?;
-                values.push(Some(val));
-            }
-
-            match &element.mode {
-                ElementMode::Active { table_index, offset } => {
-                    let offset_val = self.evaluate_const_expr(offset, resources)?;
-                    let start_idx = match offset_val {
-                        Value::I32(v) => v as u32,
-                        _ => return Err(RuntimeError::InvalidConstExpr("element offset must be i32".to_string())),
-                    };
-
-                    let table = &mut resources.tables[self.resolve_table_idx(*table_index)?];
-                    table.init(start_idx, &values, 0, values.len() as u32)?;
-
-                    // Active segments are dropped after instantiation per spec
-                    self.segments.element_segments.push(Vec::new());
-                }
-                ElementMode::Declarative => {
-                    // Declarative segments are dropped immediately per spec
-                    self.segments.element_segments.push(Vec::new());
-                }
-                ElementMode::Passive => {
-                    // Passive segments remain available for table.init
-                    self.segments.element_segments.push(values);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Initialise memory with data from data sections
-    pub(super) fn initialise_data_sections(&mut self, resources: &mut Resources) -> Result<(), RuntimeError> {
-        for (seg_idx, data_segment) in self.module.data.data.iter().enumerate() {
-            match &data_segment.mode {
-                DataMode::Active { memory_index, offset } => {
-                    if *memory_index != 0 {
-                        return Err(RuntimeError::MemoryError(format!(
-                            "invalid memory index {} in data segment",
-                            memory_index
-                        )));
-                    }
-
-                    let mem_idx = self.resolve_memory_idx()?;
-
-                    let offset_value = self.evaluate_const_expr(offset, resources)?;
-                    let offset_addr = match offset_value {
-                        Value::I32(v) => v as u32,
-                        _ => {
-                            return Err(RuntimeError::MemoryError(
-                                "data segment offset must be an i32".to_string(),
-                            ));
-                        }
-                    };
-
-                    let memory = &mut resources.memories[mem_idx];
-                    let data = &data_segment.init;
-
-                    // Bounds check: data must fit within allocated memory pages
-                    let end_addr = offset_addr as usize + data.len();
-                    let memory_size_bytes = (memory.size() as usize) * 65536; // pages to bytes
-                    if end_addr > memory_size_bytes {
-                        return Err(RuntimeError::MemoryError("out of bounds memory access".to_string()));
-                    }
-
-                    ops::memory::copy_to_memory(memory, offset_addr, data)?;
-                    // Active segments are logically dropped after initialisation
-                    self.segments.dropped_data.insert(seg_idx as u32);
-                }
-                DataMode::Passive => {
-                    // Passive data segments are used with memory.init instruction
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Evaluate a constant expression (used for data/element segment offsets and global init)
-    fn evaluate_const_expr(&self, instructions: &[Instruction], resources: &Resources) -> Result<Value, RuntimeError> {
-        // Constant expressions are limited to a small set of instructions
-        // They must end with an End instruction
-        if instructions.is_empty() {
-            return Err(RuntimeError::InvalidConstExpr("empty constant expression".to_string()));
-        }
-
-        // Check that the last instruction is End
-        match instructions.last() {
-            Some(inst) if matches!(inst.kind, InstructionKind::End) => {}
-            _ => {
-                return Err(RuntimeError::InvalidConstExpr(
-                    "constant expression must end with end instruction".to_string(),
-                ));
-            }
-        }
-
-        // For now, handle the common cases (single instruction + End)
-        if instructions.len() == 2 {
-            match &instructions[0].kind {
-                InstructionKind::I32Const { value } => Ok(Value::I32(*value)),
-                InstructionKind::I64Const { value } => Ok(Value::I64(*value)),
-                InstructionKind::F32Const { value } => Ok(Value::F32(*value)),
-                InstructionKind::F64Const { value } => Ok(Value::F64(*value)),
-                InstructionKind::GlobalGet { global_idx } => {
-                    let addr = self
-                        .global_addresses
-                        .get(*global_idx as usize)
-                        .ok_or(RuntimeError::GlobalIndexOutOfBounds(*global_idx))?;
-                    resources
-                        .globals
-                        .get(addr.0)
-                        .copied()
-                        .ok_or(RuntimeError::GlobalIndexOutOfBounds(*global_idx))
-                }
-                InstructionKind::RefNull { ref_type } => match ref_type {
-                    ValueType::FuncRef => Ok(Value::FuncRef(None)),
-                    ValueType::ExternRef => Ok(Value::ExternRef(None)),
-                    _ => Err(RuntimeError::InvalidConstExpr(format!(
-                        "invalid reference type for ref.null: {:?}",
-                        ref_type
-                    ))),
-                },
-                InstructionKind::Simd(SimdOp::V128Const { value }) => Ok(Value::V128(*value)),
-                InstructionKind::RefFunc { func_idx } => {
-                    // Validate function exists
-                    let total_functions = self.module.imports.function_count() + self.module.functions.functions.len();
-                    if (*func_idx as usize) >= total_functions {
-                        return Err(RuntimeError::FunctionIndexOutOfBounds(*func_idx));
-                    }
-                    // Map local func_idx to global FuncAddr
-                    let func_addr = self
-                        .function_addresses
-                        .get(*func_idx as usize)
-                        .copied()
-                        .ok_or(RuntimeError::FunctionIndexOutOfBounds(*func_idx))?;
-                    Ok(Value::FuncRef(Some(func_addr)))
-                }
-                _ => Err(RuntimeError::InvalidConstExpr(format!(
-                    "unsupported instruction in constant expression: {:?}",
-                    instructions[0].kind
-                ))),
-            }
-        } else if instructions.len() == 1 && matches!(instructions[0].kind, InstructionKind::End) {
-            // Just an End instruction - this shouldn't happen in valid WebAssembly
-            Err(RuntimeError::InvalidConstExpr(
-                "constant expression cannot be just end".to_string(),
-            ))
-        } else {
-            // TODO: Support more complex constant expressions (e.g., i32.add with two consts)
-            Err(RuntimeError::InvalidConstExpr(format!(
-                "unsupported constant expression with {} instructions",
-                instructions.len()
-            )))
-        }
     }
 
     /// Push a new call frame for a local function call
@@ -690,11 +413,6 @@ impl Executor {
         self.instruction_budget = budget;
     }
 
-    /// Borrow the segment state for the flat engine's bulk-memory ops.
-    pub(super) fn segments_mut(&mut self) -> &mut SegmentState {
-        &mut self.segments
-    }
-
     #[cfg(test)]
     pub fn execute_function(
         &mut self,
@@ -702,8 +420,9 @@ impl Executor {
         args: Vec<Value>,
         return_types: &[ValueType],
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        self.execute_function_with_locals(func, args, return_types, None, resources)
+        self.execute_function_with_locals(func, args, return_types, None, resources, segments)
     }
 
     /// Execute a function with explicit locals information
@@ -717,6 +436,7 @@ impl Executor {
         return_types: &[ValueType],
         locals_info: Option<&Locals>,
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         // Initialise locals: parameters first, then local declarations
         let mut locals = args;
@@ -751,7 +471,7 @@ impl Executor {
             on_complete: ContextCompletion::ReturnFunction,
         }];
 
-        let result = self.run_execution_loop(contexts, return_types.to_vec(), resources);
+        let result = self.run_execution_loop(contexts, return_types.to_vec(), resources, segments);
 
         // On error, restore call stack to pre-call state
         if result.is_err() {
@@ -770,6 +490,7 @@ impl Executor {
         &mut self,
         results: Vec<Value>,
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         let contexts = self
             .saved_contexts
@@ -781,7 +502,7 @@ impl Executor {
             self.stack.push(value);
         }
 
-        self.run_execution_loop(contexts, return_types, resources)
+        self.run_execution_loop(contexts, return_types, resources, segments)
     }
 
     /// Main execution loop driving the state machine interpreter.
@@ -800,6 +521,7 @@ impl Executor {
         mut contexts: Vec<ExecutionContext>,
         return_types: Vec<ValueType>,
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         'execution: loop {
             // Extract context fields as copies (InstructionSlice is Copy).
@@ -841,7 +563,7 @@ impl Executor {
             let instructions = unsafe { instr_slice.as_slice() };
             let instruction = &instructions[pos];
 
-            let state = self.execute_instruction_state_machine(instruction, resources)?;
+            let state = self.execute_instruction_state_machine(instruction, resources, segments)?;
 
             match state {
                 ExecutionState::Continue => {
@@ -1041,6 +763,7 @@ impl Executor {
         &mut self,
         instruction: &StructuredInstruction,
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<ExecutionState, RuntimeError> {
         match instruction {
             StructuredInstruction::Plain(inst) => {
@@ -1114,7 +837,7 @@ impl Executor {
                 }
 
                 // Execute as normal and convert BlockEnd to ExecutionState
-                match self.execute_plain_instruction(inst, resources)? {
+                match self.execute_plain_instruction(inst, resources, segments)? {
                     BlockEnd::Normal => Ok(ExecutionState::Continue),
                     BlockEnd::Return => Ok(ExecutionState::ReturnFromFunction),
                     BlockEnd::Branch(depth) => Ok(ExecutionState::BranchTo(depth)),
@@ -1284,6 +1007,7 @@ impl Executor {
         &mut self,
         inst: &Instruction,
         resources: &mut Resources,
+        segments: &mut SegmentState,
     ) -> Result<BlockEnd, RuntimeError> {
         use InstructionKind::*;
 
@@ -1661,7 +1385,7 @@ impl Executor {
                     memory,
                     *data_idx,
                     &self.module.data.data,
-                    &self.segments.dropped_data,
+                    &segments.dropped_data,
                 )?;
                 Ok(BlockEnd::Normal)
             }
@@ -1687,7 +1411,7 @@ impl Executor {
             // data.drop x - Drop a data segment (spec: 4.4.7.13)
             // [] → []
             DataDrop { data_idx } => {
-                self.segments.dropped_data.insert(*data_idx);
+                segments.dropped_data.insert(*data_idx);
                 Ok(BlockEnd::Normal)
             }
 
@@ -2400,8 +2124,7 @@ impl Executor {
                 let src_idx = self.stack.pop_i32()? as u32;
                 let dst_idx = self.stack.pop_i32()? as u32;
 
-                let src_segment = self
-                    .segments
+                let src_segment = segments
                     .element_segments
                     .get(*elem_idx as usize)
                     .ok_or(RuntimeError::ElementIndexOutOfBounds(*elem_idx))?;
@@ -2448,10 +2171,10 @@ impl Executor {
             }
             // spec: 4.4.6.8
             ElemDrop { elem_idx } => {
-                if (*elem_idx as usize) >= self.segments.element_segments.len() {
+                if (*elem_idx as usize) >= segments.element_segments.len() {
                     return Err(RuntimeError::ElementIndexOutOfBounds(*elem_idx));
                 }
-                self.segments.element_segments[*elem_idx as usize].clear();
+                segments.element_segments[*elem_idx as usize].clear();
                 Ok(BlockEnd::Normal)
             }
 
@@ -2796,6 +2519,7 @@ mod tests {
     use crate::parser::module::{Module, ValueType};
     use crate::parser::structure_builder::StructureBuilder;
     use crate::runtime::Value;
+    use crate::runtime::instance::Instance;
     use crate::runtime::test_utils::test::{ExecutorTest, make_instruction};
 
     // ============================================================================
@@ -2949,10 +2673,10 @@ mod tests {
 
             // Execute using structured executor
             let module = Module::new("test");
-            let (mut executor, mut resources) =
-                Executor::new(Arc::new(module)).expect("Executor creation should succeed");
+            let (mut executor, mut resources, mut segments) =
+                Instance::new_test_executor(Arc::new(module)).expect("Executor creation should succeed");
             let outcome = executor
-                .execute_function(&func, vec![], &[ValueType::I32], &mut resources)
+                .execute_function(&func, vec![], &[ValueType::I32], &mut resources, &mut segments)
                 .expect("Execution should succeed");
 
             assert_eq!(unwrap_complete(outcome), vec![Value::I32(42)]);
@@ -2978,10 +2702,10 @@ mod tests {
 
             // Execute using structured executor
             let module = Module::new("test");
-            let (mut executor, mut resources) =
-                Executor::new(Arc::new(module)).expect("Executor creation should succeed");
+            let (mut executor, mut resources, mut segments) =
+                Instance::new_test_executor(Arc::new(module)).expect("Executor creation should succeed");
             let outcome = executor
-                .execute_function(&func, vec![], &[ValueType::I32], &mut resources)
+                .execute_function(&func, vec![], &[ValueType::I32], &mut resources, &mut segments)
                 .expect("Execution should succeed");
 
             assert_eq!(unwrap_complete(outcome), vec![Value::I32(10)]); // Should take then branch

@@ -1816,9 +1816,75 @@ mod tests {
     }
 
     #[test]
+    fn instance_segment_state_survives_start_and_is_isolated() {
+        let module = Arc::new(
+            crate::wat::parse(
+                "(module
+                    (type $value (func (result i32)))
+                    (memory 1)
+                    (table 1 funcref)
+                    (data $boot \"A\")
+                    (data $later \"B\")
+                    (elem $boot_elem func $seven)
+                    (elem $later_elem func $seven)
+                    (func $seven (type $value) (i32.const 7))
+                    (func $start
+                        (memory.init $boot (i32.const 0) (i32.const 0) (i32.const 1))
+                        (data.drop $boot)
+                        (table.init $boot_elem (i32.const 0) (i32.const 0) (i32.const 1))
+                        (elem.drop $boot_elem))
+                    (start $start)
+                    (func (export \"read\") (result i32 i32)
+                        (i32.load8_u (i32.const 0)) (call_indirect (type $value) (i32.const 0)))
+                    (func (export \"boot_data\")
+                        (memory.init $boot (i32.const 0) (i32.const 0) (i32.const 1)))
+                    (func (export \"boot_elem\")
+                        (table.init $boot_elem (i32.const 0) (i32.const 0) (i32.const 1)))
+                    (func (export \"consume\")
+                        (memory.init $later (i32.const 0) (i32.const 0) (i32.const 1))
+                        (data.drop $later)
+                        (table.init $later_elem (i32.const 0) (i32.const 0) (i32.const 1))
+                        (elem.drop $later_elem)))",
+            )
+            .unwrap(),
+        );
+        for engine in [EngineKind::Structured, EngineKind::Flat] {
+            let mut store = Store::new();
+            store.set_engine(engine);
+            let first = store.create_instance(Arc::clone(&module), None).unwrap();
+            let second = store.create_instance(Arc::clone(&module), None).unwrap();
+            assert_eq!(
+                store.invoke_export(first, "read", vec![], None).unwrap(),
+                vec![Value::I32(65), Value::I32(7)]
+            );
+            assert!(matches!(
+                store.invoke_export(first, "boot_data", vec![], None),
+                Err(RuntimeError::MemoryError(_))
+            ));
+            assert!(matches!(
+                store.invoke_export(first, "boot_elem", vec![], None),
+                Err(RuntimeError::TableIndexOutOfBounds(_))
+            ));
+            store.invoke_export(first, "consume", vec![], None).unwrap();
+            assert!(matches!(
+                store.invoke_export(first, "consume", vec![], None),
+                Err(RuntimeError::MemoryError(_))
+            ));
+            assert_eq!(
+                store.invoke_export(second, "read", vec![], None).unwrap(),
+                vec![Value::I32(65), Value::I32(7)]
+            );
+            store.invoke_export(second, "consume", vec![], None).unwrap();
+            assert_eq!(
+                store.invoke_export(second, "read", vec![], None).unwrap(),
+                vec![Value::I32(66), Value::I32(7)]
+            );
+        }
+    }
+
+    #[test]
     fn flat_engine_call_indirect_via_element_segment() {
-        // Element segments are initialised by the structured machinery at
-        // instantiation; the flat engine then dispatches through the table.
+        // Instance initialisation populates the table before flat execution.
         let (mut store, id) = flat_instance(
             "(module
                 (type $binop (func (param i32 i32) (result i32)))

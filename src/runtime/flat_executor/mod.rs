@@ -38,7 +38,7 @@
 //! possible, keeping the dispatch loop thin.
 
 use super::bytecode::{CompiledFunction, Op};
-use super::executor::SegmentState;
+use super::instance::SegmentState;
 use super::ops;
 use super::stack::Stack;
 use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
@@ -85,8 +85,8 @@ pub struct ExecContext<'a> {
     pub functions: &'a [FuncEntry],
     /// Number of imported functions (a prefix of `functions`).
     pub num_imported: usize,
-    /// Per-instance segment state (element segments and dropped data),
-    /// owned by the structured executor and shared with this engine.
+    /// Per-instance segment state owned by the instance and shared with both
+    /// engines.
     pub(crate) segments: &'a mut SegmentState,
     /// The module's data segments, for memory.init.
     pub(crate) data_segments: &'a [Data],
