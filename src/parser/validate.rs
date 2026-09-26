@@ -1261,11 +1261,7 @@ impl Validator for CodeValidator<'_> {
             TableInit { elem_idx, table_idx } => {
                 self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
                     .ok_or(ValidationError::TypeMismatch)?;
-                let table = self
-                    .module
-                    .table
-                    .tables
-                    .get(*table_idx as usize)
+                let table_ref_type = get_table_ref_type(self.module, *table_idx)
                     .ok_or(ValidationError::UnknownTableWithIndex(*table_idx))?;
                 let elem = self
                     .module
@@ -1273,7 +1269,7 @@ impl Validator for CodeValidator<'_> {
                     .elements
                     .get(*elem_idx as usize)
                     .ok_or(ValidationError::UnknownElement)?;
-                if elem.ref_type != table.ref_type {
+                if elem.ref_type != table_ref_type {
                     return Err(ValidationError::TypeMismatch);
                 }
                 Ok(())

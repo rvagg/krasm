@@ -1816,6 +1816,52 @@ mod tests {
     }
 
     #[test]
+    fn function_calls_use_function_indices_with_mixed_imports() {
+        for engine in [EngineKind::Structured, EngineKind::Flat] {
+            let mut store = Store::new();
+            store.set_engine(engine);
+            let provider = crate::wat::parse(
+                "(module
+                    (memory (export \"memory\") 1)
+                    (global (export \"global\") i32 (i32.const 5))
+                    (table (export \"table\") 1 funcref)
+                    (func (export \"wide\") (param i64) (result i64)
+                        (i64.add (local.get 0) (i64.const 2))))",
+            )
+            .unwrap();
+            let provider_id = store.create_instance(Arc::new(provider), None).unwrap();
+            let mut imports = ImportObject::new();
+            store.register_exports(provider_id, "env", &mut imports).unwrap();
+            let increment = store.wrap(|x: i32| x + 1);
+            imports.add_function("env", "increment", increment);
+            let consumer = crate::wat::parse(
+                "(module
+                    (type $unary (func (param i32) (result i32)))
+                    (import \"env\" \"memory\" (memory 1))
+                    (import \"env\" \"increment\" (func $increment (param i32) (result i32)))
+                    (import \"env\" \"global\" (global i32))
+                    (import \"env\" \"wide\" (func $wide (param i64) (result i64)))
+                    (import \"env\" \"table\" (table 1 funcref))
+                    (elem (i32.const 0) func $increment)
+                    (func (export \"direct\") (result i32 i64)
+                        (call $increment (i32.const 10)) (call $wide (i64.const 20)))
+                    (func (export \"indirect\") (result i32)
+                        (call_indirect (type $unary) (i32.const 30) (i32.const 0))))",
+            )
+            .unwrap();
+            let id = store.create_instance(Arc::new(consumer), Some(&imports)).unwrap();
+            assert_eq!(
+                store.invoke_export(id, "direct", vec![], None).unwrap(),
+                vec![Value::I32(11), Value::I64(22)]
+            );
+            assert_eq!(
+                store.invoke_export(id, "indirect", vec![], None).unwrap(),
+                vec![Value::I32(31)]
+            );
+        }
+    }
+
+    #[test]
     fn instance_segment_state_survives_start_and_is_isolated() {
         let module = Arc::new(
             crate::wat::parse(

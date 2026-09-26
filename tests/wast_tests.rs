@@ -580,4 +580,9 @@ mod tests {
     fn test_simd_wast(#[files("tests/spec/wast/simd/*.wast")] path: PathBuf) {
         run_wast_file(&path);
     }
+
+    #[rstest]
+    fn test_regression_wast(#[files("tests/regressions/*.wast")] path: PathBuf) {
+        run_wast_file(&path);
+    }
 }

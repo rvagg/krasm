@@ -27,7 +27,7 @@ use super::{
     store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr},
 };
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
-use crate::parser::module::{ExternalKind, FunctionType, Locals, Module, ValueType};
+use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{BlockEnd, StructuredFunction, StructuredInstruction};
 use std::sync::Arc;
 
@@ -638,17 +638,7 @@ impl Executor {
     ) -> Result<CallHandled, RuntimeError> {
         // Check if this is an imported function (needs external call)
         if (func_idx as usize) < self.num_imported_functions {
-            let import = &self.module.imports.imports[func_idx as usize];
-            let type_idx = match &import.external_kind {
-                ExternalKind::Function(idx) => *idx,
-                _ => return Err(RuntimeError::InvalidFunctionType),
-            };
-            let func_type = self
-                .module
-                .types
-                .get(type_idx)
-                .ok_or(RuntimeError::InvalidFunctionType)?
-                .clone();
+            let func_type = self.get_function_type(func_idx)?.clone();
 
             let args = self.pop_args_for_call(&func_type)?;
 
