@@ -42,8 +42,9 @@ cargo test utf8_validation
 ## Adding New Tests
 
 For runtime regressions, add a `.wast` file to `regressions/`; the native runner
-discovers it at compilation and runs both engines. If only a new fixture changes,
-touch `tests/wast_tests.rs` to refresh discovery. Keep upstream fixtures pinned.
+discovers it at compilation and runs both engines. `build.rs` watches the `spec/`
+and `regressions/` directories, so fixture-only additions, renames and removals
+refresh the test list automatically. Keep upstream fixtures pinned.
 
 Local regressions cover mixed-kind function imports and table operations across
 imported and local tables, including reference-type validation and shared writes.
