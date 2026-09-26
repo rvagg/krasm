@@ -37,7 +37,7 @@ impl Stack {
     pub fn pop_i32(&mut self) -> Result<i32, RuntimeError> {
         self.pop_typed(ValueType::I32)?
             .as_i32()
-            .ok_or(RuntimeError::TypeMismatch {
+            .ok_or_else(|| RuntimeError::TypeMismatch {
                 expected: "i32".to_string(),
                 actual: "non-i32".to_string(),
             })
@@ -46,7 +46,7 @@ impl Stack {
     pub fn pop_i64(&mut self) -> Result<i64, RuntimeError> {
         self.pop_typed(ValueType::I64)?
             .as_i64()
-            .ok_or(RuntimeError::TypeMismatch {
+            .ok_or_else(|| RuntimeError::TypeMismatch {
                 expected: "i64".to_string(),
                 actual: "non-i64".to_string(),
             })
@@ -55,7 +55,7 @@ impl Stack {
     pub fn pop_f32(&mut self) -> Result<f32, RuntimeError> {
         self.pop_typed(ValueType::F32)?
             .as_f32()
-            .ok_or(RuntimeError::TypeMismatch {
+            .ok_or_else(|| RuntimeError::TypeMismatch {
                 expected: "f32".to_string(),
                 actual: "non-f32".to_string(),
             })
@@ -64,7 +64,7 @@ impl Stack {
     pub fn pop_f64(&mut self) -> Result<f64, RuntimeError> {
         self.pop_typed(ValueType::F64)?
             .as_f64()
-            .ok_or(RuntimeError::TypeMismatch {
+            .ok_or_else(|| RuntimeError::TypeMismatch {
                 expected: "f64".to_string(),
                 actual: "non-f64".to_string(),
             })
@@ -73,7 +73,7 @@ impl Stack {
     pub fn pop_v128(&mut self) -> Result<[u8; 16], RuntimeError> {
         self.pop_typed(ValueType::V128)?
             .as_v128()
-            .ok_or(RuntimeError::TypeMismatch {
+            .ok_or_else(|| RuntimeError::TypeMismatch {
                 expected: "v128".to_string(),
                 actual: "non-v128".to_string(),
             })
