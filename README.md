@@ -71,6 +71,14 @@ fuzz/               Fuzz targets (binary parser, executor, WAT lexer/parser)
 
 ## Development
 
+The full check requires Node.js/npm, Python 3.9+ and the Rust WASI target:
+
+```bash
+rustup target add wasm32-wasip1
+```
+
+It includes native tests and both-engine WASI checks for the SIMD CommP example.
+
 ```bash
 ./check.sh              # Format, lint, test (must pass before committing)
 cargo test              # Run all tests

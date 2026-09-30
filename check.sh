@@ -88,6 +88,14 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet
 echo -e "\n=== Running tests ==="
 cargo test
 
+echo -e "\n=== Checking SIMD CommP example ==="
+COMMP_SIMD="examples/commp-simd/Cargo.toml"
+cargo fmt --manifest-path "$COMMP_SIMD" -- --check
+cargo clippy --manifest-path "$COMMP_SIMD" --all-targets --locked -- -D warnings
+cargo test --manifest-path "$COMMP_SIMD" --locked
+cargo build --bin krasm
+python3 examples/commp-simd/build.py --check --runner target/debug/krasm
+
 # Integration tests: run AssemblyScript examples and verify output
 if [[ -f "$AS_DIR/build/mktree.wasm" && -f "$AS_DIR/build/tree.wasm" && -f "$AS_DIR/build/stat.wasm" ]]; then
     echo -e "\n=== Running WASI integration examples ==="

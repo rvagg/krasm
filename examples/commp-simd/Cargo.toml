@@ -1,0 +1,22 @@
+[package]
+name = "commp-simd"
+version = "0.1.0"
+edition = "2024"
+description = "Four-lane SIMD Filecoin CommP for WASI"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "commp-simd"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

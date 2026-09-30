@@ -10,5 +10,6 @@ package-lock.json
 tests/wasi/hello.wasm
 node_modules/
 examples/commp/commp.wasm
+examples/commp-simd/commp-simd.wasm
 benches/commp_bench_500k.bin
 docs/

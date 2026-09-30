@@ -64,3 +64,40 @@ cargo test --release
 rustup target add wasm32-wasip1
 RUSTFLAGS="-C target-feature=+simd128" cargo build --target wasm32-wasip1 --release
 ```
+
+## SIMD companion
+
+`examples/commp-simd/` is an additive WASI adaptation of
+[Hugo Dias's CommP core](https://github.com/hugomrdias/commp/tree/a37a5b2bb1f272d0862e3d59accd318c84ea00e6/rs/commp),
+pinned to revision `a37a5b2bb1f272d0862e3d59accd318c84ea00e6`
+(MIT OR Apache-2.0). It preserves the four-message SIMD SHA-256, batched FR32
+processing and O(log n) tree. The wasm-bindgen interface, JS multihash wrappers,
+custom allocator and no_std panic handler are omitted. Rust's standard WASI
+environment supplies I/O and allocation.
+
+Both examples read stdin in 8 KB chunks and print the same raw 32-byte root as
+64 lowercase hex characters. The SIMD example requires `+simd128` for Wasm;
+its native build uses scalar hashing for independent verification. This is a
+benchmark of the adapted WASI core, not Hugo's published JS package or its
+wasm-bindgen binary. The existing `commp.wasm` remains unchanged.
+
+From the repository root:
+
+```bash
+rustup target add wasm32-wasip1
+cargo build --release --bin krasm
+python3 examples/commp-simd/build.py
+python3 scripts/profile.py bench --workload commp-simd --cpu 4
+python3 scripts/profile.py sample --workload commp-simd --cpu 4
+```
+
+The builder uses a fresh target directory and the example's committed lockfile.
+It checks reference vectors and the existing 500 KB profiling input in both
+engines before writing `commp-simd.wasm` and `fixture.json`. The metadata pins
+the upstream source hash, adapted sources, toolchain, flags, Wasm hash and
+expected root. Rebuild after changing the example; the profiler rejects stale
+sources or a mismatched binary.
+
+`./check.sh` runs native example tests and builds a fresh SIMD Wasm for
+both-engine vector checks. Its `--check` builder invocation does not overwrite
+the frozen profiling fixture and does not require the 500 KB benchmark file.
