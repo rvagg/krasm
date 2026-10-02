@@ -95,7 +95,7 @@ fn truncated_hash_64(data: &[u8; 64]) -> [u8; NODE_SIZE] {
     let mut state = IV;
     sha2::block_api::compress256(&mut state, &[*data, PAD_BLOCK]);
     let mut result = [0u8; NODE_SIZE];
-    for (bytes, word) in result.chunks_exact_mut(4).zip(state) {
+    for (bytes, word) in result.as_chunks_mut::<4>().0.iter_mut().zip(state) {
         bytes.copy_from_slice(&word.to_be_bytes());
     }
     result[NODE_SIZE - 1] &= 0b00111111;

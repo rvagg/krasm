@@ -2,10 +2,10 @@
   "upstream": "https://github.com/hugomrdias/commp",
   "revision": "a37a5b2bb1f272d0862e3d59accd318c84ea00e6",
   "upstream_source_sha256": "0b8d644353466c67cbc6e2185dff8b1de5997bd15230ba6fbe63b51e55ab52c2",
-  "wasm_sha256": "bb2e037accb7457374d202dfda0806507151fdb2cfa1e502b1479ef3f3aef8f8",
+  "wasm_sha256": "00a9b9aee41db00bd9b2353a5136e8b0c2627750fe2be906fac7e037d135c102",
   "expected_stdout": "c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523",
   "build": {
-    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
     "command": [
       "cargo",
       "build",
@@ -16,7 +16,7 @@
       "--target",
       "wasm32-wasip1",
       "--target-dir",
-      "/home/rvagg/git/kasm/target/commp-simd/20260930T033418.535595Z"
+      "/home/rvagg/git/kasm/target/commp-simd/20260930T091404.178312Z"
     ],
     "rustflags": "-C target-feature=+simd128"
   },
@@ -24,7 +24,7 @@
     "Cargo.toml": "2802edaadca257c64c04563fa66898576f630c0f6203875d5f0cc986e4c81c79",
     "Cargo.lock": "a7141fe257fc81d07bcf85e91f34c7bc5aeba6ce31ee138e74d5d90e27510941",
     "build.py": "0fa7d307fca73860114ec0107d022b297bd35193b6cdb7f4ca813cde5f922c48",
-    "src/lib.rs": "c3c9a737c1e4eeae63ca03fb0075917498e6e96aeb655da9b70135921cfecb9c",
+    "src/lib.rs": "b6f95654e51ec420bca8a63b80b338877822eb5b81804e7068f9445b16e04c4f",
     "src/main.rs": "163ba3fd173f8a1cf87c65e5ae36206552d496b206041538989b7e0f63a72866",
     "src/simd.rs": "0d88ec4128731c1d0fd6d67f71b3cd73da5ea50af29e38920163d919e005d32f"
   }
