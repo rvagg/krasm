@@ -80,13 +80,17 @@ echo -e "\n=== Running rustfmt check ==="
 cargo fmt -- --check
 
 echo -e "\n=== Running clippy ==="
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 
 echo -e "\n=== Checking documentation ==="
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --quiet
 
 echo -e "\n=== Running tests ==="
 cargo test
+
+echo -e "\n=== Checking instruction profiling ==="
+cargo test --features instruction-profile
+python3 -B -m unittest discover -s scripts -p 'profile*_test.py'
 
 echo -e "\n=== Checking SIMD CommP example ==="
 COMMP_SIMD="examples/commp-simd/Cargo.toml"

@@ -12,6 +12,7 @@ use std::fmt;
 
 /// Branch target with stack cleanup metadata.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 pub struct BrTarget {
     /// Absolute index in the bytecode array.
     pub pc: u32,
@@ -26,12 +27,14 @@ pub struct BrTarget {
 /// Each variant carries its immediates inline. Branch targets are absolute
 /// indices into the `Vec<Op>`, resolved at compile time.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
+#[cfg_attr(feature = "instruction-profile", serde(tag = "opcode", content = "immediates"))]
 pub enum Op {
     // -- Constants --
     I32Const(i32),
     I64Const(i64),
-    F32Const(f32),
-    F64Const(f64),
+    F32Const(#[cfg_attr(feature = "instruction-profile", serde(serialize_with = "super::profile::f32_bits"))] f32),
+    F64Const(#[cfg_attr(feature = "instruction-profile", serde(serialize_with = "super::profile::f64_bits"))] f64),
 
     // -- SIMD --
     V128Const([u8; 16]),

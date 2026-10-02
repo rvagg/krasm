@@ -352,6 +352,8 @@ pub struct FlatExecutor {
     call_stack: Vec<CallFrame>,
     suspended: Option<SuspendedState>,
     instruction_budget: Option<u64>,
+    #[cfg(feature = "instruction-profile")]
+    instruction_counts: Option<Vec<Vec<u64>>>,
 }
 
 impl Default for FlatExecutor {
@@ -367,7 +369,19 @@ impl FlatExecutor {
             call_stack: Vec::new(),
             suspended: None,
             instruction_budget: None,
+            #[cfg(feature = "instruction-profile")]
+            instruction_counts: None,
         }
+    }
+
+    #[cfg(feature = "instruction-profile")]
+    pub(crate) fn enable_instruction_profile(&mut self, funcs: &[CompiledFunction]) {
+        self.instruction_counts = Some(funcs.iter().map(|func| vec![0; func.ops.len()]).collect());
+    }
+
+    #[cfg(feature = "instruction-profile")]
+    pub(crate) fn instruction_counts(&self) -> &[Vec<u64>] {
+        self.instruction_counts.as_deref().unwrap_or_default()
     }
 
     /// Limit bytecode operations, including labels and function ends.
@@ -477,6 +491,8 @@ impl FlatExecutor {
             call_stack,
             suspended,
             instruction_budget,
+            #[cfg(feature = "instruction-profile")]
+            instruction_counts,
         } = self;
 
         let CallFrame {
@@ -521,6 +537,11 @@ impl FlatExecutor {
                     return Err(RuntimeError::InstructionBudgetExhausted);
                 }
                 *remaining -= 1;
+            }
+
+            #[cfg(feature = "instruction-profile")]
+            if let Some(counts) = instruction_counts {
+                counts[current_func_idx][pc] += 1;
             }
 
             match &ops_slice[pc] {

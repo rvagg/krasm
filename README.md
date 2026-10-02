@@ -77,7 +77,8 @@ The full check requires Node.js/npm, Python 3.9+ and the Rust WASI target:
 rustup target add wasm32-wasip1
 ```
 
-It includes native tests and both-engine WASI checks for the SIMD CommP example.
+It includes default and `instruction-profile` feature tests, offline sequence
+analysis tests, and native/both-engine WASI checks for the SIMD CommP example.
 
 ```bash
 ./check.sh              # Format, lint, test (must pass before committing)

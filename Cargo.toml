@@ -24,6 +24,7 @@ exclude = [
 [features]
 default = ["cli"]
 cli = ["clap"]
+instruction-profile = []
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"], optional = true }

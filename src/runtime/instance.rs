@@ -96,11 +96,21 @@ impl Instance {
                 table_addresses.clone(),
                 global_addresses.clone(),
             )?),
-            EngineKind::Flat => Engine::Flat(FlatEngine {
-                funcs: compile_module(&module),
-                entries: Vec::new(),
-                executor: FlatExecutor::new(),
-            }),
+            EngineKind::Flat => {
+                let funcs = compile_module(&module);
+                let executor = FlatExecutor::new();
+                #[cfg(feature = "instruction-profile")]
+                let executor = {
+                    let mut executor = executor;
+                    executor.enable_instruction_profile(&funcs);
+                    executor
+                };
+                Engine::Flat(FlatEngine {
+                    funcs,
+                    entries: Vec::new(),
+                    executor,
+                })
+            }
         };
 
         Ok(Instance {
@@ -286,6 +296,23 @@ impl Instance {
     /// Get the module reference
     pub fn module(&self) -> &Module {
         &self.module
+    }
+
+    /// Snapshot cumulative flat-bytecode dispatch counts, including start functions.
+    ///
+    /// Counts include the operation that traps, but not an operation stopped by
+    /// an exhausted instruction budget. Host work is excluded. Structured
+    /// instances return `None`; counts survive completed and failed invocations.
+    #[cfg(feature = "instruction-profile")]
+    pub fn instruction_profile(&self) -> Option<super::profile::InstructionProfile<'_>> {
+        let Engine::Flat(flat) = &self.engine else {
+            return None;
+        };
+        Some(super::profile::InstructionProfile::new(
+            &self.module,
+            &flat.funcs,
+            flat.executor.instruction_counts(),
+        ))
     }
 
     /// Get an exported global value by name

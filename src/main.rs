@@ -39,6 +39,11 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = EngineArg::Flat)]
         engine: EngineArg,
 
+        /// Write flat instruction counts as JSON (not timing data)
+        #[cfg(feature = "instruction-profile")]
+        #[arg(long, value_name = "PATH")]
+        instruction_profile: Option<std::path::PathBuf>,
+
         /// Arguments to pass to the module (after --)
         #[arg(last = true)]
         args: Vec<String>,
@@ -91,7 +96,16 @@ fn main() -> ExitCode {
             dirs,
             engine,
             args,
-        } => run_wasi_module(&file, dirs, engine, args),
+            #[cfg(feature = "instruction-profile")]
+            instruction_profile,
+        } => run_wasi_module(
+            &file,
+            dirs,
+            engine,
+            args,
+            #[cfg(feature = "instruction-profile")]
+            instruction_profile,
+        ),
         Commands::Dump {
             file,
             header,
@@ -177,7 +191,30 @@ impl From<EngineArg> for EngineKind {
     }
 }
 
-fn run_wasi_module(file: &str, dirs: Vec<String>, engine: EngineArg, module_args: Vec<String>) -> ExitCode {
+fn run_wasi_module(
+    file: &str,
+    dirs: Vec<String>,
+    engine: EngineArg,
+    module_args: Vec<String>,
+    #[cfg(feature = "instruction-profile")] instruction_profile: Option<std::path::PathBuf>,
+) -> ExitCode {
+    #[cfg(feature = "instruction-profile")]
+    let mut profile_output = match instruction_profile {
+        Some(path) => {
+            if matches!(engine, EngineArg::Structured) {
+                eprintln!("Error: instruction profiles require the flat engine");
+                return ExitCode::FAILURE;
+            }
+            match fs::File::create_new(&path) {
+                Ok(file) => Some(std::io::BufWriter::new(file)),
+                Err(error) => {
+                    eprintln!("Error creating {}: {error}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
     let module = match load_module(file) {
         Ok(m) => m,
         Err(e) => {
@@ -230,6 +267,35 @@ fn run_wasi_module(file: &str, dirs: Vec<String>, engine: EngineArg, module_args
     }
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
+
+    #[cfg(feature = "instruction-profile")]
+    if let Some(output) = profile_output.as_mut() {
+        use krasm::runtime::profile::{ProfileOutcome, RunProfile};
+        let profile = store
+            .get_instance(instance_id)
+            .and_then(|instance| instance.instruction_profile())
+            .expect("flat instance has instruction counters");
+        let report = RunProfile {
+            module: file,
+            instance_id,
+            outcome: ProfileOutcome {
+                exit_code: ctx.exit_code().unwrap_or(i32::from(result.is_err())),
+                trap: if ctx.exit_code().is_none() {
+                    result.as_ref().err().map(ToString::to_string)
+                } else {
+                    None
+                },
+            },
+            profile,
+        };
+        let written = serde_json::to_writer(&mut *output, &report)
+            .map_err(std::io::Error::other)
+            .and_then(|()| std::io::Write::flush(output));
+        if let Err(error) = written {
+            eprintln!("Error writing instruction profile: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     // proc_exit() raises a trap to halt execution, so check for an exit
     // code in both the Ok and Err arms.

@@ -2218,6 +2218,7 @@ impl ExportIndex {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 pub enum ValueType {
     // Number types
     I32,

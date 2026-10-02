@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "corpora": {"examples": ["commp", "commp-simd"]},
+  "workloads": {
+    "commp": {
+      "family": "commp",
+      "compiler": {"language": "Rust", "version": null},
+      "module": "examples/commp/commp.wasm",
+      "module_sha256": "23bc184b68ad3edd8e4e444fc4cbaf6193d31cf86cdbefda7f8464fe36b83fdc",
+      "input": "benches/commp_bench_500k.bin",
+      "input_sha256": "ec8a9c811f2abd8f233c256a019e8686506b73669439c084479ab4f60fd28979",
+      "args": [],
+      "expected_stdout": "c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523"
+    },
+    "commp-simd": {
+      "family": "commp",
+      "compiler": {"language": "Rust", "provenance": "fixture.json"},
+      "module": "examples/commp-simd/commp-simd.wasm",
+      "fixture": "examples/commp-simd/fixture.json",
+      "input": "benches/commp_bench_500k.bin",
+      "input_sha256": "ec8a9c811f2abd8f233c256a019e8686506b73669439c084479ab4f60fd28979",
+      "args": [],
+      "expected_stdout": "c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523"
+    }
+  }
+}

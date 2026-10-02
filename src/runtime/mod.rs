@@ -14,6 +14,8 @@ pub mod imports;
 pub(crate) mod instance;
 pub mod memory;
 pub(crate) mod ops;
+#[cfg(feature = "instruction-profile")]
+pub mod profile;
 pub(crate) mod stack;
 pub mod store;
 pub mod table;

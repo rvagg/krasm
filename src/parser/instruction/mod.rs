@@ -42,6 +42,7 @@ pub fn decode_constant_expression_with_ref_func(
 
 /// Memory argument for memory access instructions
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 pub struct MemArg {
     /// Memory alignment (as power of 2)
     pub align: u32,

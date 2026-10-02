@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable Linux CommP timing and intrusive GDB sampling (Python 3.9+)."""
+"""Reproducible timing, GDB sampling and flat-instruction capture (Python 3.9+)."""
 
 import argparse
 from collections import Counter
@@ -15,13 +15,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-COMMP_WASM = ROOT / "examples/commp/commp.wasm"
-INPUT = ROOT / "benches/commp_bench_500k.bin"
-COMMP_EXPECTED = "c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523"
-COMMP_FIXTURE_HASHES = {
-    COMMP_WASM: "23bc184b68ad3edd8e4e444fc4cbaf6193d31cf86cdbefda7f8464fe36b83fdc",
-    INPUT: "ec8a9c811f2abd8f233c256a019e8686506b73669439c084479ab4f60fd28979",
-}
+WORKLOADS = ROOT / "scripts/profile_workloads.json"
 
 
 def digest(path):
@@ -32,19 +26,39 @@ def is_sha256(value):
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def load_workload(name):
-    if name == "commp":
-        return {
-            "name": name,
-            "wasm": COMMP_WASM,
-            "expected_stdout": COMMP_EXPECTED,
-            "fixture_hashes": COMMP_FIXTURE_HASHES,
-            "metadata": None,
-            "metadata_sha256": None,
-            "source_hashes": None,
-        }
+def workload_registry():
+    registry = json.loads(WORKLOADS.read_text())
+    if registry.get("schema_version") != 1:
+        raise RuntimeError("unsupported workload registry version")
+    return registry
 
-    fixture = ROOT / "examples/commp-simd/fixture.json"
+
+def load_workload(name):
+    specs = workload_registry()["workloads"]
+    if name not in specs:
+        raise RuntimeError(f"unknown workload: {name}")
+    spec = specs[name]
+    wasm = ROOT / spec["module"]
+    data = ROOT / spec["input"]
+    if wasm.name == data.name:
+        raise RuntimeError("module and input must have distinct capture filenames")
+    workload = {
+        "name": name,
+        "family": spec["family"],
+        "compiler": spec["compiler"],
+        "args": spec["args"],
+        "wasm": wasm,
+        "input": data,
+        "expected_stdout": spec["expected_stdout"],
+        "metadata": None,
+        "metadata_sha256": None,
+        "source_hashes": None,
+    }
+    if "fixture" not in spec:
+        workload["fixture_hashes"] = {wasm: spec["module_sha256"], data: spec["input_sha256"]}
+        return workload
+
+    fixture = ROOT / spec["fixture"]
     try:
         metadata = json.loads(fixture.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -69,17 +83,16 @@ def load_workload(name):
         raise RuntimeError(f"SIMD workload fixture metadata has no source SHA-256 entries: {fixture}")
     if not all(isinstance(path, str) and is_sha256(value) for path, value in metadata["source_sha256"].items()):
         raise RuntimeError(f"SIMD workload fixture metadata has invalid source SHA-256 entries: {fixture}")
-    wasm = ROOT / "examples/commp-simd/commp-simd.wasm"
-    return {
-        "name": name,
-        "wasm": wasm,
-        "expected_stdout": metadata["expected_stdout"],
-        "fixture_hashes": {wasm: metadata["wasm_sha256"], INPUT: COMMP_FIXTURE_HASHES[INPUT]},
+    if metadata["expected_stdout"] != workload["expected_stdout"]:
+        raise RuntimeError(f"fixture output disagrees with workload registry: {fixture}")
+    workload.update({
+        "fixture_hashes": {wasm: metadata["wasm_sha256"], data: spec["input_sha256"]},
         "metadata": metadata,
         "metadata_sha256": digest(fixture),
         "metadata_path": fixture,
         "source_hashes": metadata["source_sha256"],
-    }
+    })
+    return workload
 
 
 def verify_hash(path, expected, label):
@@ -118,6 +131,7 @@ def save_json(path, value):
 def source_hashes():
     paths = sorted((ROOT / "src").rglob("*.rs"))
     paths += [ROOT / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.yml")]
+    paths.append(WORKLOADS)
     paths += sorted((ROOT / "scripts").glob("profile*.py"))
     return {str(path.relative_to(ROOT)): digest(path) for path in paths}
 
@@ -168,6 +182,8 @@ def prepare(args, output, workload):
         env["CARGO_PROFILE_RELEASE_STRIP"] = "none"
         env["RUSTFLAGS"] = "-C force-frame-pointers=yes"
     command = ["cargo", "build", "--release", "--offline", "--locked", "--verbose", "--bin", "krasm"]
+    if args.mode == "collect":
+        command += ["--features", "instruction-profile"]
     print(f"Building {args.mode} binary; artifacts: {output}", flush=True)
     with (output / "build.log").open("w") as log:
         build = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -187,17 +203,20 @@ def prepare(args, output, workload):
         "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_TARGET",
     }
     build_keys.update(name for name in env if name.startswith("CARGO_PROFILE_RELEASE_"))
-    governor = Path(f"/sys/devices/system/cpu/cpu{args.cpu}/cpufreq/scaling_governor")
+    governor = Path(f"/sys/devices/system/cpu/cpu{args.cpu}/cpufreq/scaling_governor") if args.cpu is not None else None
     manifest = {
         "mode": args.mode,
         "workload": workload["name"],
+        "family": workload["family"],
+        "compiler": workload["compiler"],
+        "guest_args": workload["args"],
         "workload_metadata": workload["metadata"],
         "workload_metadata_sha256": workload["metadata_sha256"],
         "engine": args.engine,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "host": platform.uname()._asdict(),
         "cpu": args.cpu,
-        "governor": governor.read_text().strip() if governor.exists() else None,
+        "governor": governor.read_text().strip() if governor and governor.exists() else None,
         "rustc": checked_output(["rustc", "--version", "--verbose"]),
         "cargo": checked_output(["cargo", "--version"]),
         "build_command": command,
@@ -214,8 +233,13 @@ def prepare(args, output, workload):
     return binary, manifest
 
 
-def invocation(binary, output, engine, workload):
-    return [str(binary), "run", str(output / workload["wasm"].name), "--engine", engine]
+def invocation(binary, output, engine, workload, instruction_profile=None):
+    command = [str(binary), "run", str(output / workload["wasm"].name), "--engine", engine]
+    if instruction_profile is not None:
+        command += ["--instruction-profile", str(instruction_profile)]
+    if workload["args"]:
+        command += ["--", *workload["args"]]
+    return command
 
 
 def validate_output(stdout, label, workload):
@@ -245,7 +269,7 @@ def benchmark(args, output, binary, manifest, workload):
             legacy_commp = (
                 previous_workload is None
                 and workload["name"] == "commp"
-                and previous.get("fixture_sha256") == {path.name: value for path, value in COMMP_FIXTURE_HASHES.items()}
+                and previous.get("fixture_sha256") == manifest["fixture_sha256"]
             )
             if previous_workload != workload["name"] and not legacy_commp:
                 raise RuntimeError(f"baseline manifest workload does not match this comparison: {manifest_path}")
@@ -264,7 +288,7 @@ def benchmark(args, output, binary, manifest, workload):
             baseline_provenance = {"manifest_verified": False, "reason": "no adjacent manifest.json"}
             print("Warning: baseline provenance unverified; only its binary hash is recorded.")
     commands = {name: invocation(path, output, args.engine, workload) for name, path in binaries.items()}
-    data = (output / INPUT.name).read_bytes()
+    data = (output / workload["input"].name).read_bytes()
     report = {
         "method": "whole-process wall time, including launch and WASI I/O; no debugger",
         "workload": workload["name"],
@@ -315,7 +339,7 @@ def sample(args, output, binary, manifest, workload):
         config = {
             "binary": str(binary),
             "source_root": str(ROOT),
-            "input": str(output / INPUT.name),
+            "input": str(output / workload["input"].name),
             "stdout": str(output / f"stdout-{number}.txt"),
             "report": str(output / f"stacks-{number}.json"),
             "delay": 0.06 + number * 0.04,
@@ -372,6 +396,32 @@ def sample(args, output, binary, manifest, workload):
     print(f"Raw stacks and load-bias evidence: {output}/stacks-*.json")
 
 
+def collect(args, output, binary, manifest, workload):
+    profile_path = output / "instructions.json"
+    command = invocation(binary, output, "flat", workload, profile_path)
+    result = subprocess.run(
+        command, input=(output / workload["input"].name).read_bytes(),
+        capture_output=True, timeout=120,
+    )
+    (output / "stdout.txt").write_bytes(result.stdout)
+    (output / "stderr.txt").write_bytes(result.stderr)
+    result.check_returncode()
+    validate_output(result.stdout, "instruction capture", workload)
+    report = json.loads(profile_path.read_text())
+    if report["outcome"] != {"exit_code": 0, "trap": None}:
+        raise RuntimeError("instruction capture did not complete successfully")
+    from profile_analysis import validate_profile
+    validate_profile(report["profile"])
+    report["module_sha256"] = workload["fixture_hashes"][workload["wasm"]]
+    save_json(profile_path, report)
+    manifest["instruction_profile_sha256"] = digest(profile_path)
+    manifest["command"] = command
+    manifest["stdout_sha256"] = digest(output / "stdout.txt")
+    save_json(output / "manifest.json", manifest)
+    total = sum(sum(function["counts"]) for function in report["profile"]["functions"])
+    print(f"{workload['name']}: {total:,} dispatched operations, correct output")
+
+
 def positive_int(value):
     number = int(value)
     if number <= 0:
@@ -382,37 +432,78 @@ def positive_int(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
-    for name in ("bench", "sample"):
+    for name in ("bench", "sample", "collect"):
         mode = modes.add_parser(name)
-        mode.add_argument("--cpu", type=int, required=True, help="allowed logical CPU to pin measured processes to")
-        mode.add_argument("--engine", choices=("flat", "structured"), default="flat")
-        mode.add_argument("--workload", choices=("commp", "commp-simd"), default="commp")
-        mode.add_argument("--runs", type=positive_int, default=10 if name == "bench" else 4)
+        mode.add_argument("--cpu", type=int, required=name != "collect", help="allowed logical CPU to pin execution to")
+        mode.add_argument("--engine", choices=("flat",) if name == "collect" else ("flat", "structured"), default="flat")
+        selector = mode.add_mutually_exclusive_group()
+        selector.add_argument("--workload", help="workload ID in scripts/profile_workloads.json")
+        if name == "collect":
+            selector.add_argument("--corpus", help="named corpus in scripts/profile_workloads.json")
+            mode.set_defaults(runs=1)
+        else:
+            mode.add_argument("--runs", type=positive_int, default=10 if name == "bench" else 4)
         mode.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-<mode>)")
         if name == "bench":
             mode.add_argument("--baseline", type=Path, help="frozen krasm binary for alternating paired measurements")
-        else:
+        elif name == "sample":
             mode.add_argument("--interval-ms", type=positive_int, default=6)
+    analysis = modes.add_parser("analyse", help="rank instruction sequences in one or more captures")
+    analysis.add_argument("captures", type=Path, nargs="+")
+    analysis.add_argument("--top", type=positive_int, default=20, help="rows per length and view")
+    analysis.add_argument("--output", type=Path, help="new JSON report path")
     args = parser.parse_args()
-    if not hasattr(os, "sched_getaffinity"):
-        parser.error("Linux CPU affinity is required")
-    if args.cpu not in os.sched_getaffinity(0):
-        parser.error(f"CPU {args.cpu} is not in the allowed affinity set")
-    if args.mode == "bench" and args.baseline and args.runs % 2:
-        parser.error("paired measurements require an even --runs count for balanced AB/BA order")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     output = (args.output or ROOT / "target/profiles" / f"{stamp}-{args.mode}").resolve()
     try:
-        output.mkdir(parents=True, exist_ok=False)
-        workload = load_workload(args.workload)
-        binary, manifest = prepare(args, output, workload)
-        os.sched_setaffinity(0, {args.cpu})
-        if args.mode == "bench":
-            benchmark(args, output, binary, manifest, workload)
+        if args.mode == "analyse":
+            from profile_analysis import analyse
+            if args.output is None:
+                output = output.with_suffix(".json")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            analyse(args.captures, output, args.top)
+            return
+        if args.cpu is not None:
+            if not hasattr(os, "sched_getaffinity"):
+                parser.error("Linux CPU affinity is required")
+            if args.cpu not in os.sched_getaffinity(0):
+                parser.error(f"CPU {args.cpu} is not in the allowed affinity set")
+        if args.mode == "bench" and args.baseline and args.runs % 2:
+            parser.error("paired measurements require an even --runs count for balanced AB/BA order")
+        corpus = getattr(args, "corpus", None)
+        if corpus:
+            registry = workload_registry()
+            if corpus not in registry["corpora"]:
+                raise RuntimeError(f"unknown corpus: {corpus}")
+            names = registry["corpora"][corpus]
+            if not names or len(names) != len(set(names)):
+                raise RuntimeError("corpus must contain distinct workload IDs")
         else:
-            sample(args, output, binary, manifest, workload)
+            names = [args.workload or "commp"]
+        workloads = [load_workload(name) for name in names]
+        for workload in workloads:
+            verify_workload(workload)
+        output.mkdir(parents=True, exist_ok=False)
+        for workload in workloads:
+            destination = output / workload["name"] if corpus else output
+            if corpus:
+                destination.mkdir()
+            binary, manifest = prepare(args, destination, workload)
+            affinity = os.sched_getaffinity(0) if args.cpu is not None else None
+            try:
+                if affinity is not None:
+                    os.sched_setaffinity(0, {args.cpu})
+                if args.mode == "bench":
+                    benchmark(args, destination, binary, manifest, workload)
+                elif args.mode == "sample":
+                    sample(args, destination, binary, manifest, workload)
+                else:
+                    collect(args, destination, binary, manifest, workload)
+            finally:
+                if affinity is not None:
+                    os.sched_setaffinity(0, affinity)
         print(f"Results: {output}")
-    except (OSError, RuntimeError, json.JSONDecodeError, subprocess.SubprocessError) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
         parser.exit(1, f"profile: {error}\nArtifacts: {output}\n")
 
 
