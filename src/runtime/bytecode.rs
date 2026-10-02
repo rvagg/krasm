@@ -30,6 +30,10 @@ pub struct BrTarget {
 #[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 #[cfg_attr(feature = "instruction-profile", serde(tag = "opcode", content = "immediates"))]
 pub enum Op {
+    /// Optional fused operations, defined separately from wasm instructions.
+    #[cfg(feature = "superinstructions")]
+    Super(super::superinstructions::SuperInstruction),
+
     // -- Constants --
     I32Const(i32),
     I64Const(i64),
@@ -641,6 +645,8 @@ impl Op {
     /// Used by the compiler to track stack depth during emission.
     pub fn stack_delta(&self) -> i32 {
         match self {
+            #[cfg(feature = "superinstructions")]
+            Op::Super(_) => 1,
             Op::I32Const(_) | Op::I64Const(_) | Op::F32Const(_) | Op::F64Const(_) | Op::V128Const(_) => 1,
             Op::I32Add | Op::I32Sub | Op::I32Mul => -1,
             Op::I32DivS | Op::I32DivU | Op::I32RemS | Op::I32RemU => -1,
@@ -987,6 +993,8 @@ impl fmt::Display for CompiledFunction {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "superinstructions")]
+            Op::Super(instruction) => instruction.fmt(f),
             Op::I32Const(v) => write!(f, "i32.const {v}"),
             Op::I64Const(v) => write!(f, "i64.const {v}"),
             Op::F32Const(v) => write!(f, "f32.const {v}"),

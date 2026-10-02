@@ -77,7 +77,7 @@ The full check requires Node.js/npm, Python 3.9+ and the Rust WASI target:
 rustup target add wasm32-wasip1
 ```
 
-It includes default and `instruction-profile` feature tests, offline sequence
+It includes default, profiling and superinstruction feature tests, offline sequence
 analysis tests, and native/both-engine WASI checks for the SIMD CommP example.
 
 ```bash
@@ -90,6 +90,18 @@ WAST and WASI integration tests explicitly exercise both engines. Execution
 benchmarks compare both through the Store API, with instantiation timed
 separately. See [performance notes](docs/PERFORMANCE.md) for the switchover
 measurements and bounded fuzzing coverage.
+
+## Experimental superinstructions
+
+The opt-in `superinstructions` Cargo feature fuses scalar sequences in the flat
+engine. Default builds and the structured engine remain unfused:
+
+```bash
+cargo run --release --features superinstructions --bin krasm -- run module.wasm
+```
+
+For unfused instruction profiling and build comparisons, see
+`python3 scripts/profile.py --help`.
 
 ## License
 

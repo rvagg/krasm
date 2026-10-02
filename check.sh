@@ -92,6 +92,10 @@ echo -e "\n=== Checking instruction profiling ==="
 cargo test --features instruction-profile
 python3 -B -m unittest discover -s scripts -p 'profile*_test.py'
 
+echo -e "\n=== Checking superinstructions ==="
+cargo test --features superinstructions
+cargo test --all-features
+
 echo -e "\n=== Checking SIMD CommP example ==="
 COMMP_SIMD="examples/commp-simd/Cargo.toml"
 cargo fmt --manifest-path "$COMMP_SIMD" -- --check

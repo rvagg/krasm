@@ -71,7 +71,7 @@ impl<'a> InstructionProfile<'a> {
             .collect();
         Self {
             schema_version: 1,
-            op_format_version: 1,
+            op_format_version: if cfg!(feature = "superinstructions") { 2 } else { 1 },
             count_semantics: "dispatch-attempts",
             functions,
         }

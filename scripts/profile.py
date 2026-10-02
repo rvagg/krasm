@@ -182,8 +182,13 @@ def prepare(args, output, workload):
         env["CARGO_PROFILE_RELEASE_STRIP"] = "none"
         env["RUSTFLAGS"] = "-C force-frame-pointers=yes"
     command = ["cargo", "build", "--release", "--offline", "--locked", "--verbose", "--bin", "krasm"]
+    features = []
     if args.mode == "collect":
-        command += ["--features", "instruction-profile"]
+        features.append("instruction-profile")
+    if args.superinstructions:
+        features.append("superinstructions")
+    if features:
+        command += ["--features", ",".join(features)]
     print(f"Building {args.mode} binary; artifacts: {output}", flush=True)
     with (output / "build.log").open("w") as log:
         build = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -213,6 +218,7 @@ def prepare(args, output, workload):
         "workload_metadata": workload["metadata"],
         "workload_metadata_sha256": workload["metadata_sha256"],
         "engine": args.engine,
+        "superinstructions": args.superinstructions,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "host": platform.uname()._asdict(),
         "cpu": args.cpu,
@@ -436,6 +442,7 @@ def main():
         mode = modes.add_parser(name)
         mode.add_argument("--cpu", type=int, required=name != "collect", help="allowed logical CPU to pin execution to")
         mode.add_argument("--engine", choices=("flat",) if name == "collect" else ("flat", "structured"), default="flat")
+        mode.add_argument("--superinstructions", action="store_true", help="enable experimental scalar fusion (bench/sample only)")
         selector = mode.add_mutually_exclusive_group()
         selector.add_argument("--workload", help="workload ID in scripts/profile_workloads.json")
         if name == "collect":
@@ -463,6 +470,8 @@ def main():
             output.parent.mkdir(parents=True, exist_ok=True)
             analyse(args.captures, output, args.top)
             return
+        if args.superinstructions and (args.mode == "collect" or args.engine != "flat"):
+            parser.error("--superinstructions requires bench/sample with the flat engine; collect stays unfused")
         if args.cpu is not None:
             if not hasattr(os, "sched_getaffinity"):
                 parser.error("Linux CPU affinity is required")

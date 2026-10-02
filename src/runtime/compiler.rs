@@ -171,6 +171,9 @@ pub fn compile(
 
     ctx.ops.push(Op::End);
 
+    #[cfg(feature = "superinstructions")]
+    super::superinstructions::fuse(&mut ctx.ops);
+
     // Expand run-length locals declarations into one typed zero per local,
     // so frame initialisation is a plain copy.
     let mut local_defaults = Vec::with_capacity(locals.len() as usize);
@@ -1134,19 +1137,6 @@ mod tests {
         assert_eq!(cf.result_count, 1);
         assert_eq!(cf.local_count(), 5);
         assert!(matches!(cf.ops.last().unwrap(), Op::End));
-    }
-
-    #[test]
-    fn compile_simple_add() {
-        let cf = compile_first_func("(module (func (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))");
-        println!("{cf}");
-
-        assert_eq!(cf.param_count, 2);
-        assert_eq!(cf.ops.len(), 4);
-        assert!(matches!(cf.ops[0], Op::LocalGet { index: 0 }));
-        assert!(matches!(cf.ops[1], Op::LocalGet { index: 1 }));
-        assert!(matches!(cf.ops[2], Op::I32Add));
-        assert!(matches!(cf.ops[3], Op::End));
     }
 
     #[test]

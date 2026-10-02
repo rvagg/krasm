@@ -384,7 +384,7 @@ impl FlatExecutor {
         self.instruction_counts.as_deref().unwrap_or_default()
     }
 
-    /// Limit bytecode operations, including labels and function ends.
+    /// Limit unfused bytecode operations, including labels and function ends.
     ///
     /// The remaining budget survives calls and suspension. `None` disables
     /// the limit; exhaustion traps before the next operation executes.
@@ -545,6 +545,11 @@ impl FlatExecutor {
             }
 
             match &ops_slice[pc] {
+                #[cfg(feature = "superinstructions")]
+                Op::Super(instruction) => {
+                    instruction.execute(&locals, stack, instruction_budget)?;
+                    pc += 1;
+                }
                 // -- Constants --
                 Op::I32Const(v) => stack_op!(ops::numeric::i32_const, *v),
                 Op::I64Const(v) => stack_op!(ops::numeric::i64_const, *v),

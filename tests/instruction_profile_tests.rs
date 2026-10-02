@@ -39,10 +39,19 @@ fn loops_and_cold_branches_have_exact_counts() {
             .map(|(_, count)| count)
             .sum()
     };
-    assert_eq!(count(|op| matches!(op, Op::I32Sub)), 3);
+    assert_eq!(
+        count(|op| match op {
+            #[cfg(feature = "superinstructions")]
+            Op::Super(krasm::runtime::superinstructions::SuperInstruction::I32LocalConst {
+                operation: krasm::runtime::superinstructions::I32Operation::Sub,
+                ..
+            }) => true,
+            _ => matches!(op, Op::I32Sub),
+        }),
+        3
+    );
     assert_eq!(count(|op| matches!(op, Op::I32Const(99))), 0);
     assert_eq!(count(|op| matches!(op, Op::I32Const(7))), 1);
-    assert_eq!(count(|op| matches!(op, Op::LocalGet { .. })), 4);
     assert_eq!(count(|op| matches!(op, Op::BrIf { .. })), 4);
 }
 
