@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "rust_version": "1.98.1",
+  "sources": {
+    "sdk": {
+      "version": "34.0",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz",
+      "archive": "wasi-sdk-34.0-x86_64-linux.tar.gz",
+      "sha256": "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4",
+      "root": "wasi-sdk-34.0-x86_64-linux",
+      "licence": "Apache-2.0 WITH LLVM-exception and bundled notices"
+    },
+    "nbody": {
+      "version": "40296663ed350d5fe4a6ab5e367bab61cb77c219",
+      "url": "https://salsa.debian.org/benchmarksgame-team/benchmarksgame/-/raw/40296663ed350d5fe4a6ab5e367bab61cb77c219/public/download/benchmarksgame-sourcecode.zip",
+      "archive": "benchmarksgame-40296663.zip",
+      "sha256": "aabcf6726cdc14f0f45b99e5daba48584f94bbb48883fd3711a1d040474d1cb4",
+      "root": ".",
+      "member": "nbody/nbody.gcc",
+      "member_sha256": "6c7a44f4f242b8aafb2e72c1814f67c5568b3815abe0a19a005fe20645a03676",
+      "licence": "BSD-3-Clause"
+    },
+    "markdown": {
+      "version": "0.13.4",
+      "revision": "38e4d08f14ec4bd9783270e9623db7681ebed968",
+      "url": "https://github.com/pulldown-cmark/pulldown-cmark/archive/38e4d08f14ec4bd9783270e9623db7681ebed968.tar.gz",
+      "archive": "pulldown-cmark-38e4d08.tar.gz",
+      "sha256": "e41cfb81109dcb278c67992db46b5ad8674f86e98b92119f5e78a6d2e091f047",
+      "root": "pulldown-cmark-38e4d08f14ec4bd9783270e9623db7681ebed968",
+      "licence": "MIT and benchmark input notices"
+    },
+    "zstd": {
+      "version": "1.5.7",
+      "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+      "archive": "zstd-1.5.7.tar.gz",
+      "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "root": "zstd-1.5.7",
+      "licence": "BSD-3-Clause"
+    },
+    "jq": {
+      "version": "1.8.2",
+      "url": "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz",
+      "archive": "jq-1.8.2.tar.gz",
+      "sha256": "71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af",
+      "root": "jq-1.8.2",
+      "licence": "MIT and bundled dependency notices"
+    },
+    "sqlite": {
+      "version": "3.53.4",
+      "url": "https://sqlite.org/2026/sqlite-autoconf-3530400.tar.gz",
+      "archive": "sqlite-autoconf-3530400.tar.gz",
+      "sha3_256": "454e45f61c6bd75b7420e7190732dea03ce6639c63ada47bbc592f67fc340338",
+      "root": "sqlite-autoconf-3530400",
+      "licence": "Public domain"
+    }
+  }
+}

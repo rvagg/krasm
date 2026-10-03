@@ -26,15 +26,17 @@ def is_sha256(value):
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def workload_registry():
-    registry = json.loads(WORKLOADS.read_text())
+def workload_registry(path=WORKLOADS):
+    registry = json.loads(path.read_text())
     if registry.get("schema_version") != 1:
         raise RuntimeError("unsupported workload registry version")
     return registry
 
 
-def load_workload(name):
-    specs = workload_registry()["workloads"]
+def load_workload(name, registry_path=WORKLOADS):
+    registry_path = registry_path.resolve()
+    registry_sha256 = digest(registry_path)
+    specs = workload_registry(registry_path)["workloads"]
     if name not in specs:
         raise RuntimeError(f"unknown workload: {name}")
     spec = specs[name]
@@ -42,6 +44,14 @@ def load_workload(name):
     data = ROOT / spec["input"]
     if wasm.name == data.name:
         raise RuntimeError("module and input must have distinct capture filenames")
+    text_oracle = spec.get("expected_stdout")
+    hash_oracle = spec.get("expected_stdout_sha256")
+    if (text_oracle is None) == (hash_oracle is None):
+        raise RuntimeError("workload must specify exactly one stdout oracle")
+    if text_oracle is not None and not isinstance(text_oracle, str):
+        raise RuntimeError("expected stdout must be text")
+    if hash_oracle is not None and not is_sha256(hash_oracle):
+        raise RuntimeError("expected stdout digest must be SHA-256")
     workload = {
         "name": name,
         "family": spec["family"],
@@ -49,7 +59,11 @@ def load_workload(name):
         "args": spec["args"],
         "wasm": wasm,
         "input": data,
-        "expected_stdout": spec["expected_stdout"],
+        "expected_stdout": text_oracle,
+        "expected_stdout_sha256": hash_oracle,
+        "registry_path": registry_path,
+        "registry_sha256": registry_sha256,
+        "build_provenance": spec.get("build_provenance"),
         "metadata": None,
         "metadata_sha256": None,
         "source_hashes": None,
@@ -115,6 +129,7 @@ def workload_source_paths(workload):
 
 
 def verify_workload(workload):
+    verify_hash(workload["registry_path"], workload["registry_sha256"], "workload registry")
     if workload["metadata"] and digest(workload["metadata_path"]) != workload["metadata_sha256"]:
         raise RuntimeError("SIMD workload fixture metadata changed; run again when edits stop")
     for path, expected in workload["fixture_hashes"].items():
@@ -133,6 +148,8 @@ def source_hashes():
     paths += [ROOT / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.yml")]
     paths.append(WORKLOADS)
     paths += sorted((ROOT / "scripts").glob("profile*.py"))
+    for pattern in ("prepare_corpus.py", "corpus_*.json", "corpus_*.c"):
+        paths += sorted((ROOT / "scripts").glob(pattern))
     return {str(path.relative_to(ROOT)): digest(path) for path in paths}
 
 
@@ -167,6 +184,9 @@ def prepare(args, output, workload):
     if {name: digest(output / "source" / name) for name in before} != before:
         raise RuntimeError("source changed while taking the snapshot; run again when edits stop")
     snapshot_workload_sources(output, workload)
+    registry_snapshot = output / "workload-registry.json"
+    shutil.copyfile(workload["registry_path"], registry_snapshot)
+    verify_hash(registry_snapshot, workload["registry_sha256"], "captured registry")
 
     env = os.environ.copy()
     cleared = [
@@ -217,6 +237,8 @@ def prepare(args, output, workload):
         "guest_args": workload["args"],
         "workload_metadata": workload["metadata"],
         "workload_metadata_sha256": workload["metadata_sha256"],
+        "registry_sha256": workload["registry_sha256"],
+        "guest_build_provenance": workload["build_provenance"],
         "engine": args.engine,
         "superinstructions": args.superinstructions,
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -233,6 +255,7 @@ def prepare(args, output, workload):
         "binary_sha256": digest(binary),
         "fixture_sha256": {path.name: value for path, value in workload["fixture_hashes"].items()},
         "expected_stdout": workload["expected_stdout"],
+        "expected_stdout_sha256": workload["expected_stdout_sha256"],
         "runs": args.runs,
     }
     save_json(output / "manifest.json", manifest)
@@ -249,7 +272,12 @@ def invocation(binary, output, engine, workload, instruction_profile=None):
 
 
 def validate_output(stdout, label, workload):
-    if stdout.strip() != workload["expected_stdout"].encode():
+    expected_hash = workload.get("expected_stdout_sha256")
+    if expected_hash is not None:
+        actual = hashlib.sha256(stdout).hexdigest()
+        if actual != expected_hash:
+            raise RuntimeError(f"incorrect {workload['name']} output from {label}: SHA-256 {actual}")
+    elif stdout.strip() != workload["expected_stdout"].encode():
         raise RuntimeError(f"incorrect {workload['name']} output from {label}: {stdout!r}")
 
 def benchmark(args, output, binary, manifest, workload):
@@ -443,10 +471,12 @@ def main():
         mode.add_argument("--cpu", type=int, required=name != "collect", help="allowed logical CPU to pin execution to")
         mode.add_argument("--engine", choices=("flat",) if name == "collect" else ("flat", "structured"), default="flat")
         mode.add_argument("--superinstructions", action="store_true", help="enable experimental scalar fusion (bench/sample only)")
+        mode.add_argument("--registry", type=Path, default=WORKLOADS,
+                          help="workload registry JSON; artifact paths are relative to the repository root")
         selector = mode.add_mutually_exclusive_group()
-        selector.add_argument("--workload", help="workload ID in scripts/profile_workloads.json")
+        selector.add_argument("--workload", help="workload ID in the selected registry")
         if name == "collect":
-            selector.add_argument("--corpus", help="named corpus in scripts/profile_workloads.json")
+            selector.add_argument("--corpus", help="named corpus in the selected registry")
             mode.set_defaults(runs=1)
         else:
             mode.add_argument("--runs", type=positive_int, default=10 if name == "bench" else 4)
@@ -481,7 +511,7 @@ def main():
             parser.error("paired measurements require an even --runs count for balanced AB/BA order")
         corpus = getattr(args, "corpus", None)
         if corpus:
-            registry = workload_registry()
+            registry = workload_registry(args.registry)
             if corpus not in registry["corpora"]:
                 raise RuntimeError(f"unknown corpus: {corpus}")
             names = registry["corpora"][corpus]
@@ -489,7 +519,7 @@ def main():
                 raise RuntimeError("corpus must contain distinct workload IDs")
         else:
             names = [args.workload or "commp"]
-        workloads = [load_workload(name) for name in names]
+        workloads = [load_workload(name, args.registry) for name in names]
         for workload in workloads:
             verify_workload(workload)
         output.mkdir(parents=True, exist_ok=False)

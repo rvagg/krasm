@@ -88,8 +88,7 @@ cargo bench             # Run benchmarks
 
 WAST and WASI integration tests explicitly exercise both engines. Execution
 benchmarks compare both through the Store API, with instantiation timed
-separately. See [performance notes](docs/PERFORMANCE.md) for the switchover
-measurements and bounded fuzzing coverage.
+separately.
 
 ## Experimental superinstructions
 
