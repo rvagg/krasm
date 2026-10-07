@@ -93,7 +93,8 @@ separately.
 ## Experimental superinstructions
 
 The opt-in `superinstructions` Cargo feature fuses scalar sequences in the flat
-engine. Default builds and the structured engine remain unfused:
+engine. Its handler runs out of line to limit its impact on ordinary dispatch.
+Default builds and the structured engine remain unfused:
 
 ```bash
 cargo run --release --features superinstructions --bin krasm -- run module.wasm

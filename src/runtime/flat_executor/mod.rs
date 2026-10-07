@@ -545,11 +545,6 @@ impl FlatExecutor {
             }
 
             match &ops_slice[pc] {
-                #[cfg(feature = "superinstructions")]
-                Op::Super(instruction) => {
-                    instruction.execute(&locals, stack, instruction_budget)?;
-                    pc += 1;
-                }
                 // -- Constants --
                 Op::I32Const(v) => stack_op!(ops::numeric::i32_const, *v),
                 Op::I64Const(v) => stack_op!(ops::numeric::i64_const, *v),
@@ -1356,6 +1351,11 @@ impl FlatExecutor {
                 }
                 Op::Unreachable => {
                     return Err(RuntimeError::Trap("unreachable".to_string()));
+                }
+                #[cfg(feature = "superinstructions")]
+                Op::Super(instruction) => {
+                    instruction.execute(&locals, stack, instruction_budget)?;
+                    pc += 1;
                 }
             }
         }

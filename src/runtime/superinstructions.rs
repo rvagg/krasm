@@ -101,7 +101,7 @@ impl SuperInstruction {
     }
 
     /// The dispatcher has already charged the first constituent instruction.
-    #[inline]
+    #[inline(never)]
     pub(super) fn execute(
         self,
         locals: &[Value],
@@ -267,50 +267,101 @@ mod tests {
 
     #[test]
     fn branch_entries_inside_candidates_are_not_swallowed() {
-        for interior in [1, 2] {
-            // Br, taken BrIf, BrTable entry and BrTable default.
-            for branch in 0..4 {
-                let mut ops = vec![
-                    Op::LocalGet { index: 0 },
-                    Op::I32Const(1),
-                    Op::I32Add,
-                    Op::Drop,
-                    Op::I32Const(10),
-                ];
-                if interior == 2 {
-                    ops.push(Op::I32Const(5));
-                }
-                if branch != 0 {
-                    ops.push(Op::I32Const(if branch == 2 { 0 } else { 1 }));
-                }
-                let target = BrTarget {
-                    pc: (ops.len() + 1 + interior) as u32,
-                    arity: interior as u16,
-                    stack_depth: 0,
-                };
-                ops.push(match branch {
-                    0 => Op::Br {
-                        target: target.pc,
-                        arity: target.arity,
+        for keep in [false, true] {
+            for interior in [1, 2, 3] {
+                // Br, taken BrIf, BrTable entry and BrTable default.
+                for branch in 0..4 {
+                    let mut ops = vec![
+                        Op::LocalGet { index: 0 },
+                        Op::I32Const(1),
+                        Op::I32Add,
+                        if keep {
+                            Op::LocalTee { index: 1 }
+                        } else {
+                            Op::LocalSet { index: 1 }
+                        },
+                    ];
+                    if keep {
+                        ops.push(Op::Drop);
+                    }
+                    ops.push(Op::I32Const(if interior == 3 { 15 } else { 10 }));
+                    if interior == 2 {
+                        ops.push(Op::I32Const(5));
+                    }
+                    if branch != 0 {
+                        ops.push(Op::I32Const(if branch == 2 { 0 } else { 1 }));
+                    }
+                    let target = BrTarget {
+                        pc: (ops.len() + 1 + interior) as u32,
+                        arity: if interior == 2 { 2 } else { 1 },
                         stack_depth: 0,
-                    },
-                    1 => Op::BrIf {
-                        target: target.pc,
-                        arity: target.arity,
-                        stack_depth: 0,
-                    },
-                    _ => Op::BrTable {
-                        targets: vec![target],
-                        default: target,
-                    },
-                });
-                ops.extend([Op::LocalGet { index: 0 }, Op::I32Const(5), Op::I32Add, Op::End]);
-                let expected = run(ops.clone(), &[Value::I32(100)], None).unwrap();
-                assert_eq!(expected, vec![Value::I32(15)]);
-                fuse(&mut ops);
-                assert_eq!(run(ops, &[Value::I32(100)], None).unwrap(), expected);
+                    };
+                    ops.push(match branch {
+                        0 => Op::Br {
+                            target: target.pc,
+                            arity: target.arity,
+                            stack_depth: 0,
+                        },
+                        1 => Op::BrIf {
+                            target: target.pc,
+                            arity: target.arity,
+                            stack_depth: 0,
+                        },
+                        _ => Op::BrTable {
+                            targets: vec![target],
+                            default: target,
+                        },
+                    });
+                    ops.extend([
+                        Op::LocalGet { index: 0 },
+                        Op::I32Const(5),
+                        Op::I32Add,
+                        if keep {
+                            Op::LocalTee { index: 1 }
+                        } else {
+                            Op::LocalSet { index: 1 }
+                        },
+                        Op::LocalGet { index: 1 },
+                    ]);
+                    if keep {
+                        ops.push(Op::I32Add);
+                    }
+                    ops.push(Op::End);
+                    let args = [Value::I32(100), Value::I32(-1)];
+                    let expected = run(ops.clone(), &args, Some(50)).unwrap();
+                    assert_eq!(expected, vec![Value::I32(if keep { 30 } else { 15 })]);
+                    fuse(&mut ops);
+                    assert_eq!(run(ops, &args, Some(50)).unwrap(), expected);
+                }
             }
         }
+    }
+
+    #[test]
+    fn label_can_enter_tee_after_fused_arithmetic() {
+        let mut ops = vec![
+            Op::Label { end_target: 4 },
+            Op::LocalGet { index: 0 },
+            Op::I32Const(1),
+            Op::I32Add,
+            Op::LocalTee { index: 1 },
+            Op::LocalGet { index: 1 },
+            Op::I32Add,
+            Op::End,
+        ];
+        fuse(&mut ops);
+        let Op::Label { end_target } = ops[0] else {
+            panic!("missing label");
+        };
+        assert!(matches!(ops[end_target as usize], Op::LocalTee { index: 1 }));
+        assert!(matches!(
+            ops[end_target as usize - 1],
+            Op::Super(SuperInstruction::I32LocalConst { .. })
+        ));
+        assert_eq!(
+            run(ops, &[Value::I32(9), Value::I32(-99)], None).unwrap(),
+            vec![Value::I32(20)]
+        );
     }
 
     #[test]
@@ -345,6 +396,10 @@ mod tests {
                 vec![Value::I32(i32::MAX)],
             ),
             (
+                vec![Op::LocalGet { index: 0 }, Op::I32Const(1), Op::I32Add, Op::End],
+                vec![Value::F64(1.0)],
+            ),
+            (
                 vec![
                     Op::LocalGet { index: 0 },
                     Op::LocalGet { index: 1 },
@@ -376,31 +431,75 @@ mod tests {
                 vec![Value::F64(1.0)],
             ),
         ] {
-            let mut fused = ops.clone();
-            fuse(&mut fused);
-            for budget in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
-                let expected = run(ops.clone(), &args, budget);
-                let actual = run(fused.clone(), &args, budget);
-                match (actual, expected) {
-                    (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
-                    (Err(RuntimeError::InstructionBudgetExhausted), Err(RuntimeError::InstructionBudgetExhausted)) => {}
-                    (
-                        Err(RuntimeError::LocalIndexOutOfBounds(actual)),
-                        Err(RuntimeError::LocalIndexOutOfBounds(expected)),
-                    ) => assert_eq!(actual, expected),
-                    (
-                        Err(RuntimeError::TypeMismatch {
-                            expected: ae,
-                            actual: aa,
-                        }),
-                        Err(RuntimeError::TypeMismatch {
-                            expected: ee,
-                            actual: ea,
-                        }),
-                    ) => assert_eq!((ae, aa), (ee, ea)),
-                    (actual, expected) => panic!("budget {budget:?}: {actual:?} != {expected:?}"),
+            for terminal in [
+                None,
+                Some(Op::LocalTee { index: 0 }),
+                Some(Op::LocalTee { index: 1 }),
+                Some(Op::LocalTee { index: 2 }),
+                Some(Op::LocalTee { index: u32::MAX }),
+                Some(Op::LocalSet { index: 0 }),
+                Some(Op::LocalSet { index: 1 }),
+                Some(Op::LocalSet { index: 2 }),
+                Some(Op::LocalSet { index: u32::MAX }),
+            ] {
+                let mut plain = ops.clone();
+                if let Some(op) = &terminal {
+                    plain.insert(plain.len() - 1, op.clone());
+                    if let Op::LocalSet { index } = op {
+                        plain.insert(plain.len() - 1, Op::LocalGet { index: *index });
+                    }
+                }
+                let mut fused = plain.clone();
+                fuse(&mut fused);
+                for budget in [None, Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)] {
+                    let expected = run(plain.clone(), &args, budget);
+                    let actual = run(fused.clone(), &args, budget);
+                    match (actual, expected) {
+                        (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
+                        (
+                            Err(RuntimeError::InstructionBudgetExhausted),
+                            Err(RuntimeError::InstructionBudgetExhausted),
+                        ) => {}
+                        (
+                            Err(RuntimeError::LocalIndexOutOfBounds(actual)),
+                            Err(RuntimeError::LocalIndexOutOfBounds(expected)),
+                        ) => assert_eq!(actual, expected),
+                        (
+                            Err(RuntimeError::TypeMismatch {
+                                expected: ae,
+                                actual: aa,
+                            }),
+                            Err(RuntimeError::TypeMismatch {
+                                expected: ee,
+                                actual: ea,
+                            }),
+                        ) => assert_eq!((ae, aa), (ee, ea)),
+                        (actual, expected) => {
+                            panic!("budget {budget:?}, terminal {terminal:?}: {actual:?} != {expected:?}")
+                        }
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn protected_store_keeps_arithmetic_fusion() {
+        let mut ops = vec![
+            Op::Label { end_target: 4 },
+            Op::LocalGet { index: 0 },
+            Op::I32Const(1),
+            Op::I32Add,
+            Op::LocalSet { index: 0 },
+            Op::LocalGet { index: 0 },
+            Op::End,
+        ];
+        fuse(&mut ops);
+        let Op::Label { end_target } = ops[0] else {
+            panic!("missing label");
+        };
+        assert!(matches!(ops[end_target as usize], Op::LocalSet { index: 0 }));
+        assert!(matches!(ops[end_target as usize - 1], Op::Super(_)));
+        assert_eq!(run(ops, &[Value::I32(9)], None).unwrap(), vec![Value::I32(10)]);
     }
 }

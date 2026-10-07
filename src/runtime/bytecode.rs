@@ -30,10 +30,6 @@ pub struct BrTarget {
 #[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 #[cfg_attr(feature = "instruction-profile", serde(tag = "opcode", content = "immediates"))]
 pub enum Op {
-    /// Optional fused operations, defined separately from wasm instructions.
-    #[cfg(feature = "superinstructions")]
-    Super(super::superinstructions::SuperInstruction),
-
     // -- Constants --
     I32Const(i32),
     I64Const(i64),
@@ -638,6 +634,10 @@ pub enum Op {
     DataDrop {
         data_idx: u32,
     },
+
+    /// Optional fused operations, kept last to avoid renumbering ordinary ops.
+    #[cfg(feature = "superinstructions")]
+    Super(super::superinstructions::SuperInstruction),
 }
 
 impl Op {
