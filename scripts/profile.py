@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible timing, GDB sampling and flat-instruction capture (Python 3.9+)."""
+"""Reproducible timing, GDB sampling, flat-instruction capture and counter comparison (Python 3.9+)."""
 
 import argparse
 from collections import Counter
@@ -13,6 +13,8 @@ import shutil
 import statistics
 import subprocess
 import time
+
+from profile_counters import EVENTS, compare
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKLOADS = ROOT / "scripts/profile_workloads.json"
@@ -456,6 +458,40 @@ def collect(args, output, binary, manifest, workload):
     print(f"{workload['name']}: {total:,} dispatched operations, correct output")
 
 
+def run_compare(args, output):
+    arms = {}
+    for arm in args.arm:
+        label, separator, path = arm.partition("=")
+        if not separator or not label or label in arms:
+            raise RuntimeError(f"arms need distinct LABEL=BINARY values: {arm!r}")
+        if not Path(path).is_file():
+            raise RuntimeError(f"arm binary is missing: {path}")
+        arms[label] = Path(path)
+    if args.cpu not in os.sched_getaffinity(0):
+        raise RuntimeError(f"CPU {args.cpu} is not in the allowed affinity set")
+    events = tuple(event for event in args.events.split(",") if event)
+    if not {"instructions:u", "cycles:u"} <= set(events) or len(events) > 5:
+        raise RuntimeError("events must include instructions:u and cycles:u, with at most five in total")
+    if args.corpus:
+        names = workload_registry(args.registry)["corpora"].get(args.corpus)
+        if not names:
+            raise RuntimeError(f"unknown or empty corpus: {args.corpus}")
+    else:
+        names = args.workload or ["commp"]
+    workloads = [load_workload(name, args.registry) for name in names]
+    for workload in workloads:
+        verify_workload(workload)
+    dispatch_capture = args.dispatch_capture if args.dispatch_capture.is_dir() else None
+    affinity = os.sched_getaffinity(0)
+    os.sched_setaffinity(0, {args.cpu})
+    try:
+        compare(arms, workloads, args.runs, output, args.cpu, dispatch_capture, events,
+                digest, validate_output, save_json)
+    finally:
+        os.sched_setaffinity(0, affinity)
+    print(f"\nResults: {output}")
+
+
 def positive_int(value):
     number = int(value)
     if number <= 0:
@@ -485,6 +521,20 @@ def main():
             mode.add_argument("--baseline", type=Path, help="frozen krasm binary for alternating paired measurements")
         elif name == "sample":
             mode.add_argument("--interval-ms", type=positive_int, default=6)
+    comparison = modes.add_parser("compare", help="hardware counters for frozen binaries across workloads")
+    comparison.add_argument("--arm", action="append", required=True, metavar="LABEL=BINARY",
+                            help="labelled krasm binary; repeat for each arm, the first is the reference")
+    comparison.add_argument("--cpu", type=int, required=True, help="allowed logical CPU to pin execution to")
+    comparison.add_argument("--registry", type=Path, default=WORKLOADS,
+                            help="workload registry JSON; artifact paths are relative to the repository root")
+    selection = comparison.add_mutually_exclusive_group()
+    selection.add_argument("--workload", action="append", help="workload ID; repeat for several")
+    selection.add_argument("--corpus", help="named corpus in the selected registry")
+    comparison.add_argument("--runs", type=positive_int, default=6)
+    comparison.add_argument("--dispatch-capture", type=Path, default=ROOT / "target/profiles/corpus-instructions",
+                            help="directory of per-workload unfused instruction captures for instructions per op")
+    comparison.add_argument("--events", default=",".join(EVENTS), help="comma-separated perf events (at most five)")
+    comparison.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-compare)")
     analysis = modes.add_parser("analyse", help="rank instruction sequences in one or more captures")
     analysis.add_argument("captures", type=Path, nargs="+")
     analysis.add_argument("--top", type=positive_int, default=20, help="rows per length and view")
@@ -499,6 +549,9 @@ def main():
                 output = output.with_suffix(".json")
             output.parent.mkdir(parents=True, exist_ok=True)
             analyse(args.captures, output, args.top)
+            return
+        if args.mode == "compare":
+            run_compare(args, output)
             return
         if args.superinstructions and (args.mode == "collect" or args.engine != "flat"):
             parser.error("--superinstructions requires bench/sample with the flat engine; collect stays unfused")
