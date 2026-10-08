@@ -169,12 +169,21 @@ pub struct Executor {
     table_addresses: Vec<TableAddr>,
     /// Maps module-local global index to global GlobalAddr in the Store
     global_addresses: Vec<GlobalAddr>,
-    /// Saved execution contexts when paused for external call
-    saved_contexts: Option<Vec<ExecutionContext>>,
-    /// Expected return types when resuming from external call
-    saved_return_types: Vec<ValueType>,
+    /// Activations paused for external calls, innermost last. A paused
+    /// instance can be invoked again by its callee before it resumes.
+    suspended: Vec<SuspendedActivation>,
+    /// Call-stack depth where the running activation's entry frame sits.
+    call_base: usize,
     /// Optional instruction budget - execution stops when exhausted
     instruction_budget: Option<u64>,
+}
+
+/// An activation paused at an external call.
+struct SuspendedActivation {
+    contexts: Vec<ExecutionContext>,
+    /// Result types of the activation's entry function.
+    return_types: Vec<ValueType>,
+    call_base: usize,
 }
 
 impl Executor {
@@ -200,8 +209,8 @@ impl Executor {
             memory_addresses,
             table_addresses,
             global_addresses,
-            saved_contexts: None,
-            saved_return_types: Vec::new(),
+            suspended: Vec::new(),
+            call_base: 0,
             instruction_budget: None,
         })
     }
@@ -434,8 +443,8 @@ impl Executor {
             }
         }
 
-        // Save call stack depth so we can restore on error
-        let saved_call_depth = self.call_stack.len();
+        // Frames below belong to activations suspended beneath this one.
+        self.call_base = self.call_stack.len();
 
         // Create initial call frame
         let initial_frame = CallFrame {
@@ -456,14 +465,19 @@ impl Executor {
         }];
 
         let result = self.run_execution_loop(contexts, return_types.to_vec(), resources, segments);
-
-        // On error, restore call stack to pre-call state
         if result.is_err() {
-            self.call_stack.truncate(saved_call_depth);
-            self.stack.clear();
+            self.reset();
         }
-
         result
+    }
+
+    /// Discard every activation after an error, or when the Store abandons
+    /// suspended work.
+    pub(crate) fn reset(&mut self) {
+        self.stack.clear();
+        self.call_stack.clear();
+        self.suspended.clear();
+        self.call_base = 0;
     }
 
     /// Resume execution after an external call completes
@@ -476,17 +490,33 @@ impl Executor {
         resources: &mut Resources,
         segments: &mut SegmentState,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        let contexts = self
-            .saved_contexts
-            .take()
+        let SuspendedActivation {
+            contexts,
+            return_types,
+            call_base,
+        } = self
+            .suspended
+            .pop()
             .ok_or_else(|| RuntimeError::Trap("resume called without saved execution state".to_string()))?;
-        let return_types = std::mem::take(&mut self.saved_return_types);
+        self.call_base = call_base;
 
         for value in results {
             self.stack.push(value);
         }
 
-        self.run_execution_loop(contexts, return_types, resources, segments)
+        let result = self.run_execution_loop(contexts, return_types, resources, segments);
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    fn suspend(&mut self, contexts: Vec<ExecutionContext>, return_types: Vec<ValueType>) {
+        self.suspended.push(SuspendedActivation {
+            contexts,
+            return_types,
+            call_base: self.call_base,
+        });
     }
 
     /// Main execution loop driving the state machine interpreter.
@@ -524,7 +554,7 @@ impl Executor {
                         self.current_label_stack_mut()?.pop();
                     }
                     ContextCompletion::ReturnFunction => {
-                        if self.call_stack.len() > 1 {
+                        if self.call_stack.len() > self.call_base + 1 {
                             self.current_label_stack_mut()?.pop();
                             self.call_stack.pop();
                         } else {
@@ -568,8 +598,7 @@ impl Executor {
                     match self.handle_call_function(func_idx, &mut contexts)? {
                         CallHandled::LocalCall => {}
                         CallHandled::NeedsExternal(request) => {
-                            self.saved_contexts = Some(contexts);
-                            self.saved_return_types = return_types;
+                            self.suspend(contexts, return_types);
                             return Ok(ExecutionOutcome::NeedsExternalCall(request));
                         }
                     }
@@ -578,11 +607,11 @@ impl Executor {
                 ExecutionState::CallExternalFunction { func_addr, func_type } => {
                     contexts.last_mut().unwrap().position += 1;
                     let args = self.pop_args_for_call(&func_type)?;
-                    self.saved_contexts = Some(contexts);
-                    self.saved_return_types = return_types;
+                    self.suspend(contexts, return_types);
                     return Ok(ExecutionOutcome::NeedsExternalCall(ExternalCallRequest {
                         func_addr,
                         args,
+                        expected_type: Some(func_type),
                     }));
                 }
 
@@ -632,7 +661,11 @@ impl Executor {
                 .copied()
                 .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))?;
 
-            return Ok(CallHandled::NeedsExternal(ExternalCallRequest { func_addr, args }));
+            return Ok(CallHandled::NeedsExternal(ExternalCallRequest {
+                func_addr,
+                args,
+                expected_type: None,
+            }));
         }
 
         // Local function call - get body directly from module (no cloning)
@@ -710,8 +743,9 @@ impl Executor {
                 if !self.current_label_stack()?.is_empty() {
                     self.current_label_stack_mut()?.pop();
                 }
-                // Pop the call frame when returning from a function
-                if self.call_stack.len() > 1 {
+                // Pop the call frame when returning from a function; the
+                // activation's entry frame ends execution instead.
+                if self.call_stack.len() > self.call_base + 1 {
                     self.call_stack.pop();
                 } else {
                     // This is the top-level function, execution should end
@@ -802,8 +836,7 @@ impl Executor {
                         return Ok(ExecutionState::CallFunction(func_idx as u32));
                     }
 
-                    // Cross-module call - return external call request
-                    // Type checking will be done by the Store using the expected_type
+                    // Cross-module call: the Store checks expected_type before dispatch
                     return Ok(ExecutionState::CallExternalFunction {
                         func_addr,
                         func_type: expected_type,
@@ -1293,7 +1326,10 @@ impl Executor {
             // [t*] → [t*]
             //
             // Returns from the current function with values on stack
-            Return => ops::control::return_op(),
+            Return => {
+                let label_stack = LabelStack::from_vec(self.current_label_stack()?.clone());
+                ops::control::return_op(&mut self.stack, &label_stack)
+            }
 
             // call x - Direct function call
             // spec: 4.4.8

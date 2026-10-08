@@ -1675,6 +1675,9 @@ impl Validator for CodeValidator<'_> {
             }
 
             RefNull { ref_type } => {
+                if !matches!(ref_type, FuncRef | ExternRef) {
+                    return Err(ValidationError::TypeMismatch);
+                }
                 self.push_val(Val(*ref_type)).ok_or(ValidationError::TypeMismatch)?;
                 Ok(())
             }

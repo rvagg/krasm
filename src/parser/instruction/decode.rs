@@ -3,7 +3,7 @@
 use super::super::limits;
 use super::{BlockType, ByteRange, Instruction, InstructionKind, MemArg, SimdOp};
 use crate::parser::encoding;
-use crate::parser::module::ValueType;
+use crate::parser::module::{RefType, ValueType};
 use crate::parser::reader::Reader;
 use std::io;
 
@@ -141,8 +141,9 @@ impl InstructionKind {
             }),
 
             // Reference instructions (0xD0-0xD2)
+            // The immediate is a reference type; number types are malformed here.
             0xD0 => {
-                let ref_type = ValueType::decode(reader.read_byte()?)?;
+                let ref_type = RefType::from_wire_byte(reader.read_byte()?)?.into();
                 Ok(RefNull { ref_type })
             }
             0xD1 => Ok(RefIsNull),

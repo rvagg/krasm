@@ -61,6 +61,11 @@ use super::{EngineKind, ExecutionOutcome, Instance, Memory, RuntimeError, Table,
 use crate::parser::module::{ExportIndex, ExternalKind, FunctionType, Limits};
 use std::sync::Arc;
 
+/// Nested external calls allowed in one execution, such as instances calling
+/// each other's exports through imports. Each waiting instance holds a
+/// suspended activation, so recursion across instances is bounded here.
+const MAX_EXTERNAL_CALL_DEPTH: usize = 1000;
+
 /// Type alias for host function implementations
 ///
 /// Host functions receive a `Caller` providing access to the calling instance's
@@ -736,9 +741,12 @@ impl<T> Store<T> {
                 data: &mut self.data,
             };
 
+            // Host functions are outside validation: check both sides of the call.
             match &self.functions[addr.0] {
-                FunctionInstance::Host { func, .. } => {
+                FunctionInstance::Host { func, func_type } => {
+                    super::check_values(&args, &func_type.parameters, "argument")?;
                     let results = func(&mut caller, args)?;
+                    super::check_values(&results, &func_type.return_types, "result")?;
                     Ok((ExecutionOutcome::Complete(results), None))
                 }
                 _ => unreachable!(),
@@ -771,6 +779,25 @@ impl<T> Store<T> {
         calling_instance: Option<usize>,
     ) -> Result<Vec<Value>, RuntimeError> {
         let mut call_stack: Vec<usize> = Vec::new();
+        let result = self.dispatch(addr, args, calling_instance, &mut call_stack);
+        if result.is_err() {
+            // Instances waiting for results will never be resumed.
+            for instance_id in call_stack {
+                self.instances[instance_id].abandon_suspension();
+            }
+        }
+        result
+    }
+
+    /// Drive calls and resumptions until the first call completes. Instances
+    /// waiting for a callee's results are on `call_stack`, innermost last.
+    fn dispatch(
+        &mut self,
+        addr: FuncAddr,
+        args: Vec<Value>,
+        calling_instance: Option<usize>,
+        call_stack: &mut Vec<usize>,
+    ) -> Result<Vec<Value>, RuntimeError> {
         let mut action = PendingAction::Call(addr, args);
 
         loop {
@@ -795,7 +822,19 @@ impl<T> Store<T> {
                     }
                 }
                 ExecutionOutcome::NeedsExternalCall(request) => {
+                    if let Some(expected) = &request.expected_type {
+                        let actual = self.get_function_type(request.func_addr)?;
+                        if actual != expected {
+                            return Err(RuntimeError::IndirectCallTypeMismatch {
+                                expected: format!("{expected:?}"),
+                                actual: format!("{actual:?}"),
+                            });
+                        }
+                    }
                     if let Some(instance_id) = source_instance {
+                        if call_stack.len() >= MAX_EXTERNAL_CALL_DEPTH {
+                            return Err(RuntimeError::CallStackOverflow);
+                        }
                         call_stack.push(instance_id);
                     }
                     action = PendingAction::Call(request.func_addr, request.args);

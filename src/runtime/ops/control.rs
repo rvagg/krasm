@@ -117,9 +117,12 @@ pub fn br_table(
 /// The return instruction is a shortcut for an unconditional branch
 /// to the outermost block, which implicitly is the body of the current function.
 ///
-/// Note: We handle this with BlockEnd::Return which propagates up through
-/// all nested blocks to exit the function.
-pub fn return_op() -> Result<BlockEnd, RuntimeError> {
+/// The branch unwinds the stack to the function label like any other
+/// branch, then BlockEnd::Return propagates up through all nested blocks to
+/// exit the function. The function label is the outermost in `label_stack`.
+pub fn return_op(stack: &mut Stack, label_stack: &LabelStack) -> Result<BlockEnd, RuntimeError> {
+    let function_label = label_stack.len().checked_sub(1).ok_or(RuntimeError::InvalidLabel(0))?;
+    perform_branch(stack, label_stack, function_label as u32)?;
     Ok(BlockEnd::Return)
 }
 

@@ -33,6 +33,8 @@ pub use store::{Caller, FuncAddr, GlobalAddr, MemoryAddr, Store, TableAddr};
 pub use table::Table;
 pub use value::Value;
 
+use crate::parser::module::{FunctionType, ValueType};
+
 /// Which interpreter drives a module instance's execution.
 ///
 /// Selected per Store via [`Store::set_engine`]; instances capture the
@@ -62,6 +64,30 @@ pub(crate) struct ExternalCallRequest {
     pub(crate) func_addr: FuncAddr,
     /// Arguments to pass to the function
     pub(crate) args: Vec<Value>,
+    /// Signature a `call_indirect` requires of a callee the caller cannot
+    /// type itself: a function from another instance or the host. The Store
+    /// checks it before dispatch. Direct imports are checked when linking.
+    pub(crate) expected_type: Option<FunctionType>,
+}
+
+/// Check that values match a function signature's parameter or result types.
+/// `what` names them in errors ("argument" or "result").
+pub(crate) fn check_values(values: &[Value], types: &[ValueType], what: &str) -> Result<(), RuntimeError> {
+    if values.len() != types.len() {
+        return Err(RuntimeError::TypeMismatch {
+            expected: format!("{} {what}s", types.len()),
+            actual: format!("{} {what}s", values.len()),
+        });
+    }
+    for (i, (value, expected)) in values.iter().zip(types).enumerate() {
+        if value.typ() != *expected {
+            return Err(RuntimeError::TypeMismatch {
+                expected: format!("{expected:?} for {what} {i}"),
+                actual: format!("{:?}", value.typ()),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Runtime error type for WebAssembly execution failures.

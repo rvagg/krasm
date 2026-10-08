@@ -34,6 +34,11 @@
 //! had executed inline. Same-module calls are handled internally on a
 //! shared operand stack and never suspend.
 //!
+//! A suspended instance can be invoked again before it resumes, when the
+//! external callee calls back into one of its exports. Each invocation is an
+//! activation whose frames and operands sit above those of the activations it
+//! interrupted; suspensions form a stack, and resumption is last in, first out.
+//!
 //! Instruction implementations are delegated to the `ops` module where
 //! possible, keeping the dispatch loop thin.
 
@@ -46,23 +51,10 @@ use super::value::Value;
 use super::{ExecutionOutcome, ExternalCallRequest, RuntimeError};
 use crate::parser::module::{Data, FunctionType, ValueType};
 
-/// Perform stack cleanup for a branch: keep `arity` values from the top,
-/// discard everything down to `stack_depth`, push the kept values back.
-/// When arity is 0, this is a simple truncate.
+/// Perform stack cleanup for a branch: keep `arity` values from the top and
+/// discard everything beneath them down to `abs_depth`.
 fn branch_cleanup(stack: &mut Stack, arity: u16, abs_depth: usize) -> Result<(), RuntimeError> {
-    if arity == 0 {
-        stack.truncate(abs_depth);
-        return Ok(());
-    }
-    let mut kept = Vec::with_capacity(arity as usize);
-    for _ in 0..arity {
-        kept.push(stack.pop()?);
-    }
-    stack.truncate(abs_depth);
-    for v in kept.into_iter().rev() {
-        stack.push(v);
-    }
-    Ok(())
+    stack.unwind(abs_depth, arity as usize)
 }
 
 /// Execution context providing access to store resources and address maps.
@@ -267,14 +259,23 @@ fn init_locals_from_stack(callee: &CompiledFunction, stack: &mut Stack) -> Resul
     Ok(locals)
 }
 
+/// One invocation of the executor, possibly nested inside a suspended one.
+#[derive(Debug, Clone, Copy)]
+struct Activation {
+    /// Entry function, whose result count is collected on completion.
+    entry_func_idx: usize,
+    /// Call-stack length when the activation began: frames below it belong to
+    /// interrupted activations, so the entry function returns at this depth.
+    call_base: usize,
+}
+
 /// Execution state suspended across an external call.
 ///
 /// Holds the frame that issued the call (with `pc` already past the Call op)
-/// and the entry function index, needed to collect the right number of
-/// results when execution eventually completes.
+/// and the activation it belongs to.
 struct SuspendedState {
     frame: CallFrame,
-    entry_func_idx: usize,
+    activation: Activation,
     /// Result count declared by the suspended import; resume traps on
     /// mismatch rather than corrupting the stack.
     expected_results: u16,
@@ -316,11 +317,12 @@ fn enter_local_call(
 /// `frame` is the issuing frame with `pc` already past the call instruction.
 fn suspend_external_call(
     stack: &mut Stack,
-    suspended: &mut Option<SuspendedState>,
+    suspended: &mut Vec<SuspendedState>,
     frame: CallFrame,
-    entry_func_idx: usize,
+    activation: Activation,
     func_addr: FuncAddr,
     ftype: &FunctionType,
+    expected_type: Option<FunctionType>,
 ) -> Result<ExecutionOutcome, RuntimeError> {
     let mut args = Vec::with_capacity(ftype.parameters.len());
     for _ in 0..ftype.parameters.len() {
@@ -328,14 +330,15 @@ fn suspend_external_call(
     }
     args.reverse();
 
-    *suspended = Some(SuspendedState {
+    suspended.push(SuspendedState {
         frame,
-        entry_func_idx,
+        activation,
         expected_results: ftype.return_types.len() as u16,
     });
     Ok(ExecutionOutcome::NeedsExternalCall(ExternalCallRequest {
         func_addr,
         args,
+        expected_type,
     }))
 }
 
@@ -350,7 +353,8 @@ fn suspend_external_call(
 pub struct FlatExecutor {
     stack: Stack,
     call_stack: Vec<CallFrame>,
-    suspended: Option<SuspendedState>,
+    /// Suspended activations, innermost last.
+    suspended: Vec<SuspendedState>,
     instruction_budget: Option<u64>,
     #[cfg(feature = "instruction-profile")]
     instruction_counts: Option<Vec<Vec<u64>>>,
@@ -367,7 +371,7 @@ impl FlatExecutor {
         FlatExecutor {
             stack: Stack::new(),
             call_stack: Vec::new(),
-            suspended: None,
+            suspended: Vec::new(),
             instruction_budget: None,
             #[cfg(feature = "instruction-profile")]
             instruction_counts: None,
@@ -392,12 +396,12 @@ impl FlatExecutor {
         self.instruction_budget = budget;
     }
 
-    /// Discard stack and suspension state after an error or before a new
-    /// invocation, without changing the instruction budget.
-    fn reset(&mut self) {
+    /// Discard every activation after an error, or when the Store abandons
+    /// suspended work, without changing the instruction budget.
+    pub(crate) fn reset(&mut self) {
         self.stack.clear();
         self.call_stack.clear();
-        self.suspended = None;
+        self.suspended.clear();
     }
 
     /// Execute a compiled function with the given arguments.
@@ -417,18 +421,26 @@ impl FlatExecutor {
         args: &[Value],
         ctx: Option<&mut ExecContext<'_>>,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        self.reset();
         let func = funcs
             .get(func_idx)
             .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx as u32))?;
 
+        // Without a suspended activation to return to, nothing below is live.
+        if self.suspended.is_empty() {
+            self.stack.clear();
+            self.call_stack.clear();
+        }
+        let activation = Activation {
+            entry_func_idx: func_idx,
+            call_base: self.call_stack.len(),
+        };
         let frame = CallFrame {
             func_idx,
             pc: 0,
-            stack_base: 0,
+            stack_base: self.stack.len(),
             locals: init_locals(func, args),
         };
-        let result = self.run(funcs, frame, func_idx, ctx);
+        let result = self.run(funcs, frame, activation, ctx);
         if result.is_err() {
             self.reset();
         }
@@ -445,16 +457,17 @@ impl FlatExecutor {
     ) -> Result<ExecutionOutcome, RuntimeError> {
         let SuspendedState {
             frame,
-            entry_func_idx,
+            activation,
             expected_results,
         } = self
             .suspended
-            .take()
+            .pop()
             .ok_or_else(|| RuntimeError::Trap("resume called without saved execution state".to_string()))?;
 
         // A wrong count would silently skew branch stack offsets for the
-        // rest of execution; trap here instead. Types are still checked
-        // lazily by the typed pops that consume the values.
+        // rest of execution; trap here instead. Host results are type-checked
+        // by the Store; Wasm callees match a signature checked when linking or
+        // at the indirect call.
         if results.len() != expected_results as usize {
             self.reset();
             return Err(RuntimeError::Trap(format!(
@@ -468,7 +481,7 @@ impl FlatExecutor {
             self.stack.push(value);
         }
 
-        let result = self.run(funcs, frame, entry_func_idx, ctx);
+        let result = self.run(funcs, frame, activation, ctx);
         if result.is_err() {
             self.reset();
         }
@@ -481,7 +494,7 @@ impl FlatExecutor {
         &mut self,
         funcs: &[CompiledFunction],
         frame: CallFrame,
-        entry_func_idx: usize,
+        activation: Activation,
         mut ctx: Option<&mut ExecContext<'_>>,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         // Destructure into disjoint borrows: the loop mutates the operand
@@ -524,6 +537,23 @@ impl FlatExecutor {
             ($f:path $(, $arg:expr)*) => {{
                 $f(stack, require_ctx!(ctx).memory_mut()? $(, $arg)*)?;
                 pc += 1;
+            }};
+        }
+
+        // Resume the caller's frame, or finish when the entry function returns.
+        macro_rules! return_to_caller {
+            () => {{
+                if call_stack.len() == activation.call_base {
+                    break;
+                }
+                let Some(frame) = call_stack.pop() else {
+                    break;
+                };
+                current_func_idx = frame.func_idx;
+                ops_slice = funcs[current_func_idx].ops.as_slice();
+                pc = frame.pc;
+                stack_base = frame.stack_base;
+                locals = frame.locals;
             }};
         }
 
@@ -1081,7 +1111,7 @@ impl FlatExecutor {
                             stack_base,
                             locals,
                         };
-                        return suspend_external_call(stack, suspended, frame, entry_func_idx, entry.addr, ftype);
+                        return suspend_external_call(stack, suspended, frame, activation, entry.addr, ftype, None);
                     }
 
                     let local_idx = *func_idx as usize - num_imported;
@@ -1141,12 +1171,7 @@ impl FlatExecutor {
                                     locals,
                                 };
                                 return suspend_external_call(
-                                    stack,
-                                    suspended,
-                                    frame,
-                                    entry_func_idx,
-                                    func_addr,
-                                    expected,
+                                    stack, suspended, frame, activation, func_addr, expected, None,
                                 );
                             }
 
@@ -1168,31 +1193,30 @@ impl FlatExecutor {
                             locals = callee.locals;
                         }
                         None => {
-                            // Foreign funcref: a function from another module
-                            // placed in a shared table. Its type is unknown
-                            // here, so the signature check is deferred to the
-                            // Store at dispatch (structured executor parity).
+                            // Foreign funcref: a function from another instance
+                            // or the host, placed in a shared table. Its type is
+                            // unknown here; the Store checks it before dispatch.
                             let frame = CallFrame {
                                 func_idx: current_func_idx,
                                 pc: pc + 1,
                                 stack_base,
                                 locals,
                             };
-                            return suspend_external_call(stack, suspended, frame, entry_func_idx, func_addr, expected);
+                            let required = Some(expected.clone());
+                            return suspend_external_call(
+                                stack, suspended, frame, activation, func_addr, expected, required,
+                            );
                         }
                     }
                 }
-                Op::Return | Op::End => {
-                    if let Some(frame) = call_stack.pop() {
-                        current_func_idx = frame.func_idx;
-                        ops_slice = funcs[current_func_idx].ops.as_slice();
-                        pc = frame.pc;
-                        stack_base = frame.stack_base;
-                        locals = frame.locals;
-                    } else {
-                        break;
-                    }
+                // `return` can leave operands beneath its results; validation
+                // guarantees the function's final `end` leaves exactly them.
+                Op::Return => {
+                    let result_count = funcs[current_func_idx].result_count as u16;
+                    branch_cleanup(stack, result_count, stack_base)?;
+                    return_to_caller!();
                 }
+                Op::End => return_to_caller!(),
                 Op::Nop | Op::Label { .. } => {
                     pc += 1;
                 }
@@ -1361,7 +1385,7 @@ impl FlatExecutor {
         }
 
         // Collect the entry function's return values from the stack
-        let result_count = funcs[entry_func_idx].result_count;
+        let result_count = funcs[activation.entry_func_idx].result_count;
         let mut results = Vec::with_capacity(result_count as usize);
         for _ in 0..result_count {
             results.push(stack.pop()?);

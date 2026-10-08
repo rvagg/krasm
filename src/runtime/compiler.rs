@@ -342,12 +342,14 @@ impl<'a> CompileContext<'a> {
                 // are the next `params` values below the condition.
                 let sd = self.depth - 1 - params as u32;
 
-                // Invert condition: skip then-body when condition is 0
+                // Invert condition: skip then-body when condition is 0. The
+                // skip keeps the block params, which sit directly beneath the
+                // condition it pops.
                 self.emit(Op::I32Eqz);
                 let skip_then = self.emit(Op::BrIf {
                     target: 0,
                     arity: 0,
-                    stack_depth: self.depth,
+                    stack_depth: sd + params as u32,
                 });
 
                 self.labels.push(Label::Block {

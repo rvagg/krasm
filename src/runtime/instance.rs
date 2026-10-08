@@ -200,21 +200,7 @@ impl Instance {
             .get(func.ftype_index)
             .ok_or(RuntimeError::FunctionIndexOutOfBounds(func_idx))?;
 
-        if args.len() != func_type.parameters.len() {
-            return Err(RuntimeError::TypeMismatch {
-                expected: format!("{} arguments", func_type.parameters.len()),
-                actual: format!("{} arguments", args.len()),
-            });
-        }
-
-        for (i, (arg, expected_type)) in args.iter().zip(&func_type.parameters).enumerate() {
-            if arg.typ() != *expected_type {
-                return Err(RuntimeError::TypeMismatch {
-                    expected: format!("{expected_type:?} for argument {i}"),
-                    actual: format!("{:?}", arg.typ()),
-                });
-            }
-        }
+        super::check_values(&args, &func_type.parameters, "argument")?;
 
         match &mut self.engine {
             Engine::Flat(flat) => {
@@ -390,6 +376,14 @@ impl Instance {
                 .ok_or_else(|| RuntimeError::UnknownExport(format!("table {} not found", name)))
         } else {
             Err(RuntimeError::UnknownExport(format!("{} is not a table export", name)))
+        }
+    }
+
+    /// Discard suspended activations the Store will not resume.
+    pub(super) fn abandon_suspension(&mut self) {
+        match &mut self.engine {
+            Engine::Flat(flat) => flat.executor.reset(),
+            Engine::Structured(executor) => executor.reset(),
         }
     }
 

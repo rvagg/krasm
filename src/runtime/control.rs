@@ -76,6 +76,10 @@ impl LabelStack {
     /// From the spec (4.4.8 br l):
     /// > "Let L be the l-th label appearing on the stack, starting from the top
     /// > and counting from zero"
+    pub fn len(&self) -> usize {
+        self.labels.len()
+    }
+
     pub fn get(&self, depth: u32) -> Option<&Label> {
         let len = self.labels.len();
         if depth as usize >= len {

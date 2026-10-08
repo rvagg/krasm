@@ -56,8 +56,16 @@ impl Stack {
         self.values.len()
     }
 
-    pub fn truncate(&mut self, len: usize) {
-        self.values.truncate(len);
+    /// Discard the values between `base` and the top `keep` values, which move
+    /// down to start at `base`. Underflows if fewer than `base + keep` remain.
+    pub fn unwind(&mut self, base: usize, keep: usize) -> Result<(), RuntimeError> {
+        let len = self.values.len();
+        if len < base + keep {
+            return Err(RuntimeError::StackUnderflow);
+        }
+        self.values.copy_within(len - keep.., base);
+        self.values.truncate(base + keep);
+        Ok(())
     }
 
     pub fn clear(&mut self) {
@@ -159,6 +167,29 @@ mod tests {
         check(Stack::pop_f32, ValueType::F32);
         check(Stack::pop_f64, ValueType::F64);
         check(Stack::pop_v128, ValueType::V128);
+    }
+
+    #[test]
+    fn test_unwind_keeps_top_values_in_order() {
+        let mut stack = Stack::new();
+        for value in 1..=6 {
+            stack.push(Value::I32(value));
+        }
+        stack.unwind(1, 2).unwrap();
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack.pop().unwrap(), Value::I32(6));
+        assert_eq!(stack.pop().unwrap(), Value::I32(5));
+        assert_eq!(stack.pop().unwrap(), Value::I32(1));
+
+        // Nothing to discard, nothing to keep, and too few values.
+        stack.push(Value::I32(7));
+        stack.unwind(0, 1).unwrap();
+        assert_eq!(stack.peek(), Some(&Value::I32(7)));
+        stack.unwind(0, 0).unwrap();
+        assert_eq!(stack.len(), 0);
+        stack.push(Value::I32(8));
+        assert!(matches!(stack.unwind(1, 1), Err(RuntimeError::StackUnderflow)));
+        assert_eq!(stack.len(), 1);
     }
 
     #[test]
