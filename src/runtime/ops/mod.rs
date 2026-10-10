@@ -15,4 +15,4 @@ pub mod simd;
 pub(crate) use crate::parser::instruction::MemArg;
 pub(crate) use crate::runtime::memory::Memory;
 pub(crate) use crate::runtime::stack::Stack;
-pub(crate) use crate::runtime::{RuntimeError, Value};
+pub(crate) use crate::runtime::{RuntimeError, Trap, Value};

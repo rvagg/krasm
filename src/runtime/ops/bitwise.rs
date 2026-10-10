@@ -5,99 +5,76 @@
 //!
 //! All shift and rotate operations mask the shift count to the appropriate bit width.
 
-use super::*;
-
 // ============================================================================
 // i32 Bitwise Operations
 // ============================================================================
 
 /// i32.and - Bitwise AND
 /// spec: 4.4.1.3
-pub fn i32_and(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(a & b));
-    Ok(())
+pub fn i32_and(a: i32, b: i32) -> i32 {
+    a & b
 }
 
 /// i32.or - Bitwise OR
 /// spec: 4.4.1.3
-pub fn i32_or(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(a | b));
-    Ok(())
+pub fn i32_or(a: i32, b: i32) -> i32 {
+    a | b
 }
 
 /// i32.xor - Bitwise XOR
 /// spec: 4.4.1.3
-pub fn i32_xor(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(a ^ b));
-    Ok(())
+pub fn i32_xor(a: i32, b: i32) -> i32 {
+    a ^ b
 }
 
 /// i32.shl - Shift left
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 32
-pub fn i32_shl(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i32()?;
-    let value = stack.pop_i32()?;
+pub fn i32_shl(value: i32, count: i32) -> i32 {
     // WebAssembly spec: shift count is modulo 32
     let shift = (count & 31) as u32;
-    stack.push(Value::I32(value << shift));
-    Ok(())
+    value << shift
 }
 
 /// i32.shr_s - Arithmetic shift right (sign-extending)
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 32
-pub fn i32_shr_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i32()?;
-    let value = stack.pop_i32()?;
+pub fn i32_shr_s(value: i32, count: i32) -> i32 {
     // WebAssembly spec: shift count is modulo 32
     let shift = (count & 31) as u32;
-    stack.push(Value::I32(value >> shift));
-    Ok(())
+    value >> shift
 }
 
 /// i32.shr_u - Logical shift right (zero-extending)
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 32
-pub fn i32_shr_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i32()?;
-    let value = stack.pop_i32()? as u32;
+pub fn i32_shr_u(value: i32, count: i32) -> i32 {
+    let value = value as u32;
     // WebAssembly spec: shift count is modulo 32
     let shift = (count & 31) as u32;
-    stack.push(Value::I32((value >> shift) as i32));
-    Ok(())
+    (value >> shift) as i32
 }
 
 /// i32.rotl - Rotate left
 /// spec: 4.4.1.3
 /// The rotation count is taken modulo 32
-pub fn i32_rotl(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i32()?;
-    let value = stack.pop_i32()? as u32;
+pub fn i32_rotl(value: i32, count: i32) -> i32 {
+    let value = value as u32;
     // WebAssembly spec: rotation count is modulo 32
     let rotation = (count & 31) as u32;
     let result = value.rotate_left(rotation);
-    stack.push(Value::I32(result as i32));
-    Ok(())
+    result as i32
 }
 
 /// i32.rotr - Rotate right
 /// spec: 4.4.1.3
 /// The rotation count is taken modulo 32
-pub fn i32_rotr(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i32()?;
-    let value = stack.pop_i32()? as u32;
+pub fn i32_rotr(value: i32, count: i32) -> i32 {
+    let value = value as u32;
     // WebAssembly spec: rotation count is modulo 32
     let rotation = (count & 31) as u32;
     let result = value.rotate_right(rotation);
-    stack.push(Value::I32(result as i32));
-    Ok(())
+    result as i32
 }
 
 // ============================================================================
@@ -106,91 +83,70 @@ pub fn i32_rotr(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i64.and - Bitwise AND
 /// spec: 4.4.1.3
-pub fn i64_and(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I64(a & b));
-    Ok(())
+pub fn i64_and(a: i64, b: i64) -> i64 {
+    a & b
 }
 
 /// i64.or - Bitwise OR
 /// spec: 4.4.1.3
-pub fn i64_or(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I64(a | b));
-    Ok(())
+pub fn i64_or(a: i64, b: i64) -> i64 {
+    a | b
 }
 
 /// i64.xor - Bitwise XOR
 /// spec: 4.4.1.3
-pub fn i64_xor(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I64(a ^ b));
-    Ok(())
+pub fn i64_xor(a: i64, b: i64) -> i64 {
+    a ^ b
 }
 
 /// i64.shl - Shift left
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 64
-pub fn i64_shl(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i64()?;
-    let value = stack.pop_i64()?;
+pub fn i64_shl(value: i64, count: i64) -> i64 {
     // WebAssembly spec: shift count is modulo 64
     let shift = (count & 63) as u32;
-    stack.push(Value::I64(value << shift));
-    Ok(())
+    value << shift
 }
 
 /// i64.shr_s - Arithmetic shift right (sign-extending)
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 64
-pub fn i64_shr_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i64()?;
-    let value = stack.pop_i64()?;
+pub fn i64_shr_s(value: i64, count: i64) -> i64 {
     // WebAssembly spec: shift count is modulo 64
     let shift = (count & 63) as u32;
-    stack.push(Value::I64(value >> shift));
-    Ok(())
+    value >> shift
 }
 
 /// i64.shr_u - Logical shift right (zero-extending)
 /// spec: 4.4.1.3
 /// The shift count is taken modulo 64
-pub fn i64_shr_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i64()?;
-    let value = stack.pop_i64()? as u64;
+pub fn i64_shr_u(value: i64, count: i64) -> i64 {
+    let value = value as u64;
     // WebAssembly spec: shift count is modulo 64
     let shift = (count & 63) as u32;
-    stack.push(Value::I64((value >> shift) as i64));
-    Ok(())
+    (value >> shift) as i64
 }
 
 /// i64.rotl - Rotate left
 /// spec: 4.4.1.3
 /// The rotation count is taken modulo 64
-pub fn i64_rotl(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i64()?;
-    let value = stack.pop_i64()? as u64;
+pub fn i64_rotl(value: i64, count: i64) -> i64 {
+    let value = value as u64;
     // WebAssembly spec: rotation count is modulo 64
     let rotation = (count & 63) as u32;
     let result = value.rotate_left(rotation);
-    stack.push(Value::I64(result as i64));
-    Ok(())
+    result as i64
 }
 
 /// i64.rotr - Rotate right
 /// spec: 4.4.1.3
 /// The rotation count is taken modulo 64
-pub fn i64_rotr(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let count = stack.pop_i64()?;
-    let value = stack.pop_i64()? as u64;
+pub fn i64_rotr(value: i64, count: i64) -> i64 {
+    let value = value as u64;
     // WebAssembly spec: rotation count is modulo 64
     let rotation = (count & 63) as u32;
     let result = value.rotate_right(rotation);
-    stack.push(Value::I64(result as i64));
-    Ok(())
+    result as i64
 }
 
 #[cfg(test)]

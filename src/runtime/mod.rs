@@ -20,6 +20,7 @@ pub(crate) mod stack;
 pub mod store;
 pub mod table;
 pub(crate) mod test_utils;
+pub mod trap;
 pub mod value;
 pub mod wasi;
 
@@ -29,6 +30,7 @@ pub(crate) use instance::Instance;
 pub use memory::Memory;
 pub use store::{Caller, FuncAddr, GlobalAddr, MemoryAddr, Store, TableAddr};
 pub use table::Table;
+pub use trap::Trap;
 pub use value::Value;
 
 use crate::parser::module::{FunctionType, ValueType};

@@ -6,108 +6,74 @@
 //!
 //! All comparison operations return an i32 value: 1 for true, 0 for false.
 
-use super::*;
-
 // ============================================================================
 // Integer Comparison Operations (i32)
 // ============================================================================
 
 /// i32.eqz - Test if i32 is zero
 /// spec: 4.4.1.4
-pub fn i32_eqz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I32(if value == 0 { 1 } else { 0 }));
-    Ok(())
+pub fn i32_eqz(value: i32) -> i32 {
+    if value == 0 { 1 } else { 0 }
 }
 
 /// i32.eq - Test if two i32 values are equal
 /// spec: 4.4.1.5
-pub fn i32_eq(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a == b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_eq(a: i32, b: i32) -> i32 {
+    if a == b { 1 } else { 0 }
 }
 
 /// i32.ne - Test if two i32 values are not equal
 /// spec: 4.4.1.5
-pub fn i32_ne(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a != b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_ne(a: i32, b: i32) -> i32 {
+    if a != b { 1 } else { 0 }
 }
 
 /// i32.lt_s - Test if a < b (signed)
 /// spec: 4.4.1.5
-pub fn i32_lt_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a < b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_lt_s(a: i32, b: i32) -> i32 {
+    if a < b { 1 } else { 0 }
 }
 
 /// i32.lt_u - Test if a < b (unsigned)
 /// spec: 4.4.1.5
-pub fn i32_lt_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if (a as u32) < (b as u32) { 1 } else { 0 }));
-    Ok(())
+pub fn i32_lt_u(a: i32, b: i32) -> i32 {
+    if (a as u32) < (b as u32) { 1 } else { 0 }
 }
 
 /// i32.gt_s - Test if a > b (signed)
 /// spec: 4.4.1.5
-pub fn i32_gt_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a > b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_gt_s(a: i32, b: i32) -> i32 {
+    if a > b { 1 } else { 0 }
 }
 
 /// i32.gt_u - Test if a > b (unsigned)
 /// spec: 4.4.1.5
-pub fn i32_gt_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if (a as u32) > (b as u32) { 1 } else { 0 }));
-    Ok(())
+pub fn i32_gt_u(a: i32, b: i32) -> i32 {
+    if (a as u32) > (b as u32) { 1 } else { 0 }
 }
 
 /// i32.le_s - Test if a <= b (signed)
 /// spec: 4.4.1.5
-pub fn i32_le_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a <= b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_le_s(a: i32, b: i32) -> i32 {
+    if a <= b { 1 } else { 0 }
 }
 
 /// i32.le_u - Test if a <= b (unsigned)
 /// spec: 4.4.1.5
-pub fn i32_le_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if (a as u32) <= (b as u32) { 1 } else { 0 }));
-    Ok(())
+pub fn i32_le_u(a: i32, b: i32) -> i32 {
+    if (a as u32) <= (b as u32) { 1 } else { 0 }
 }
 
 /// i32.ge_s - Test if a >= b (signed)
 /// spec: 4.4.1.5
-pub fn i32_ge_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if a >= b { 1 } else { 0 }));
-    Ok(())
+pub fn i32_ge_s(a: i32, b: i32) -> i32 {
+    if a >= b { 1 } else { 0 }
 }
 
 /// i32.ge_u - Test if a >= b (unsigned)
 /// spec: 4.4.1.5
-pub fn i32_ge_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i32()?;
-    let a = stack.pop_i32()?;
-    stack.push(Value::I32(if (a as u32) >= (b as u32) { 1 } else { 0 }));
-    Ok(())
+pub fn i32_ge_u(a: i32, b: i32) -> i32 {
+    if (a as u32) >= (b as u32) { 1 } else { 0 }
 }
 
 // ============================================================================
@@ -116,100 +82,68 @@ pub fn i32_ge_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i64.eqz - Test if i64 is zero
 /// spec: 4.4.1.4
-pub fn i64_eqz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::I32(if value == 0 { 1 } else { 0 }));
-    Ok(())
+pub fn i64_eqz(value: i64) -> i32 {
+    if value == 0 { 1 } else { 0 }
 }
 
 /// i64.eq - Test if two i64 values are equal
 /// spec: 4.4.1.5
-pub fn i64_eq(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a == b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_eq(a: i64, b: i64) -> i32 {
+    if a == b { 1 } else { 0 }
 }
 
 /// i64.ne - Test if two i64 values are not equal
 /// spec: 4.4.1.5
-pub fn i64_ne(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a != b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_ne(a: i64, b: i64) -> i32 {
+    if a != b { 1 } else { 0 }
 }
 
 /// i64.lt_s - Test if a < b (signed)
 /// spec: 4.4.1.5
-pub fn i64_lt_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a < b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_lt_s(a: i64, b: i64) -> i32 {
+    if a < b { 1 } else { 0 }
 }
 
 /// i64.lt_u - Test if a < b (unsigned)
 /// spec: 4.4.1.5
-pub fn i64_lt_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if (a as u64) < (b as u64) { 1 } else { 0 }));
-    Ok(())
+pub fn i64_lt_u(a: i64, b: i64) -> i32 {
+    if (a as u64) < (b as u64) { 1 } else { 0 }
 }
 
 /// i64.gt_s - Test if a > b (signed)
 /// spec: 4.4.1.5
-pub fn i64_gt_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a > b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_gt_s(a: i64, b: i64) -> i32 {
+    if a > b { 1 } else { 0 }
 }
 
 /// i64.gt_u - Test if a > b (unsigned)
 /// spec: 4.4.1.5
-pub fn i64_gt_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if (a as u64) > (b as u64) { 1 } else { 0 }));
-    Ok(())
+pub fn i64_gt_u(a: i64, b: i64) -> i32 {
+    if (a as u64) > (b as u64) { 1 } else { 0 }
 }
 
 /// i64.le_s - Test if a <= b (signed)
 /// spec: 4.4.1.5
-pub fn i64_le_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a <= b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_le_s(a: i64, b: i64) -> i32 {
+    if a <= b { 1 } else { 0 }
 }
 
 /// i64.le_u - Test if a <= b (unsigned)
 /// spec: 4.4.1.5
-pub fn i64_le_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if (a as u64) <= (b as u64) { 1 } else { 0 }));
-    Ok(())
+pub fn i64_le_u(a: i64, b: i64) -> i32 {
+    if (a as u64) <= (b as u64) { 1 } else { 0 }
 }
 
 /// i64.ge_s - Test if a >= b (signed)
 /// spec: 4.4.1.5
-pub fn i64_ge_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if a >= b { 1 } else { 0 }));
-    Ok(())
+pub fn i64_ge_s(a: i64, b: i64) -> i32 {
+    if a >= b { 1 } else { 0 }
 }
 
 /// i64.ge_u - Test if a >= b (unsigned)
 /// spec: 4.4.1.5
-pub fn i64_ge_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_i64()?;
-    let a = stack.pop_i64()?;
-    stack.push(Value::I32(if (a as u64) >= (b as u64) { 1 } else { 0 }));
-    Ok(())
+pub fn i64_ge_u(a: i64, b: i64) -> i32 {
+    if (a as u64) >= (b as u64) { 1 } else { 0 }
 }
 
 // ============================================================================
@@ -219,58 +153,40 @@ pub fn i64_ge_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 /// f32.eq - Test if two f32 values are equal
 /// spec: 4.4.1.5
 /// Note: NaN != NaN, -0.0 == +0.0
-pub fn f32_eq(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a == b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_eq(a: f32, b: f32) -> i32 {
+    if a == b { 1 } else { 0 }
 }
 
 /// f32.ne - Test if two f32 values are not equal
 /// spec: 4.4.1.5
 /// Note: NaN != NaN returns true
-pub fn f32_ne(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a != b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_ne(a: f32, b: f32) -> i32 {
+    if a != b { 1 } else { 0 }
 }
 
 /// f32.lt - Test if a < b
 /// spec: 4.4.1.5
 /// Note: NaN comparisons return false
-pub fn f32_lt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a < b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_lt(a: f32, b: f32) -> i32 {
+    if a < b { 1 } else { 0 }
 }
 
 /// f32.gt - Test if a > b
 /// spec: 4.4.1.5
-pub fn f32_gt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a > b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_gt(a: f32, b: f32) -> i32 {
+    if a > b { 1 } else { 0 }
 }
 
 /// f32.le - Test if a <= b
 /// spec: 4.4.1.5
-pub fn f32_le(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a <= b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_le(a: f32, b: f32) -> i32 {
+    if a <= b { 1 } else { 0 }
 }
 
 /// f32.ge - Test if a >= b
 /// spec: 4.4.1.5
-pub fn f32_ge(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f32()?;
-    let a = stack.pop_f32()?;
-    stack.push(Value::I32(if a >= b { 1 } else { 0 }));
-    Ok(())
+pub fn f32_ge(a: f32, b: f32) -> i32 {
+    if a >= b { 1 } else { 0 }
 }
 
 // ============================================================================
@@ -279,56 +195,38 @@ pub fn f32_ge(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// f64.eq - Test if two f64 values are equal
 /// spec: 4.4.1.5
-pub fn f64_eq(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a == b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_eq(a: f64, b: f64) -> i32 {
+    if a == b { 1 } else { 0 }
 }
 
 /// f64.ne - Test if two f64 values are not equal
 /// spec: 4.4.1.5
-pub fn f64_ne(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a != b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_ne(a: f64, b: f64) -> i32 {
+    if a != b { 1 } else { 0 }
 }
 
 /// f64.lt - Test if a < b
 /// spec: 4.4.1.5
-pub fn f64_lt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a < b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_lt(a: f64, b: f64) -> i32 {
+    if a < b { 1 } else { 0 }
 }
 
 /// f64.gt - Test if a > b
 /// spec: 4.4.1.5
-pub fn f64_gt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a > b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_gt(a: f64, b: f64) -> i32 {
+    if a > b { 1 } else { 0 }
 }
 
 /// f64.le - Test if a <= b
 /// spec: 4.4.1.5
-pub fn f64_le(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a <= b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_le(a: f64, b: f64) -> i32 {
+    if a <= b { 1 } else { 0 }
 }
 
 /// f64.ge - Test if a >= b
 /// spec: 4.4.1.5
-pub fn f64_ge(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let b = stack.pop_f64()?;
-    let a = stack.pop_f64()?;
-    stack.push(Value::I32(if a >= b { 1 } else { 0 }));
-    Ok(())
+pub fn f64_ge(a: f64, b: f64) -> i32 {
+    if a >= b { 1 } else { 0 }
 }
 
 #[cfg(test)]

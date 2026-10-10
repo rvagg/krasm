@@ -1429,121 +1429,121 @@ impl Executor {
 
             // i32.clz - Count leading zeros
             I32Clz => {
-                ops::numeric::i32_clz(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i32_clz)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i32.ctz - Count trailing zeros
             I32Ctz => {
-                ops::numeric::i32_ctz(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i32_ctz)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i32.popcnt - Population count
             I32Popcnt => {
-                ops::numeric::i32_popcnt(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i32_popcnt)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i64.clz - Count leading zeros
             I64Clz => {
-                ops::numeric::i64_clz(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i64_clz)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i64.ctz - Count trailing zeros
             I64Ctz => {
-                ops::numeric::i64_ctz(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i64_ctz)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i64.popcnt - Population count
             I64Popcnt => {
-                ops::numeric::i64_popcnt(&mut self.stack)?;
+                self.stack.unary(ops::numeric::i64_popcnt)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.abs - Absolute value
             F32Abs => {
-                ops::numeric::f32_abs(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_abs)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.neg - Negation
             F32Neg => {
-                ops::numeric::f32_neg(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_neg)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.sqrt - Square root
             F32Sqrt => {
-                ops::numeric::f32_sqrt(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_sqrt)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.ceil - Ceiling
             F32Ceil => {
-                ops::numeric::f32_ceil(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_ceil)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.floor - Floor
             F32Floor => {
-                ops::numeric::f32_floor(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_floor)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.trunc - Truncate
             F32Trunc => {
-                ops::numeric::f32_trunc(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_trunc)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.nearest - Round to nearest even
             F32Nearest => {
-                ops::numeric::f32_nearest(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f32_nearest)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.abs - Absolute value
             F64Abs => {
-                ops::numeric::f64_abs(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_abs)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.neg - Negation
             F64Neg => {
-                ops::numeric::f64_neg(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_neg)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.sqrt - Square root
             F64Sqrt => {
-                ops::numeric::f64_sqrt(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_sqrt)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.ceil - Ceiling
             F64Ceil => {
-                ops::numeric::f64_ceil(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_ceil)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.floor - Floor
             F64Floor => {
-                ops::numeric::f64_floor(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_floor)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.trunc - Truncate
             F64Trunc => {
-                ops::numeric::f64_trunc(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_trunc)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.nearest - Round to nearest even
             F64Nearest => {
-                ops::numeric::f64_nearest(&mut self.stack)?;
+                self.stack.unary(ops::numeric::f64_nearest)?;
                 Ok(BlockEnd::Normal)
             }
 
@@ -1552,155 +1552,155 @@ impl Executor {
 
             // f32.add
             F32Add => {
-                ops::numeric::f32_add(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_add)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.sub
             F32Sub => {
-                ops::numeric::f32_sub(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_sub)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.mul
             F32Mul => {
-                ops::numeric::f32_mul(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_mul)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.div
             F32Div => {
-                ops::numeric::f32_div(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_div)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.min
             F32Min => {
-                ops::numeric::f32_min(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_min)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.max
             F32Max => {
-                ops::numeric::f32_max(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_max)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32.copysign
             F32Copysign => {
-                ops::numeric::f32_copysign(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f32_copysign)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.add
             F64Add => {
-                ops::numeric::f64_add(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_add)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.sub
             F64Sub => {
-                ops::numeric::f64_sub(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_sub)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.mul
             F64Mul => {
-                ops::numeric::f64_mul(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_mul)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.div
             F64Div => {
-                ops::numeric::f64_div(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_div)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.min
             F64Min => {
-                ops::numeric::f64_min(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_min)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.max
             F64Max => {
-                ops::numeric::f64_max(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_max)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64.copysign
             F64Copysign => {
-                ops::numeric::f64_copysign(&mut self.stack)?;
+                self.stack.binary(ops::numeric::f64_copysign)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32Add => {
-                ops::numeric::i32_add(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i32_add)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32Sub => {
-                ops::numeric::i32_sub(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i32_sub)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32Mul => {
-                ops::numeric::i32_mul(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i32_mul)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32DivS => {
-                ops::numeric::i32_div_s(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i32_div_s)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32DivU => {
-                ops::numeric::i32_div_u(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i32_div_u)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32RemS => {
-                ops::numeric::i32_rem_s(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i32_rem_s)?;
                 Ok(BlockEnd::Normal)
             }
 
             I32RemU => {
-                ops::numeric::i32_rem_u(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i32_rem_u)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64Add => {
-                ops::numeric::i64_add(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i64_add)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64Sub => {
-                ops::numeric::i64_sub(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i64_sub)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64Mul => {
-                ops::numeric::i64_mul(&mut self.stack)?;
+                self.stack.binary(ops::numeric::i64_mul)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64DivS => {
-                ops::numeric::i64_div_s(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i64_div_s)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64DivU => {
-                ops::numeric::i64_div_u(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i64_div_u)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64RemS => {
-                ops::numeric::i64_rem_s(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i64_rem_s)?;
                 Ok(BlockEnd::Normal)
             }
 
             I64RemU => {
-                ops::numeric::i64_rem_u(&mut self.stack)?;
+                self.stack.try_binary(ops::numeric::i64_rem_u)?;
                 Ok(BlockEnd::Normal)
             }
 
@@ -1709,69 +1709,69 @@ impl Executor {
 
             // i32 bitwise operations
             I32And => {
-                ops::bitwise::i32_and(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_and)?;
                 Ok(BlockEnd::Normal)
             }
             I32Or => {
-                ops::bitwise::i32_or(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_or)?;
                 Ok(BlockEnd::Normal)
             }
             I32Xor => {
-                ops::bitwise::i32_xor(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_xor)?;
                 Ok(BlockEnd::Normal)
             }
             I32Shl => {
-                ops::bitwise::i32_shl(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_shl)?;
                 Ok(BlockEnd::Normal)
             }
             I32ShrS => {
-                ops::bitwise::i32_shr_s(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_shr_s)?;
                 Ok(BlockEnd::Normal)
             }
             I32ShrU => {
-                ops::bitwise::i32_shr_u(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_shr_u)?;
                 Ok(BlockEnd::Normal)
             }
             I32Rotl => {
-                ops::bitwise::i32_rotl(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_rotl)?;
                 Ok(BlockEnd::Normal)
             }
             I32Rotr => {
-                ops::bitwise::i32_rotr(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i32_rotr)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i64 bitwise operations
             I64And => {
-                ops::bitwise::i64_and(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_and)?;
                 Ok(BlockEnd::Normal)
             }
             I64Or => {
-                ops::bitwise::i64_or(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_or)?;
                 Ok(BlockEnd::Normal)
             }
             I64Xor => {
-                ops::bitwise::i64_xor(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_xor)?;
                 Ok(BlockEnd::Normal)
             }
             I64Shl => {
-                ops::bitwise::i64_shl(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_shl)?;
                 Ok(BlockEnd::Normal)
             }
             I64ShrS => {
-                ops::bitwise::i64_shr_s(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_shr_s)?;
                 Ok(BlockEnd::Normal)
             }
             I64ShrU => {
-                ops::bitwise::i64_shr_u(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_shr_u)?;
                 Ok(BlockEnd::Normal)
             }
             I64Rotl => {
-                ops::bitwise::i64_rotl(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_rotl)?;
                 Ok(BlockEnd::Normal)
             }
             I64Rotr => {
-                ops::bitwise::i64_rotr(&mut self.stack)?;
+                self.stack.binary(ops::bitwise::i64_rotr)?;
                 Ok(BlockEnd::Normal)
             }
 
@@ -1780,145 +1780,145 @@ impl Executor {
 
             // i32 test and comparison
             I32Eqz => {
-                ops::comparison::i32_eqz(&mut self.stack)?;
+                self.stack.unary(ops::comparison::i32_eqz)?;
                 Ok(BlockEnd::Normal)
             }
             I32Eq => {
-                ops::comparison::i32_eq(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_eq)?;
                 Ok(BlockEnd::Normal)
             }
             I32Ne => {
-                ops::comparison::i32_ne(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_ne)?;
                 Ok(BlockEnd::Normal)
             }
             I32LtS => {
-                ops::comparison::i32_lt_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_lt_s)?;
                 Ok(BlockEnd::Normal)
             }
             I32LtU => {
-                ops::comparison::i32_lt_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_lt_u)?;
                 Ok(BlockEnd::Normal)
             }
             I32GtS => {
-                ops::comparison::i32_gt_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_gt_s)?;
                 Ok(BlockEnd::Normal)
             }
             I32GtU => {
-                ops::comparison::i32_gt_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_gt_u)?;
                 Ok(BlockEnd::Normal)
             }
             I32LeS => {
-                ops::comparison::i32_le_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_le_s)?;
                 Ok(BlockEnd::Normal)
             }
             I32LeU => {
-                ops::comparison::i32_le_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_le_u)?;
                 Ok(BlockEnd::Normal)
             }
             I32GeS => {
-                ops::comparison::i32_ge_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_ge_s)?;
                 Ok(BlockEnd::Normal)
             }
             I32GeU => {
-                ops::comparison::i32_ge_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i32_ge_u)?;
                 Ok(BlockEnd::Normal)
             }
 
             // i64 test and comparison
             I64Eqz => {
-                ops::comparison::i64_eqz(&mut self.stack)?;
+                self.stack.unary(ops::comparison::i64_eqz)?;
                 Ok(BlockEnd::Normal)
             }
             I64Eq => {
-                ops::comparison::i64_eq(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_eq)?;
                 Ok(BlockEnd::Normal)
             }
             I64Ne => {
-                ops::comparison::i64_ne(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_ne)?;
                 Ok(BlockEnd::Normal)
             }
             I64LtS => {
-                ops::comparison::i64_lt_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_lt_s)?;
                 Ok(BlockEnd::Normal)
             }
             I64LtU => {
-                ops::comparison::i64_lt_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_lt_u)?;
                 Ok(BlockEnd::Normal)
             }
             I64GtS => {
-                ops::comparison::i64_gt_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_gt_s)?;
                 Ok(BlockEnd::Normal)
             }
             I64GtU => {
-                ops::comparison::i64_gt_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_gt_u)?;
                 Ok(BlockEnd::Normal)
             }
             I64LeS => {
-                ops::comparison::i64_le_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_le_s)?;
                 Ok(BlockEnd::Normal)
             }
             I64LeU => {
-                ops::comparison::i64_le_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_le_u)?;
                 Ok(BlockEnd::Normal)
             }
             I64GeS => {
-                ops::comparison::i64_ge_s(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_ge_s)?;
                 Ok(BlockEnd::Normal)
             }
             I64GeU => {
-                ops::comparison::i64_ge_u(&mut self.stack)?;
+                self.stack.binary(ops::comparison::i64_ge_u)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f32 comparison
             F32Eq => {
-                ops::comparison::f32_eq(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_eq)?;
                 Ok(BlockEnd::Normal)
             }
             F32Ne => {
-                ops::comparison::f32_ne(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_ne)?;
                 Ok(BlockEnd::Normal)
             }
             F32Lt => {
-                ops::comparison::f32_lt(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_lt)?;
                 Ok(BlockEnd::Normal)
             }
             F32Gt => {
-                ops::comparison::f32_gt(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_gt)?;
                 Ok(BlockEnd::Normal)
             }
             F32Le => {
-                ops::comparison::f32_le(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_le)?;
                 Ok(BlockEnd::Normal)
             }
             F32Ge => {
-                ops::comparison::f32_ge(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f32_ge)?;
                 Ok(BlockEnd::Normal)
             }
 
             // f64 comparison
             F64Eq => {
-                ops::comparison::f64_eq(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_eq)?;
                 Ok(BlockEnd::Normal)
             }
             F64Ne => {
-                ops::comparison::f64_ne(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_ne)?;
                 Ok(BlockEnd::Normal)
             }
             F64Lt => {
-                ops::comparison::f64_lt(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_lt)?;
                 Ok(BlockEnd::Normal)
             }
             F64Gt => {
-                ops::comparison::f64_gt(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_gt)?;
                 Ok(BlockEnd::Normal)
             }
             F64Le => {
-                ops::comparison::f64_le(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_le)?;
                 Ok(BlockEnd::Normal)
             }
             F64Ge => {
-                ops::comparison::f64_ge(&mut self.stack)?;
+                self.stack.binary(ops::comparison::f64_ge)?;
                 Ok(BlockEnd::Normal)
             }
 

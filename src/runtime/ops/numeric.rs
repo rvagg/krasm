@@ -8,7 +8,7 @@
 //! - Section 4.4.1.4: Test operations (t.testop)
 //! - Section 4.4.1.5: Comparison operations (t.relop)
 
-use super::{RuntimeError, Stack, Value};
+use super::{RuntimeError, Stack, Trap, Value};
 
 // ============================================================================
 // Numeric Constants (Section 4.4.1.1)
@@ -52,140 +52,78 @@ pub fn f64_const(stack: &mut Stack, value: f64) -> Result<(), RuntimeError> {
 
 /// i32.add
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. Compute c1 + c2 modulo 2^32
-/// 5. Push result to stack
-pub fn i32_add(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
-    stack.push(Value::I32(c1.wrapping_add(c2)));
-    Ok(())
+/// 1. Compute c1 + c2 modulo 2^32
+pub fn i32_add(c1: i32, c2: i32) -> i32 {
+    c1.wrapping_add(c2)
 }
 
 /// i32.sub
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. Compute c1 - c2 modulo 2^32
-/// 5. Push result to stack
-pub fn i32_sub(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
-    stack.push(Value::I32(c1.wrapping_sub(c2)));
-    Ok(())
+/// 1. Compute c1 - c2 modulo 2^32
+pub fn i32_sub(c1: i32, c2: i32) -> i32 {
+    c1.wrapping_sub(c2)
 }
 
 /// i32.mul
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. Compute c1 * c2 modulo 2^32
-/// 5. Push result to stack
-pub fn i32_mul(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
-    stack.push(Value::I32(c1.wrapping_mul(c2)));
-    Ok(())
+/// 1. Compute c1 * c2 modulo 2^32
+pub fn i32_mul(c1: i32, c2: i32) -> i32 {
+    c1.wrapping_mul(c2)
 }
 
 /// i32.div_s
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. If c2 is 0, trap
-/// 5. If c1 is INT32_MIN and c2 is -1, trap (result 2^31 doesn't fit in i32)
-/// 6. Compute signed division, truncating toward zero
-/// 7. Push result to stack
-pub fn i32_div_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
+/// 1. If c2 is 0, trap
+/// 2. If c1 is INT32_MIN and c2 is -1, trap (result 2^31 doesn't fit in i32)
+/// 3. Compute signed division, truncating toward zero
+pub fn i32_div_s(c1: i32, c2: i32) -> Result<i32, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
     // Check for overflow: i32::MIN / -1
     if c1 == i32::MIN && c2 == -1 {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
-    stack.push(Value::I32(c1 / c2));
-    Ok(())
+    Ok(c1 / c2)
 }
 
 /// i32.div_u
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute unsigned division
-/// 6. Push result to stack
-pub fn i32_div_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
+/// 1. If c2 is 0, trap
+/// 2. Compute unsigned division
+pub fn i32_div_u(c1: i32, c2: i32) -> Result<i32, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
     // Interpret as unsigned for division
     let u1 = c1 as u32;
     let u2 = c2 as u32;
-    stack.push(Value::I32((u1 / u2) as i32));
-    Ok(())
+    Ok((u1 / u2) as i32)
 }
 
 /// i32.rem_s
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute signed remainder
-/// 6. Push result to stack
+/// 1. If c2 is 0, trap
+/// 2. Compute signed remainder
 ///
 /// Note: any integer % ±1 = 0 mathematically
-pub fn i32_rem_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
+pub fn i32_rem_s(c1: i32, c2: i32) -> Result<i32, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
-    // Mathematical fact: any integer % ±1 = 0
-    // Special handling for i32::MIN % -1 to avoid overflow
-    if c2 == 1 || c2 == -1 {
-        stack.push(Value::I32(0));
-    } else {
-        stack.push(Value::I32(c1 % c2));
-    }
-    Ok(())
+    // Wasm defines `i32::MIN % -1` as 0, where Rust's `%` overflows.
+    Ok(c1.wrapping_rem(c2))
 }
 
 /// i32.rem_u
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i32, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute unsigned remainder
-/// 6. Push result to stack
-pub fn i32_rem_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i32()?;
-    let c1 = stack.pop_i32()?;
+/// 1. If c2 is 0, trap
+/// 2. Compute unsigned remainder
+pub fn i32_rem_u(c1: i32, c2: i32) -> Result<i32, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
-    // Optimise: any unsigned % 1 = 0
-    if c2 == 1 {
-        stack.push(Value::I32(0));
-    } else {
-        // Interpret as unsigned for remainder
-        let u1 = c1 as u32;
-        let u2 = c2 as u32;
-        stack.push(Value::I32((u1 % u2) as i32));
-    }
-    Ok(())
+    Ok(((c1 as u32) % (c2 as u32)) as i32)
 }
 
 // ============================================================================
@@ -194,35 +132,23 @@ pub fn i32_rem_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i32.clz - Count leading zeros
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute clz(c1) = count of leading zero bits
-/// 3. Push result to stack
-pub fn i32_clz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I32(value.leading_zeros() as i32));
-    Ok(())
+/// 1. Compute clz(c1) = count of leading zero bits
+pub fn i32_clz(value: i32) -> i32 {
+    value.leading_zeros() as i32
 }
 
 /// i32.ctz - Count trailing zeros
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute ctz(c1) = count of trailing zero bits
-/// 3. Push result to stack
-pub fn i32_ctz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I32(value.trailing_zeros() as i32));
-    Ok(())
+/// 1. Compute ctz(c1) = count of trailing zero bits
+pub fn i32_ctz(value: i32) -> i32 {
+    value.trailing_zeros() as i32
 }
 
 /// i32.popcnt - Population count
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute popcnt(c1) = count of non-zero bits
-/// 3. Push result to stack
-pub fn i32_popcnt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I32(value.count_ones() as i32));
-    Ok(())
+/// 1. Compute popcnt(c1) = count of non-zero bits
+pub fn i32_popcnt(value: i32) -> i32 {
+    value.count_ones() as i32
 }
 
 // ============================================================================
@@ -231,140 +157,78 @@ pub fn i32_popcnt(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i64.add
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. Compute c1 + c2 modulo 2^64
-/// 5. Push result to stack
-pub fn i64_add(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
-    stack.push(Value::I64(c1.wrapping_add(c2)));
-    Ok(())
+/// 1. Compute c1 + c2 modulo 2^64
+pub fn i64_add(c1: i64, c2: i64) -> i64 {
+    c1.wrapping_add(c2)
 }
 
 /// i64.sub
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. Compute c1 - c2 modulo 2^64
-/// 5. Push result to stack
-pub fn i64_sub(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
-    stack.push(Value::I64(c1.wrapping_sub(c2)));
-    Ok(())
+/// 1. Compute c1 - c2 modulo 2^64
+pub fn i64_sub(c1: i64, c2: i64) -> i64 {
+    c1.wrapping_sub(c2)
 }
 
 /// i64.mul
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. Compute c1 * c2 modulo 2^64
-/// 5. Push result to stack
-pub fn i64_mul(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
-    stack.push(Value::I64(c1.wrapping_mul(c2)));
-    Ok(())
+/// 1. Compute c1 * c2 modulo 2^64
+pub fn i64_mul(c1: i64, c2: i64) -> i64 {
+    c1.wrapping_mul(c2)
 }
 
 /// i64.div_s
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. If c2 is 0, trap
-/// 5. If c1 is INT64_MIN and c2 is -1, trap (result 2^63 doesn't fit in i64)
-/// 6. Compute signed division, truncating toward zero
-/// 7. Push result to stack
-pub fn i64_div_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
+/// 1. If c2 is 0, trap
+/// 2. If c1 is INT64_MIN and c2 is -1, trap (result 2^63 doesn't fit in i64)
+/// 3. Compute signed division, truncating toward zero
+pub fn i64_div_s(c1: i64, c2: i64) -> Result<i64, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
     // Check for overflow: i64::MIN / -1
     if c1 == i64::MIN && c2 == -1 {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
-    stack.push(Value::I64(c1 / c2));
-    Ok(())
+    Ok(c1 / c2)
 }
 
 /// i64.div_u
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute unsigned division
-/// 6. Push result to stack
-pub fn i64_div_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
+/// 1. If c2 is 0, trap
+/// 2. Compute unsigned division
+pub fn i64_div_u(c1: i64, c2: i64) -> Result<i64, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
     // Interpret as unsigned for division
     let u1 = c1 as u64;
     let u2 = c2 as u64;
-    stack.push(Value::I64((u1 / u2) as i64));
-    Ok(())
+    Ok((u1 / u2) as i64)
 }
 
 /// i64.rem_s
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute signed remainder
-/// 6. Push result to stack
+/// 1. If c2 is 0, trap
+/// 2. Compute signed remainder
 ///
 /// Note: any integer % ±1 = 0 mathematically
-pub fn i64_rem_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
+pub fn i64_rem_s(c1: i64, c2: i64) -> Result<i64, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
-    // Mathematical fact: any integer % ±1 = 0
-    // Special handling for i64::MIN % -1 to avoid overflow
-    if c2 == 1 || c2 == -1 {
-        stack.push(Value::I64(0));
-    } else {
-        stack.push(Value::I64(c1 % c2));
-    }
-    Ok(())
+    // Wasm defines `i64::MIN % -1` as 0, where Rust's `%` overflows.
+    Ok(c1.wrapping_rem(c2))
 }
 
 /// i64.rem_u
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. If either value is not i64, trap
-/// 4. If c2 is 0, trap
-/// 5. Compute unsigned remainder
-/// 6. Push result to stack
-pub fn i64_rem_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_i64()?;
-    let c1 = stack.pop_i64()?;
+/// 1. If c2 is 0, trap
+/// 2. Compute unsigned remainder
+pub fn i64_rem_u(c1: i64, c2: i64) -> Result<i64, Trap> {
     if c2 == 0 {
-        return Err(RuntimeError::DivisionByZero);
+        return Err(Trap::IntegerDivideByZero);
     }
-    // Optimise: any unsigned % 1 = 0
-    if c2 == 1 {
-        stack.push(Value::I64(0));
-    } else {
-        // Interpret as unsigned for remainder
-        let u1 = c1 as u64;
-        let u2 = c2 as u64;
-        stack.push(Value::I64((u1 % u2) as i64));
-    }
-    Ok(())
+    Ok(((c1 as u64) % (c2 as u64)) as i64)
 }
 
 // ============================================================================
@@ -373,186 +237,130 @@ pub fn i64_rem_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// f32.abs - Absolute value
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute abs(c1) = absolute value of c1
-/// 3. Push result to stack
+/// 1. Compute abs(c1) = absolute value of c1
 ///
 /// Note: Preserves NaN payload and sign handling per IEEE 754
-pub fn f32_abs(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.abs()));
-    Ok(())
+pub fn f32_abs(value: f32) -> f32 {
+    value.abs()
 }
 
 /// f32.neg - Negation
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute neg(c1) = negation of c1
-/// 3. Push result to stack
+/// 1. Compute neg(c1) = negation of c1
 ///
 /// Note: Flips sign bit, including for NaN and infinity
-pub fn f32_neg(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(f32::from_bits(value.to_bits() ^ 0x80000000)));
-    Ok(())
+pub fn f32_neg(value: f32) -> f32 {
+    f32::from_bits(value.to_bits() ^ 0x80000000)
 }
 
 /// f32.sqrt - Square root
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute sqrt(c1) per IEEE 754-2019
-/// 3. Push result to stack
+/// 1. Compute sqrt(c1) per IEEE 754-2019
 ///
 /// Note: Returns NaN for negative inputs
-pub fn f32_sqrt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.sqrt()));
-    Ok(())
+pub fn f32_sqrt(value: f32) -> f32 {
+    value.sqrt()
 }
 
 /// f32.ceil - Ceiling
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute ceil(c1) = smallest integer >= c1
-/// 3. Push result to stack
+/// 1. Compute ceil(c1) = smallest integer >= c1
 ///
 /// Note: Preserves NaN, ±∞, and ±0
-pub fn f32_ceil(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.ceil()));
-    Ok(())
+pub fn f32_ceil(value: f32) -> f32 {
+    value.ceil()
 }
 
 /// f32.floor - Floor
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute floor(c1) = largest integer <= c1
-/// 3. Push result to stack
+/// 1. Compute floor(c1) = largest integer <= c1
 ///
 /// Note: Preserves NaN, ±∞, and ±0
-pub fn f32_floor(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.floor()));
-    Ok(())
+pub fn f32_floor(value: f32) -> f32 {
+    value.floor()
 }
 
 /// f32.trunc - Truncate
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute trunc(c1) = round toward zero
-/// 3. Push result to stack
+/// 1. Compute trunc(c1) = round toward zero
 ///
 /// Note: Discards fractional part, preserves sign
-pub fn f32_trunc(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.trunc()));
-    Ok(())
+pub fn f32_trunc(value: f32) -> f32 {
+    value.trunc()
 }
 
 /// f32.nearest - Round to nearest even
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute nearest(c1) = round to nearest integer
-/// 3. If tie, round to even (banker's rounding)
-/// 4. Push result to stack
+/// 1. Compute nearest(c1) = round to nearest integer
+/// 2. If tie, round to even (banker's rounding)
 ///
 /// Note: Rust's round_ties_even() implements IEEE 754 roundTiesToEven
-pub fn f32_nearest(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F32(value.round_ties_even()));
-    Ok(())
+pub fn f32_nearest(value: f32) -> f32 {
+    value.round_ties_even()
 }
 
 /// f64.abs - Absolute value
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute abs(c1) = absolute value of c1
-/// 3. Push result to stack
+/// 1. Compute abs(c1) = absolute value of c1
 ///
 /// Note: Preserves NaN payload and sign handling per IEEE 754
-pub fn f64_abs(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.abs()));
-    Ok(())
+pub fn f64_abs(value: f64) -> f64 {
+    value.abs()
 }
 
 /// f64.neg - Negation
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute neg(c1) = negation of c1
-/// 3. Push result to stack
+/// 1. Compute neg(c1) = negation of c1
 ///
 /// Note: Flips sign bit, including for NaN and infinity
-pub fn f64_neg(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(f64::from_bits(value.to_bits() ^ 0x8000000000000000)));
-    Ok(())
+pub fn f64_neg(value: f64) -> f64 {
+    f64::from_bits(value.to_bits() ^ 0x8000000000000000)
 }
 
 /// f64.sqrt - Square root
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute sqrt(c1) per IEEE 754-2019
-/// 3. Push result to stack
+/// 1. Compute sqrt(c1) per IEEE 754-2019
 ///
 /// Note: Returns NaN for negative inputs
-pub fn f64_sqrt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.sqrt()));
-    Ok(())
+pub fn f64_sqrt(value: f64) -> f64 {
+    value.sqrt()
 }
 
 /// f64.ceil - Ceiling
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute ceil(c1) = smallest integer >= c1
-/// 3. Push result to stack
+/// 1. Compute ceil(c1) = smallest integer >= c1
 ///
 /// Note: Preserves NaN, ±∞, and ±0
-pub fn f64_ceil(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.ceil()));
-    Ok(())
+pub fn f64_ceil(value: f64) -> f64 {
+    value.ceil()
 }
 
 /// f64.floor - Floor
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute floor(c1) = largest integer <= c1
-/// 3. Push result to stack
+/// 1. Compute floor(c1) = largest integer <= c1
 ///
 /// Note: Preserves NaN, ±∞, and ±0
-pub fn f64_floor(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.floor()));
-    Ok(())
+pub fn f64_floor(value: f64) -> f64 {
+    value.floor()
 }
 
 /// f64.trunc - Truncate
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute trunc(c1) = round toward zero
-/// 3. Push result to stack
+/// 1. Compute trunc(c1) = round toward zero
 ///
 /// Note: Discards fractional part, preserves sign
-pub fn f64_trunc(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.trunc()));
-    Ok(())
+pub fn f64_trunc(value: f64) -> f64 {
+    value.trunc()
 }
 
 /// f64.nearest - Round to nearest even
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute nearest(c1) = round to nearest integer
-/// 3. If tie, round to even (banker's rounding)
-/// 4. Push result to stack
+/// 1. Compute nearest(c1) = round to nearest integer
+/// 2. If tie, round to even (banker's rounding)
 ///
 /// Note: Rust's round_ties_even() implements IEEE 754 roundTiesToEven
-pub fn f64_nearest(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F64(value.round_ties_even()));
-    Ok(())
+pub fn f64_nearest(value: f64) -> f64 {
+    value.round_ties_even()
 }
 
 // ============================================================================
@@ -561,214 +369,144 @@ pub fn f64_nearest(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// f32.add
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fadd(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
+/// 1. Compute fadd(c1, c2) per IEEE 754-2019
 ///
 /// Note: NaN propagation is non-deterministic per spec
-pub fn f32_add(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
-    stack.push(Value::F32(c1 + c2));
-    Ok(())
+pub fn f32_add(c1: f32, c2: f32) -> f32 {
+    c1 + c2
 }
 
 /// f32.sub
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fsub(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
-pub fn f32_sub(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
-    stack.push(Value::F32(c1 - c2));
-    Ok(())
+/// 1. Compute fsub(c1, c2) per IEEE 754-2019
+pub fn f32_sub(c1: f32, c2: f32) -> f32 {
+    c1 - c2
 }
 
 /// f32.mul
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fmul(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
-pub fn f32_mul(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
-    stack.push(Value::F32(c1 * c2));
-    Ok(())
+/// 1. Compute fmul(c1, c2) per IEEE 754-2019
+pub fn f32_mul(c1: f32, c2: f32) -> f32 {
+    c1 * c2
 }
 
 /// f32.div
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fdiv(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
+/// 1. Compute fdiv(c1, c2) per IEEE 754-2019
 ///
 /// Note: Division by zero returns ±∞ per IEEE 754
-pub fn f32_div(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
-    stack.push(Value::F32(c1 / c2));
-    Ok(())
+pub fn f32_div(c1: f32, c2: f32) -> f32 {
+    c1 / c2
 }
 
 /// f32.min
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns the minimum of two values
 /// Special cases: -0.0 < +0.0, NaN propagation
-pub fn f32_min(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
+pub fn f32_min(c1: f32, c2: f32) -> f32 {
     // WebAssembly spec requires special NaN and -0.0 handling
-    let result = if c1.is_nan() || c2.is_nan() {
+    if c1.is_nan() || c2.is_nan() {
         f32::NAN
     } else if c1 == 0.0 && c2 == 0.0 && c1.is_sign_negative() != c2.is_sign_negative() {
         // -0.0 is less than +0.0
         if c1.is_sign_negative() { c1 } else { c2 }
     } else {
         c1.min(c2)
-    };
-    stack.push(Value::F32(result));
-    Ok(())
+    }
 }
 
 /// f32.max
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns the maximum of two values
 /// Special cases: +0.0 > -0.0, NaN propagation
-pub fn f32_max(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
+pub fn f32_max(c1: f32, c2: f32) -> f32 {
     // WebAssembly spec requires special NaN and -0.0 handling
-    let result = if c1.is_nan() || c2.is_nan() {
+    if c1.is_nan() || c2.is_nan() {
         f32::NAN
     } else if c1 == 0.0 && c2 == 0.0 && c1.is_sign_negative() != c2.is_sign_negative() {
         // +0.0 is greater than -0.0
         if c1.is_sign_negative() { c2 } else { c1 }
     } else {
         c1.max(c2)
-    };
-    stack.push(Value::F32(result));
-    Ok(())
+    }
 }
 
 /// f32.copysign
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns c1 with the sign of c2
-pub fn f32_copysign(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f32()?;
-    let c1 = stack.pop_f32()?;
-    stack.push(Value::F32(c1.copysign(c2)));
-    Ok(())
+pub fn f32_copysign(c1: f32, c2: f32) -> f32 {
+    c1.copysign(c2)
 }
 
 /// f64.add
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fadd(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
+/// 1. Compute fadd(c1, c2) per IEEE 754-2019
 ///
 /// Note: NaN propagation is non-deterministic per spec
-pub fn f64_add(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
-    stack.push(Value::F64(c1 + c2));
-    Ok(())
+pub fn f64_add(c1: f64, c2: f64) -> f64 {
+    c1 + c2
 }
 
 /// f64.sub
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fsub(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
-pub fn f64_sub(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
-    stack.push(Value::F64(c1 - c2));
-    Ok(())
+/// 1. Compute fsub(c1, c2) per IEEE 754-2019
+pub fn f64_sub(c1: f64, c2: f64) -> f64 {
+    c1 - c2
 }
 
 /// f64.mul
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fmul(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
-pub fn f64_mul(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
-    stack.push(Value::F64(c1 * c2));
-    Ok(())
+/// 1. Compute fmul(c1, c2) per IEEE 754-2019
+pub fn f64_mul(c1: f64, c2: f64) -> f64 {
+    c1 * c2
 }
 
 /// f64.div
 /// From the spec (4.4.1.3 - t.binop):
-/// 1. Pop value c2 from stack
-/// 2. Pop value c1 from stack
-/// 3. Compute fdiv(c1, c2) per IEEE 754-2019
-/// 4. Push result to stack
+/// 1. Compute fdiv(c1, c2) per IEEE 754-2019
 ///
 /// Note: Division by zero returns ±∞ per IEEE 754
-pub fn f64_div(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
-    stack.push(Value::F64(c1 / c2));
-    Ok(())
+pub fn f64_div(c1: f64, c2: f64) -> f64 {
+    c1 / c2
 }
 
 /// f64.min
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns the minimum of two values
 /// Special cases: -0.0 < +0.0, NaN propagation
-pub fn f64_min(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
+pub fn f64_min(c1: f64, c2: f64) -> f64 {
     // WebAssembly spec requires special NaN and -0.0 handling
-    let result = if c1.is_nan() || c2.is_nan() {
+    if c1.is_nan() || c2.is_nan() {
         f64::NAN
     } else if c1 == 0.0 && c2 == 0.0 && c1.is_sign_negative() != c2.is_sign_negative() {
         // -0.0 is less than +0.0
         if c1.is_sign_negative() { c1 } else { c2 }
     } else {
         c1.min(c2)
-    };
-    stack.push(Value::F64(result));
-    Ok(())
+    }
 }
 
 /// f64.max
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns the maximum of two values
 /// Special cases: +0.0 > -0.0, NaN propagation
-pub fn f64_max(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
+pub fn f64_max(c1: f64, c2: f64) -> f64 {
     // WebAssembly spec requires special NaN and -0.0 handling
-    let result = if c1.is_nan() || c2.is_nan() {
+    if c1.is_nan() || c2.is_nan() {
         f64::NAN
     } else if c1 == 0.0 && c2 == 0.0 && c1.is_sign_negative() != c2.is_sign_negative() {
         // +0.0 is greater than -0.0
         if c1.is_sign_negative() { c2 } else { c1 }
     } else {
         c1.max(c2)
-    };
-    stack.push(Value::F64(result));
-    Ok(())
+    }
 }
 
 /// f64.copysign
 /// From the spec (4.4.1.3 - t.binop):
 /// Returns c1 with the sign of c2
-pub fn f64_copysign(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let c2 = stack.pop_f64()?;
-    let c1 = stack.pop_f64()?;
-    stack.push(Value::F64(c1.copysign(c2)));
-    Ok(())
+pub fn f64_copysign(c1: f64, c2: f64) -> f64 {
+    c1.copysign(c2)
 }
 
 // ============================================================================
@@ -777,35 +515,23 @@ pub fn f64_copysign(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i64.clz - Count leading zeros
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute clz(c1) = count of leading zero bits
-/// 3. Push result to stack
-pub fn i64_clz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::I64(value.leading_zeros() as i64));
-    Ok(())
+/// 1. Compute clz(c1) = count of leading zero bits
+pub fn i64_clz(value: i64) -> i64 {
+    value.leading_zeros() as i64
 }
 
 /// i64.ctz - Count trailing zeros
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute ctz(c1) = count of trailing zero bits
-/// 3. Push result to stack
-pub fn i64_ctz(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::I64(value.trailing_zeros() as i64));
-    Ok(())
+/// 1. Compute ctz(c1) = count of trailing zero bits
+pub fn i64_ctz(value: i64) -> i64 {
+    value.trailing_zeros() as i64
 }
 
 /// i64.popcnt - Population count
 /// From the spec (4.4.1.2 - t.unop):
-/// 1. Pop value c1 from stack
-/// 2. Compute popcnt(c1) = count of non-zero bits
-/// 3. Push result to stack
-pub fn i64_popcnt(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::I64(value.count_ones() as i64));
-    Ok(())
+/// 1. Compute popcnt(c1) = count of non-zero bits
+pub fn i64_popcnt(value: i64) -> i64 {
+    value.count_ones() as i64
 }
 
 #[cfg(test)]

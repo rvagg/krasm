@@ -1,6 +1,6 @@
 //! WebAssembly value stack implementation
 
-use super::{RuntimeError, Value};
+use super::{RuntimeError, Trap, Value};
 use crate::parser::module::ValueType;
 
 /// The WebAssembly value stack
@@ -52,6 +52,38 @@ impl Stack {
     typed_pop!(pop_f64, F64, f64);
     typed_pop!(pop_v128, V128, [u8; 16]);
 
+    /// Replace the top operand with `op` applied to it.
+    #[inline(never)]
+    pub fn unary<A: Operand, R: Operand>(&mut self, op: impl FnOnce(A) -> R) -> Result<(), RuntimeError> {
+        let a = A::pop_from(self)?;
+        self.push(op(a).into_value());
+        Ok(())
+    }
+
+    /// Replace the top two operands, `b` on top, with `op(a, b)`.
+    #[inline(never)]
+    pub fn binary<A: Operand, B: Operand, R: Operand>(
+        &mut self,
+        op: impl FnOnce(A, B) -> R,
+    ) -> Result<(), RuntimeError> {
+        let b = B::pop_from(self)?;
+        let a = A::pop_from(self)?;
+        self.push(op(a, b).into_value());
+        Ok(())
+    }
+
+    /// [`binary`](Self::binary) for an operation that can trap.
+    #[inline(never)]
+    pub fn try_binary<A: Operand, B: Operand, R: Operand>(
+        &mut self,
+        op: impl FnOnce(A, B) -> Result<R, Trap>,
+    ) -> Result<(), RuntimeError> {
+        let b = B::pop_from(self)?;
+        let a = A::pop_from(self)?;
+        self.push(op(a, b)?.into_value());
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -77,6 +109,34 @@ impl Stack {
         self.values.last()
     }
 }
+
+/// A Rust type holding one kind of stack value, as operations take and return.
+pub trait Operand: Sized {
+    fn pop_from(stack: &mut Stack) -> Result<Self, RuntimeError>;
+    fn into_value(self) -> Value;
+}
+
+macro_rules! operand {
+    ($ty:ty, $variant:ident, $pop:ident) => {
+        impl Operand for $ty {
+            #[inline(always)]
+            fn pop_from(stack: &mut Stack) -> Result<Self, RuntimeError> {
+                stack.$pop()
+            }
+
+            #[inline(always)]
+            fn into_value(self) -> Value {
+                Value::$variant(self)
+            }
+        }
+    };
+}
+
+operand!(i32, I32, pop_i32);
+operand!(i64, I64, pop_i64);
+operand!(f32, F32, pop_f32);
+operand!(f64, F64, pop_f64);
+operand!([u8; 16], V128, pop_v128);
 
 #[cold]
 fn type_mismatch(expected: ValueType, actual: ValueType) -> RuntimeError {
