@@ -341,7 +341,6 @@ pub enum MaybeValue {
     Unknown,
 }
 
-#[allow(dead_code)]
 impl MaybeValue {
     fn is_num(&self) -> bool {
         match self {
@@ -364,9 +363,6 @@ impl MaybeValue {
         }
     }
 }
-
-#[allow(dead_code)]
-const V128_VALUE: ValueType = V128;
 
 #[derive(Clone)]
 struct CtrlFrame {
@@ -434,16 +430,12 @@ impl<'a> CodeValidator<'a> {
         v
     }
 
-    fn push_val(&mut self, val_type: MaybeValue) -> Option<()> {
+    fn push_val(&mut self, val_type: MaybeValue) {
         self.vals.push(val_type);
-        Some(())
     }
 
-    fn push_vals(&mut self, val_types: Vec<MaybeValue>) -> Option<()> {
-        for val_type in val_types {
-            self.push_val(val_type)?;
-        }
-        Some(())
+    fn push_vals(&mut self, val_types: Vec<MaybeValue>) {
+        self.vals.extend(val_types);
     }
 
     fn pop_val(&mut self) -> Option<MaybeValue> {
@@ -529,7 +521,7 @@ impl<'a> CodeValidator<'a> {
             self.pop_expected(Val(*param)).ok_or(ValidationError::TypeMismatch)?;
         }
         for result in signature.results {
-            self.push_val(Val(*result)).ok_or(ValidationError::TypeMismatch)?;
+            self.push_val(Val(*result));
         }
         Ok(())
     }
@@ -1004,7 +996,7 @@ impl Validator for CodeValidator<'_> {
                     return Err(ValidationError::TypeMismatch);
                 }
 
-                self.push_vals(ctrl.end_types).ok_or(ValidationError::TypeMismatch)?;
+                self.push_vals(ctrl.end_types);
                 Ok(())
             }
 
@@ -1029,7 +1021,7 @@ impl Validator for CodeValidator<'_> {
                 let label_types = self.label_types_at(*label_idx)?;
                 self.pop_expecteds(label_types.clone())
                     .ok_or(ValidationError::TypeMismatch)?;
-                self.push_vals(label_types).ok_or(ValidationError::TypeMismatch)?;
+                self.push_vals(label_types);
                 Ok(())
             }
 
@@ -1120,7 +1112,7 @@ impl Validator for CodeValidator<'_> {
                         if popped.is_none() {
                             Err(ValidationError::TypeMismatch)
                         } else {
-                            self.push_vals(label_types).ok_or(ValidationError::TypeMismatch)?;
+                            self.push_vals(label_types);
                             Ok(())
                         }
                     })?;
@@ -1157,8 +1149,7 @@ impl Validator for CodeValidator<'_> {
                         Err(ValidationError::TypeMismatch)
                     } else {
                         // Push the result type
-                        self.push_val(if t1 == Unknown { t2.clone() } else { t1.clone() })
-                            .ok_or(ValidationError::TypeMismatch)?;
+                        self.push_val(if t1 == Unknown { t2.clone() } else { t1.clone() });
                         Ok(())
                     }
                 } else {
@@ -1195,7 +1186,7 @@ impl Validator for CodeValidator<'_> {
                 }
 
                 // Push result type
-                self.push_val(Val(result_type)).ok_or(ValidationError::TypeMismatch)?;
+                self.push_val(Val(result_type));
                 Ok(())
             }
 
@@ -1226,7 +1217,7 @@ impl Validator for CodeValidator<'_> {
                 if !matches!(ref_type, FuncRef | ExternRef) {
                     return Err(ValidationError::TypeMismatch);
                 }
-                self.push_val(Val(*ref_type)).ok_or(ValidationError::TypeMismatch)?;
+                self.push_val(Val(*ref_type));
                 Ok(())
             }
 
@@ -1237,7 +1228,7 @@ impl Validator for CodeValidator<'_> {
                 if !ref_type.is_ref() {
                     return Err(ValidationError::TypeMismatch);
                 }
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.push_val(Val(I32));
                 Ok(())
             }
 

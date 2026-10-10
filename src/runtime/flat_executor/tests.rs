@@ -5,6 +5,7 @@
 use super::*;
 use crate::parser::module::ValueType;
 use crate::runtime::compiler;
+use crate::runtime::store::GlobalInstance;
 use crate::wat;
 
 /// Shorthand for building a FunctionType in test contexts.
@@ -249,7 +250,10 @@ fn global_get_set() {
     let mut resources = Resources {
         memories: Vec::new(),
         tables: Vec::new(),
-        globals: vec![Value::I32(10)],
+        globals: vec![GlobalInstance {
+            value: Value::I32(10),
+            mutable: true,
+        }],
     };
     let global_addrs = vec![GlobalAddr(0)];
     let mut segments = SegmentState::default();
@@ -268,7 +272,7 @@ fn global_get_set() {
     let result = execute_flat(&[compiled], 0, &[], Some(&mut ctx)).expect("execution failed");
     assert_eq!(result, vec![Value::I32(15)]);
     // Global should be mutated in resources
-    assert_eq!(ctx.resources.globals[0], Value::I32(15));
+    assert_eq!(ctx.resources.globals[0].value, Value::I32(15));
 }
 
 #[test]

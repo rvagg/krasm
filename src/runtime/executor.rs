@@ -390,11 +390,11 @@ impl Executor {
             .global_addresses
             .get(global_idx as usize)
             .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))?;
-        let slot = resources
+        let global = resources
             .globals
             .get_mut(addr.0)
             .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))?;
-        *slot = value;
+        global.value = value;
         Ok(())
     }
 
@@ -1266,7 +1266,7 @@ impl Executor {
                 let value = resources
                     .globals
                     .get(addr.0)
-                    .copied()
+                    .map(|global| global.value)
                     .ok_or(RuntimeError::GlobalIndexOutOfBounds(*global_idx))?;
                 self.stack.push(value);
                 Ok(BlockEnd::Normal)
@@ -1294,7 +1294,7 @@ impl Executor {
                     return Err(RuntimeError::Trap("cannot set immutable global".to_string()));
                 }
 
-                resources.globals[addr.0] = value;
+                resources.globals[addr.0].value = value;
                 Ok(BlockEnd::Normal)
             }
 

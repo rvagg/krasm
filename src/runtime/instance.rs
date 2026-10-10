@@ -324,7 +324,7 @@ impl Instance {
         resources
             .globals
             .get(addr.0)
-            .copied()
+            .map(|global| global.value)
             .ok_or(RuntimeError::GlobalIndexOutOfBounds(global_idx))
     }
 
@@ -429,7 +429,7 @@ impl Instance {
             };
 
             let addr = self.global_addresses[global_idx];
-            resources.globals[addr.0] = initial_value;
+            resources.globals[addr.0].value = initial_value;
         }
 
         Ok(())
@@ -611,6 +611,7 @@ impl Instance {
         use super::flat_executor::DEFAULT_MAX_STACK_WORDS;
         use super::imports::default_value_for_type;
         use super::memory::Memory;
+        use super::store::GlobalInstance;
         use super::table::Table;
 
         let mut resources = Resources::new();
@@ -649,16 +650,20 @@ impl Instance {
         let mut global_addresses = Vec::new();
         for import in &module.imports.imports {
             if let ExternalKind::Global(global_type) = &import.external_kind {
-                let initial = default_value_for_type(global_type.value_type);
                 let addr = GlobalAddr(resources.globals.len());
-                resources.globals.push(initial);
+                resources.globals.push(GlobalInstance {
+                    value: default_value_for_type(global_type.value_type),
+                    mutable: global_type.mutable,
+                });
                 global_addresses.push(addr);
             }
         }
         for global in &module.globals.globals {
-            let default = default_value_for_type(global.global_type.value_type);
             let addr = GlobalAddr(resources.globals.len());
-            resources.globals.push(default);
+            resources.globals.push(GlobalInstance {
+                value: default_value_for_type(global.global_type.value_type),
+                mutable: global.global_type.mutable,
+            });
             global_addresses.push(addr);
         }
 

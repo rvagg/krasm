@@ -3,7 +3,11 @@
 //! Most types are re-exported at the crate root for convenience. See the
 //! [crate-level documentation](crate) for usage examples.
 
+// Public only for instruction profiles, which report ops.
+#[cfg(feature = "instruction-profile")]
 pub mod bytecode;
+#[cfg(not(feature = "instruction-profile"))]
+pub(crate) mod bytecode;
 pub(crate) mod compiler;
 pub(crate) mod control;
 pub(crate) mod executor;

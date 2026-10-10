@@ -199,6 +199,7 @@ impl ExecContext<'_> {
         self.resources
             .globals
             .get_mut(addr.0)
+            .map(|global| &mut global.value)
             .ok_or(RuntimeError::GlobalIndexOutOfBounds(index))
     }
 

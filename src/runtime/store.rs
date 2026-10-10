@@ -123,8 +123,25 @@ pub struct Resources {
     pub(super) memories: Vec<Memory>,
     /// All table instances, indexed by TableAddr
     pub(super) tables: Vec<Table>,
-    /// All global values, indexed by GlobalAddr
-    pub(super) globals: Vec<Value>,
+    /// All globals, indexed by GlobalAddr
+    pub(super) globals: Vec<GlobalInstance>,
+}
+
+/// A global's value and whether Wasm may change it. The value's tag is the
+/// global's type: validation and `Store::set_global` only store values of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GlobalInstance {
+    pub(crate) value: Value,
+    pub(crate) mutable: bool,
+}
+
+impl GlobalInstance {
+    pub(crate) fn global_type(&self) -> GlobalType {
+        GlobalType {
+            value_type: self.value.typ(),
+            mutable: self.mutable,
+        }
+    }
 }
 
 impl Resources {
@@ -244,10 +261,6 @@ pub struct Store<T = ()> {
     /// All runtime resources (memories, tables, globals) owned directly
     pub(super) resources: Resources,
 
-    /// Type and mutability of each global, indexed by GlobalAddr. Values in
-    /// `resources.globals` keep this type; validation guarantees Wasm writes do.
-    global_types: Vec<GlobalType>,
-
     /// Embedder-defined user data, accessible via `Caller<T>` in host functions
     data: T,
 
@@ -264,7 +277,6 @@ impl Default for Store<()> {
             functions: Vec::new(),
             instances: Vec::new(),
             resources: Resources::new(),
-            global_types: Vec::new(),
             data: (),
             engine: EngineKind::default(),
             max_stack_words: DEFAULT_MAX_STACK_WORDS,
@@ -290,7 +302,6 @@ impl<T> Store<T> {
             functions: Vec::new(),
             instances: Vec::new(),
             resources: Resources::new(),
-            global_types: Vec::new(),
             data,
             engine: EngineKind::default(),
             max_stack_words: DEFAULT_MAX_STACK_WORDS,
@@ -417,24 +428,20 @@ impl<T> Store<T> {
     /// Returns the GlobalAddr that can be used to reference this global.
     pub fn allocate_global(&mut self, value: Value, mutable: bool) -> GlobalAddr {
         let addr = GlobalAddr(self.resources.globals.len());
-        self.resources.globals.push(value);
-        self.global_types.push(GlobalType {
-            value_type: value.typ(),
-            mutable,
-        });
+        self.resources.globals.push(GlobalInstance { value, mutable });
         addr
     }
 
     /// Get a global's type by its address.
     pub fn global_type(&self, addr: GlobalAddr) -> Option<GlobalType> {
-        self.global_types.get(addr.0).copied()
+        self.resources.globals.get(addr.0).map(GlobalInstance::global_type)
     }
 
     /// Get a global value by its address.
     ///
     /// Returns `None` if `addr` does not correspond to an allocated global.
     pub fn get_global(&self, addr: GlobalAddr) -> Option<Value> {
-        self.resources.globals.get(addr.0).copied()
+        self.resources.globals.get(addr.0).map(|global| global.value)
     }
 
     /// Set a mutable global's value by its address.
@@ -448,7 +455,7 @@ impl<T> Store<T> {
             return Err(RuntimeError::Trap("global is immutable".to_string()));
         }
         super::check_values(&[value], &[global_type.value_type], "value")?;
-        self.resources.globals[addr.0] = value;
+        self.resources.globals[addr.0].value = value;
         Ok(())
     }
 
