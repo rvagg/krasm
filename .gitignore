@@ -14,3 +14,4 @@ examples/commp/commp.wasm
 examples/commp-simd/commp-simd.wasm
 benches/commp_bench_500k.bin
 docs/
+_archive/
