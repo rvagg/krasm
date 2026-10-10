@@ -29,6 +29,8 @@ pub struct BrTarget {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 #[cfg_attr(feature = "instruction-profile", serde(tag = "opcode", content = "immediates"))]
+// An explicit tag: dispatch reads it directly instead of decoding a niche.
+#[repr(u16)]
 pub enum Op {
     // -- Constants --
     I32Const(i32),
