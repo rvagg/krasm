@@ -24,10 +24,13 @@
 use super::RuntimeError;
 use super::bytecode::{BrTarget, CompiledFunction, Op, value_words};
 use crate::parser::instruction::signature::{Signature, context_signature, fixed_signature};
-use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
+use crate::parser::instruction::{BlockType, Instruction, InstructionKind};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
+use lower::lower;
 use std::fmt;
+
+mod lower;
 
 /// A forward branch whose target is not yet known at the time of emission.
 ///
@@ -513,366 +516,22 @@ impl<'a> CompileContext<'a> {
         Ok(())
     }
 
-    /// Emit a plain (non-control-flow-structure) instruction.
+    /// Type a plain (non-structured) instruction and emit its op.
     fn emit_plain(&mut self, inst: &'a Instruction) -> Result {
         let dropped = self.stack.last().copied();
         self.apply_types(&inst.kind)?;
         match &inst.kind {
-            InstructionKind::I32Const { value } => self.op(Op::I32Const(*value)),
-            InstructionKind::I64Const { value } => self.op(Op::I64Const(*value)),
-            InstructionKind::F32Const { value } => self.op(Op::F32Const(*value)),
-            InstructionKind::F64Const { value } => self.op(Op::F64Const(*value)),
-            InstructionKind::Simd(SimdOp::V128Const { value }) => self.op(Op::V128Const(*value)),
-            InstructionKind::Simd(SimdOp::I8x16Abs) => self.op(Op::I8x16Abs),
-            InstructionKind::Simd(SimdOp::I8x16Neg) => self.op(Op::I8x16Neg),
-            InstructionKind::Simd(SimdOp::I8x16Popcnt) => self.op(Op::I8x16Popcnt),
-            InstructionKind::Simd(SimdOp::I16x8Abs) => self.op(Op::I16x8Abs),
-            InstructionKind::Simd(SimdOp::I16x8Neg) => self.op(Op::I16x8Neg),
-            InstructionKind::Simd(SimdOp::I32x4Abs) => self.op(Op::I32x4Abs),
-            InstructionKind::Simd(SimdOp::I32x4Neg) => self.op(Op::I32x4Neg),
-            InstructionKind::Simd(SimdOp::I64x2Abs) => self.op(Op::I64x2Abs),
-            InstructionKind::Simd(SimdOp::I64x2Neg) => self.op(Op::I64x2Neg),
-            InstructionKind::Simd(SimdOp::I8x16Splat) => self.op(Op::I8x16Splat),
-            InstructionKind::Simd(SimdOp::I16x8Splat) => self.op(Op::I16x8Splat),
-            InstructionKind::Simd(SimdOp::I32x4Splat) => self.op(Op::I32x4Splat),
-            InstructionKind::Simd(SimdOp::I64x2Splat) => self.op(Op::I64x2Splat),
-            InstructionKind::Simd(SimdOp::F32x4Splat) => self.op(Op::F32x4Splat),
-            InstructionKind::Simd(SimdOp::F64x2Splat) => self.op(Op::F64x2Splat),
-            InstructionKind::Simd(SimdOp::I8x16Shuffle { lanes }) => self.op(Op::I8x16Shuffle(*lanes)),
-            InstructionKind::Simd(SimdOp::I8x16Swizzle) => self.op(Op::I8x16Swizzle),
-            InstructionKind::Simd(SimdOp::I8x16Eq) => self.op(Op::I8x16Eq),
-            InstructionKind::Simd(SimdOp::I8x16Ne) => self.op(Op::I8x16Ne),
-            InstructionKind::Simd(SimdOp::I8x16LtS) => self.op(Op::I8x16LtS),
-            InstructionKind::Simd(SimdOp::I8x16LtU) => self.op(Op::I8x16LtU),
-            InstructionKind::Simd(SimdOp::I8x16GtS) => self.op(Op::I8x16GtS),
-            InstructionKind::Simd(SimdOp::I8x16GtU) => self.op(Op::I8x16GtU),
-            InstructionKind::Simd(SimdOp::I8x16LeS) => self.op(Op::I8x16LeS),
-            InstructionKind::Simd(SimdOp::I8x16LeU) => self.op(Op::I8x16LeU),
-            InstructionKind::Simd(SimdOp::I8x16GeS) => self.op(Op::I8x16GeS),
-            InstructionKind::Simd(SimdOp::I8x16GeU) => self.op(Op::I8x16GeU),
-            InstructionKind::Simd(SimdOp::I16x8Eq) => self.op(Op::I16x8Eq),
-            InstructionKind::Simd(SimdOp::I16x8Ne) => self.op(Op::I16x8Ne),
-            InstructionKind::Simd(SimdOp::I16x8LtS) => self.op(Op::I16x8LtS),
-            InstructionKind::Simd(SimdOp::I16x8LtU) => self.op(Op::I16x8LtU),
-            InstructionKind::Simd(SimdOp::I16x8GtS) => self.op(Op::I16x8GtS),
-            InstructionKind::Simd(SimdOp::I16x8GtU) => self.op(Op::I16x8GtU),
-            InstructionKind::Simd(SimdOp::I16x8LeS) => self.op(Op::I16x8LeS),
-            InstructionKind::Simd(SimdOp::I16x8LeU) => self.op(Op::I16x8LeU),
-            InstructionKind::Simd(SimdOp::I16x8GeS) => self.op(Op::I16x8GeS),
-            InstructionKind::Simd(SimdOp::I16x8GeU) => self.op(Op::I16x8GeU),
-            InstructionKind::Simd(SimdOp::I32x4Eq) => self.op(Op::I32x4Eq),
-            InstructionKind::Simd(SimdOp::I32x4Ne) => self.op(Op::I32x4Ne),
-            InstructionKind::Simd(SimdOp::I32x4LtS) => self.op(Op::I32x4LtS),
-            InstructionKind::Simd(SimdOp::I32x4LtU) => self.op(Op::I32x4LtU),
-            InstructionKind::Simd(SimdOp::I32x4GtS) => self.op(Op::I32x4GtS),
-            InstructionKind::Simd(SimdOp::I32x4GtU) => self.op(Op::I32x4GtU),
-            InstructionKind::Simd(SimdOp::I32x4LeS) => self.op(Op::I32x4LeS),
-            InstructionKind::Simd(SimdOp::I32x4LeU) => self.op(Op::I32x4LeU),
-            InstructionKind::Simd(SimdOp::I32x4GeS) => self.op(Op::I32x4GeS),
-            InstructionKind::Simd(SimdOp::I32x4GeU) => self.op(Op::I32x4GeU),
-            InstructionKind::Simd(SimdOp::F32x4Eq) => self.op(Op::F32x4Eq),
-            InstructionKind::Simd(SimdOp::F32x4Ne) => self.op(Op::F32x4Ne),
-            InstructionKind::Simd(SimdOp::F32x4Lt) => self.op(Op::F32x4Lt),
-            InstructionKind::Simd(SimdOp::F32x4Gt) => self.op(Op::F32x4Gt),
-            InstructionKind::Simd(SimdOp::F32x4Le) => self.op(Op::F32x4Le),
-            InstructionKind::Simd(SimdOp::F32x4Ge) => self.op(Op::F32x4Ge),
-            InstructionKind::Simd(SimdOp::I64x2Eq) => self.op(Op::I64x2Eq),
-            InstructionKind::Simd(SimdOp::I64x2Ne) => self.op(Op::I64x2Ne),
-            InstructionKind::Simd(SimdOp::I64x2LtS) => self.op(Op::I64x2LtS),
-            InstructionKind::Simd(SimdOp::I64x2GtS) => self.op(Op::I64x2GtS),
-            InstructionKind::Simd(SimdOp::I64x2LeS) => self.op(Op::I64x2LeS),
-            InstructionKind::Simd(SimdOp::I64x2GeS) => self.op(Op::I64x2GeS),
-            InstructionKind::Simd(SimdOp::F64x2Eq) => self.op(Op::F64x2Eq),
-            InstructionKind::Simd(SimdOp::F64x2Ne) => self.op(Op::F64x2Ne),
-            InstructionKind::Simd(SimdOp::F64x2Lt) => self.op(Op::F64x2Lt),
-            InstructionKind::Simd(SimdOp::F64x2Gt) => self.op(Op::F64x2Gt),
-            InstructionKind::Simd(SimdOp::F64x2Le) => self.op(Op::F64x2Le),
-            InstructionKind::Simd(SimdOp::F64x2Ge) => self.op(Op::F64x2Ge),
-            InstructionKind::Simd(SimdOp::I8x16Shl) => self.op(Op::I8x16Shl),
-            InstructionKind::Simd(SimdOp::I8x16ShrS) => self.op(Op::I8x16ShrS),
-            InstructionKind::Simd(SimdOp::I8x16ShrU) => self.op(Op::I8x16ShrU),
-            InstructionKind::Simd(SimdOp::I16x8Shl) => self.op(Op::I16x8Shl),
-            InstructionKind::Simd(SimdOp::I16x8ShrS) => self.op(Op::I16x8ShrS),
-            InstructionKind::Simd(SimdOp::I16x8ShrU) => self.op(Op::I16x8ShrU),
-            InstructionKind::Simd(SimdOp::I32x4Shl) => self.op(Op::I32x4Shl),
-            InstructionKind::Simd(SimdOp::I32x4ShrS) => self.op(Op::I32x4ShrS),
-            InstructionKind::Simd(SimdOp::I32x4ShrU) => self.op(Op::I32x4ShrU),
-            InstructionKind::Simd(SimdOp::I64x2Shl) => self.op(Op::I64x2Shl),
-            InstructionKind::Simd(SimdOp::I64x2ShrS) => self.op(Op::I64x2ShrS),
-            InstructionKind::Simd(SimdOp::I64x2ShrU) => self.op(Op::I64x2ShrU),
-            InstructionKind::Simd(SimdOp::I8x16Add) => self.op(Op::I8x16Add),
-            InstructionKind::Simd(SimdOp::I8x16Sub) => self.op(Op::I8x16Sub),
-            InstructionKind::Simd(SimdOp::I8x16AddSatS) => self.op(Op::I8x16AddSatS),
-            InstructionKind::Simd(SimdOp::I8x16AddSatU) => self.op(Op::I8x16AddSatU),
-            InstructionKind::Simd(SimdOp::I8x16SubSatS) => self.op(Op::I8x16SubSatS),
-            InstructionKind::Simd(SimdOp::I8x16SubSatU) => self.op(Op::I8x16SubSatU),
-            InstructionKind::Simd(SimdOp::I8x16MinS) => self.op(Op::I8x16MinS),
-            InstructionKind::Simd(SimdOp::I8x16MinU) => self.op(Op::I8x16MinU),
-            InstructionKind::Simd(SimdOp::I8x16MaxS) => self.op(Op::I8x16MaxS),
-            InstructionKind::Simd(SimdOp::I8x16MaxU) => self.op(Op::I8x16MaxU),
-            InstructionKind::Simd(SimdOp::I8x16AvgrU) => self.op(Op::I8x16AvgrU),
-            InstructionKind::Simd(SimdOp::I16x8Add) => self.op(Op::I16x8Add),
-            InstructionKind::Simd(SimdOp::I16x8Sub) => self.op(Op::I16x8Sub),
-            InstructionKind::Simd(SimdOp::I16x8AddSatS) => self.op(Op::I16x8AddSatS),
-            InstructionKind::Simd(SimdOp::I16x8AddSatU) => self.op(Op::I16x8AddSatU),
-            InstructionKind::Simd(SimdOp::I16x8SubSatS) => self.op(Op::I16x8SubSatS),
-            InstructionKind::Simd(SimdOp::I16x8SubSatU) => self.op(Op::I16x8SubSatU),
-            InstructionKind::Simd(SimdOp::I16x8MinS) => self.op(Op::I16x8MinS),
-            InstructionKind::Simd(SimdOp::I16x8MinU) => self.op(Op::I16x8MinU),
-            InstructionKind::Simd(SimdOp::I16x8MaxS) => self.op(Op::I16x8MaxS),
-            InstructionKind::Simd(SimdOp::I16x8MaxU) => self.op(Op::I16x8MaxU),
-            InstructionKind::Simd(SimdOp::I16x8AvgrU) => self.op(Op::I16x8AvgrU),
-            InstructionKind::Simd(SimdOp::I16x8Mul) => self.op(Op::I16x8Mul),
-            InstructionKind::Simd(SimdOp::I32x4Add) => self.op(Op::I32x4Add),
-            InstructionKind::Simd(SimdOp::I32x4Sub) => self.op(Op::I32x4Sub),
-            InstructionKind::Simd(SimdOp::I32x4MinS) => self.op(Op::I32x4MinS),
-            InstructionKind::Simd(SimdOp::I32x4MinU) => self.op(Op::I32x4MinU),
-            InstructionKind::Simd(SimdOp::I32x4MaxS) => self.op(Op::I32x4MaxS),
-            InstructionKind::Simd(SimdOp::I32x4MaxU) => self.op(Op::I32x4MaxU),
-            InstructionKind::Simd(SimdOp::I32x4Mul) => self.op(Op::I32x4Mul),
-            InstructionKind::Simd(SimdOp::I64x2Add) => self.op(Op::I64x2Add),
-            InstructionKind::Simd(SimdOp::I64x2Sub) => self.op(Op::I64x2Sub),
-            InstructionKind::Simd(SimdOp::I64x2Mul) => self.op(Op::I64x2Mul),
-            InstructionKind::Simd(SimdOp::F32x4Abs) => self.op(Op::F32x4Abs),
-            InstructionKind::Simd(SimdOp::F32x4Neg) => self.op(Op::F32x4Neg),
-            InstructionKind::Simd(SimdOp::F32x4Sqrt) => self.op(Op::F32x4Sqrt),
-            InstructionKind::Simd(SimdOp::F32x4Ceil) => self.op(Op::F32x4Ceil),
-            InstructionKind::Simd(SimdOp::F32x4Floor) => self.op(Op::F32x4Floor),
-            InstructionKind::Simd(SimdOp::F32x4Trunc) => self.op(Op::F32x4Trunc),
-            InstructionKind::Simd(SimdOp::F32x4Nearest) => self.op(Op::F32x4Nearest),
-            InstructionKind::Simd(SimdOp::F32x4Add) => self.op(Op::F32x4Add),
-            InstructionKind::Simd(SimdOp::F32x4Sub) => self.op(Op::F32x4Sub),
-            InstructionKind::Simd(SimdOp::F32x4Mul) => self.op(Op::F32x4Mul),
-            InstructionKind::Simd(SimdOp::F32x4Div) => self.op(Op::F32x4Div),
-            InstructionKind::Simd(SimdOp::F64x2Abs) => self.op(Op::F64x2Abs),
-            InstructionKind::Simd(SimdOp::F64x2Neg) => self.op(Op::F64x2Neg),
-            InstructionKind::Simd(SimdOp::F64x2Sqrt) => self.op(Op::F64x2Sqrt),
-            InstructionKind::Simd(SimdOp::F64x2Ceil) => self.op(Op::F64x2Ceil),
-            InstructionKind::Simd(SimdOp::F64x2Floor) => self.op(Op::F64x2Floor),
-            InstructionKind::Simd(SimdOp::F64x2Trunc) => self.op(Op::F64x2Trunc),
-            InstructionKind::Simd(SimdOp::F64x2Nearest) => self.op(Op::F64x2Nearest),
-            InstructionKind::Simd(SimdOp::F64x2Add) => self.op(Op::F64x2Add),
-            InstructionKind::Simd(SimdOp::F64x2Sub) => self.op(Op::F64x2Sub),
-            InstructionKind::Simd(SimdOp::F64x2Mul) => self.op(Op::F64x2Mul),
-            InstructionKind::Simd(SimdOp::F64x2Div) => self.op(Op::F64x2Div),
-            InstructionKind::Simd(SimdOp::F32x4Min) => self.op(Op::F32x4Min),
-            InstructionKind::Simd(SimdOp::F32x4Max) => self.op(Op::F32x4Max),
-            InstructionKind::Simd(SimdOp::F32x4PMin) => self.op(Op::F32x4PMin),
-            InstructionKind::Simd(SimdOp::F32x4PMax) => self.op(Op::F32x4PMax),
-            InstructionKind::Simd(SimdOp::F64x2Min) => self.op(Op::F64x2Min),
-            InstructionKind::Simd(SimdOp::F64x2Max) => self.op(Op::F64x2Max),
-            InstructionKind::Simd(SimdOp::F64x2PMin) => self.op(Op::F64x2PMin),
-            InstructionKind::Simd(SimdOp::F64x2PMax) => self.op(Op::F64x2PMax),
-            InstructionKind::Simd(SimdOp::I32x4TruncSatF32x4S) => self.op(Op::I32x4TruncSatF32x4S),
-            InstructionKind::Simd(SimdOp::I32x4TruncSatF32x4U) => self.op(Op::I32x4TruncSatF32x4U),
-            InstructionKind::Simd(SimdOp::F32x4ConvertI32x4S) => self.op(Op::F32x4ConvertI32x4S),
-            InstructionKind::Simd(SimdOp::F32x4ConvertI32x4U) => self.op(Op::F32x4ConvertI32x4U),
-            InstructionKind::Simd(SimdOp::I32x4TruncSatF64x2SZero) => self.op(Op::I32x4TruncSatF64x2SZero),
-            InstructionKind::Simd(SimdOp::I32x4TruncSatF64x2UZero) => self.op(Op::I32x4TruncSatF64x2UZero),
-            InstructionKind::Simd(SimdOp::F64x2ConvertLowI32x4S) => self.op(Op::F64x2ConvertLowI32x4S),
-            InstructionKind::Simd(SimdOp::F64x2ConvertLowI32x4U) => self.op(Op::F64x2ConvertLowI32x4U),
-            InstructionKind::Simd(SimdOp::F32x4DemoteF64x2Zero) => self.op(Op::F32x4DemoteF64x2Zero),
-            InstructionKind::Simd(SimdOp::F64x2PromoteLowF32x4) => self.op(Op::F64x2PromoteLowF32x4),
-            InstructionKind::Simd(SimdOp::I8x16NarrowI16x8S) => self.op(Op::I8x16NarrowI16x8S),
-            InstructionKind::Simd(SimdOp::I8x16NarrowI16x8U) => self.op(Op::I8x16NarrowI16x8U),
-            InstructionKind::Simd(SimdOp::I16x8NarrowI32x4S) => self.op(Op::I16x8NarrowI32x4S),
-            InstructionKind::Simd(SimdOp::I16x8NarrowI32x4U) => self.op(Op::I16x8NarrowI32x4U),
-            InstructionKind::Simd(SimdOp::I16x8ExtendLowI8x16S) => self.op(Op::I16x8ExtendLowI8x16S),
-            InstructionKind::Simd(SimdOp::I16x8ExtendHighI8x16S) => self.op(Op::I16x8ExtendHighI8x16S),
-            InstructionKind::Simd(SimdOp::I16x8ExtendLowI8x16U) => self.op(Op::I16x8ExtendLowI8x16U),
-            InstructionKind::Simd(SimdOp::I16x8ExtendHighI8x16U) => self.op(Op::I16x8ExtendHighI8x16U),
-            InstructionKind::Simd(SimdOp::I32x4ExtendLowI16x8S) => self.op(Op::I32x4ExtendLowI16x8S),
-            InstructionKind::Simd(SimdOp::I32x4ExtendHighI16x8S) => self.op(Op::I32x4ExtendHighI16x8S),
-            InstructionKind::Simd(SimdOp::I32x4ExtendLowI16x8U) => self.op(Op::I32x4ExtendLowI16x8U),
-            InstructionKind::Simd(SimdOp::I32x4ExtendHighI16x8U) => self.op(Op::I32x4ExtendHighI16x8U),
-            InstructionKind::Simd(SimdOp::I64x2ExtendLowI32x4S) => self.op(Op::I64x2ExtendLowI32x4S),
-            InstructionKind::Simd(SimdOp::I64x2ExtendHighI32x4S) => self.op(Op::I64x2ExtendHighI32x4S),
-            InstructionKind::Simd(SimdOp::I64x2ExtendLowI32x4U) => self.op(Op::I64x2ExtendLowI32x4U),
-            InstructionKind::Simd(SimdOp::I64x2ExtendHighI32x4U) => self.op(Op::I64x2ExtendHighI32x4U),
-            InstructionKind::Simd(SimdOp::I16x8ExtMulLowI8x16S) => self.op(Op::I16x8ExtMulLowI8x16S),
-            InstructionKind::Simd(SimdOp::I16x8ExtMulHighI8x16S) => self.op(Op::I16x8ExtMulHighI8x16S),
-            InstructionKind::Simd(SimdOp::I16x8ExtMulLowI8x16U) => self.op(Op::I16x8ExtMulLowI8x16U),
-            InstructionKind::Simd(SimdOp::I16x8ExtMulHighI8x16U) => self.op(Op::I16x8ExtMulHighI8x16U),
-            InstructionKind::Simd(SimdOp::I32x4ExtMulLowI16x8S) => self.op(Op::I32x4ExtMulLowI16x8S),
-            InstructionKind::Simd(SimdOp::I32x4ExtMulHighI16x8S) => self.op(Op::I32x4ExtMulHighI16x8S),
-            InstructionKind::Simd(SimdOp::I32x4ExtMulLowI16x8U) => self.op(Op::I32x4ExtMulLowI16x8U),
-            InstructionKind::Simd(SimdOp::I32x4ExtMulHighI16x8U) => self.op(Op::I32x4ExtMulHighI16x8U),
-            InstructionKind::Simd(SimdOp::I64x2ExtMulLowI32x4S) => self.op(Op::I64x2ExtMulLowI32x4S),
-            InstructionKind::Simd(SimdOp::I64x2ExtMulHighI32x4S) => self.op(Op::I64x2ExtMulHighI32x4S),
-            InstructionKind::Simd(SimdOp::I64x2ExtMulLowI32x4U) => self.op(Op::I64x2ExtMulLowI32x4U),
-            InstructionKind::Simd(SimdOp::I64x2ExtMulHighI32x4U) => self.op(Op::I64x2ExtMulHighI32x4U),
-            InstructionKind::Simd(SimdOp::I16x8ExtAddPairwiseI8x16S) => self.op(Op::I16x8ExtAddPairwiseI8x16S),
-            InstructionKind::Simd(SimdOp::I16x8ExtAddPairwiseI8x16U) => self.op(Op::I16x8ExtAddPairwiseI8x16U),
-            InstructionKind::Simd(SimdOp::I32x4ExtAddPairwiseI16x8S) => self.op(Op::I32x4ExtAddPairwiseI16x8S),
-            InstructionKind::Simd(SimdOp::I32x4ExtAddPairwiseI16x8U) => self.op(Op::I32x4ExtAddPairwiseI16x8U),
-            InstructionKind::Simd(SimdOp::I32x4DotI16x8S) => self.op(Op::I32x4DotI16x8S),
-            InstructionKind::Simd(SimdOp::I16x8Q15MulrSatS) => self.op(Op::I16x8Q15MulrSatS),
-            InstructionKind::Simd(SimdOp::V128Not) => self.op(Op::V128Not),
-            InstructionKind::Simd(SimdOp::V128And) => self.op(Op::V128And),
-            InstructionKind::Simd(SimdOp::V128AndNot) => self.op(Op::V128AndNot),
-            InstructionKind::Simd(SimdOp::V128Or) => self.op(Op::V128Or),
-            InstructionKind::Simd(SimdOp::V128Xor) => self.op(Op::V128Xor),
-            InstructionKind::Simd(SimdOp::V128Bitselect) => self.op(Op::V128Bitselect),
-            InstructionKind::Simd(SimdOp::V128AnyTrue) => self.op(Op::V128AnyTrue),
-            InstructionKind::Simd(SimdOp::I8x16AllTrue) => self.op(Op::I8x16AllTrue),
-            InstructionKind::Simd(SimdOp::I8x16Bitmask) => self.op(Op::I8x16Bitmask),
-            InstructionKind::Simd(SimdOp::I16x8AllTrue) => self.op(Op::I16x8AllTrue),
-            InstructionKind::Simd(SimdOp::I16x8Bitmask) => self.op(Op::I16x8Bitmask),
-            InstructionKind::Simd(SimdOp::I32x4AllTrue) => self.op(Op::I32x4AllTrue),
-            InstructionKind::Simd(SimdOp::I32x4Bitmask) => self.op(Op::I32x4Bitmask),
-            InstructionKind::Simd(SimdOp::I64x2AllTrue) => self.op(Op::I64x2AllTrue),
-            InstructionKind::Simd(SimdOp::I64x2Bitmask) => self.op(Op::I64x2Bitmask),
-            InstructionKind::Simd(SimdOp::I8x16ExtractLaneS { lane }) => self.op(Op::I8x16ExtractLaneS(*lane)),
-            InstructionKind::Simd(SimdOp::I8x16ExtractLaneU { lane }) => self.op(Op::I8x16ExtractLaneU(*lane)),
-            InstructionKind::Simd(SimdOp::I16x8ExtractLaneS { lane }) => self.op(Op::I16x8ExtractLaneS(*lane)),
-            InstructionKind::Simd(SimdOp::I16x8ExtractLaneU { lane }) => self.op(Op::I16x8ExtractLaneU(*lane)),
-            InstructionKind::Simd(SimdOp::I32x4ExtractLane { lane }) => self.op(Op::I32x4ExtractLane(*lane)),
-            InstructionKind::Simd(SimdOp::I64x2ExtractLane { lane }) => self.op(Op::I64x2ExtractLane(*lane)),
-            InstructionKind::Simd(SimdOp::F32x4ExtractLane { lane }) => self.op(Op::F32x4ExtractLane(*lane)),
-            InstructionKind::Simd(SimdOp::F64x2ExtractLane { lane }) => self.op(Op::F64x2ExtractLane(*lane)),
-            InstructionKind::Simd(SimdOp::I8x16ReplaceLane { lane }) => self.op(Op::I8x16ReplaceLane(*lane)),
-            InstructionKind::Simd(SimdOp::I16x8ReplaceLane { lane }) => self.op(Op::I16x8ReplaceLane(*lane)),
-            InstructionKind::Simd(SimdOp::I32x4ReplaceLane { lane }) => self.op(Op::I32x4ReplaceLane(*lane)),
-            InstructionKind::Simd(SimdOp::I64x2ReplaceLane { lane }) => self.op(Op::I64x2ReplaceLane(*lane)),
-            InstructionKind::Simd(SimdOp::F32x4ReplaceLane { lane }) => self.op(Op::F32x4ReplaceLane(*lane)),
-            InstructionKind::Simd(SimdOp::F64x2ReplaceLane { lane }) => self.op(Op::F64x2ReplaceLane(*lane)),
-            InstructionKind::I32Add => self.op(Op::I32Add),
-            InstructionKind::I32Sub => self.op(Op::I32Sub),
-            InstructionKind::I32Mul => self.op(Op::I32Mul),
-            InstructionKind::I32DivS => self.op(Op::I32DivS),
-            InstructionKind::I32DivU => self.op(Op::I32DivU),
-            InstructionKind::I32RemS => self.op(Op::I32RemS),
-            InstructionKind::I32RemU => self.op(Op::I32RemU),
-            InstructionKind::I32Clz => self.op(Op::I32Clz),
-            InstructionKind::I32Ctz => self.op(Op::I32Ctz),
-            InstructionKind::I32Popcnt => self.op(Op::I32Popcnt),
-            InstructionKind::I32And => self.op(Op::I32And),
-            InstructionKind::I32Or => self.op(Op::I32Or),
-            InstructionKind::I32Xor => self.op(Op::I32Xor),
-            InstructionKind::I32Shl => self.op(Op::I32Shl),
-            InstructionKind::I32ShrS => self.op(Op::I32ShrS),
-            InstructionKind::I32ShrU => self.op(Op::I32ShrU),
-            InstructionKind::I32Rotl => self.op(Op::I32Rotl),
-            InstructionKind::I32Rotr => self.op(Op::I32Rotr),
-            InstructionKind::I32Extend8S => self.op(Op::I32Extend8S),
-            InstructionKind::I32Extend16S => self.op(Op::I32Extend16S),
-            InstructionKind::I64Add => self.op(Op::I64Add),
-            InstructionKind::I64Sub => self.op(Op::I64Sub),
-            InstructionKind::I64Mul => self.op(Op::I64Mul),
-            InstructionKind::I64DivS => self.op(Op::I64DivS),
-            InstructionKind::I64DivU => self.op(Op::I64DivU),
-            InstructionKind::I64RemS => self.op(Op::I64RemS),
-            InstructionKind::I64RemU => self.op(Op::I64RemU),
-            InstructionKind::I64Clz => self.op(Op::I64Clz),
-            InstructionKind::I64Ctz => self.op(Op::I64Ctz),
-            InstructionKind::I64Popcnt => self.op(Op::I64Popcnt),
-            InstructionKind::I64And => self.op(Op::I64And),
-            InstructionKind::I64Or => self.op(Op::I64Or),
-            InstructionKind::I64Xor => self.op(Op::I64Xor),
-            InstructionKind::I64Shl => self.op(Op::I64Shl),
-            InstructionKind::I64ShrS => self.op(Op::I64ShrS),
-            InstructionKind::I64ShrU => self.op(Op::I64ShrU),
-            InstructionKind::I64Rotl => self.op(Op::I64Rotl),
-            InstructionKind::I64Rotr => self.op(Op::I64Rotr),
-            InstructionKind::I64Eqz => self.op(Op::I64Eqz),
-            InstructionKind::I64Eq => self.op(Op::I64Eq),
-            InstructionKind::I64Ne => self.op(Op::I64Ne),
-            InstructionKind::I64LtS => self.op(Op::I64LtS),
-            InstructionKind::I64LtU => self.op(Op::I64LtU),
-            InstructionKind::I64GtS => self.op(Op::I64GtS),
-            InstructionKind::I64GtU => self.op(Op::I64GtU),
-            InstructionKind::I64LeS => self.op(Op::I64LeS),
-            InstructionKind::I64LeU => self.op(Op::I64LeU),
-            InstructionKind::I64GeS => self.op(Op::I64GeS),
-            InstructionKind::I64GeU => self.op(Op::I64GeU),
-            InstructionKind::I64Extend8S => self.op(Op::I64Extend8S),
-            InstructionKind::I64Extend16S => self.op(Op::I64Extend16S),
-            InstructionKind::I64Extend32S => self.op(Op::I64Extend32S),
-            InstructionKind::I64ExtendI32S => self.op(Op::I64ExtendI32S),
-            InstructionKind::I64ExtendI32U => self.op(Op::I64ExtendI32U),
-            InstructionKind::I32WrapI64 => self.op(Op::I32WrapI64),
-            InstructionKind::F32Add => self.op(Op::F32Add),
-            InstructionKind::F32Sub => self.op(Op::F32Sub),
-            InstructionKind::F32Mul => self.op(Op::F32Mul),
-            InstructionKind::F32Div => self.op(Op::F32Div),
-            InstructionKind::F32Min => self.op(Op::F32Min),
-            InstructionKind::F32Max => self.op(Op::F32Max),
-            InstructionKind::F32Copysign => self.op(Op::F32Copysign),
-            InstructionKind::F64Add => self.op(Op::F64Add),
-            InstructionKind::F64Sub => self.op(Op::F64Sub),
-            InstructionKind::F64Mul => self.op(Op::F64Mul),
-            InstructionKind::F64Div => self.op(Op::F64Div),
-            InstructionKind::F64Min => self.op(Op::F64Min),
-            InstructionKind::F64Max => self.op(Op::F64Max),
-            InstructionKind::F64Copysign => self.op(Op::F64Copysign),
-            InstructionKind::F32Abs => self.op(Op::F32Abs),
-            InstructionKind::F32Neg => self.op(Op::F32Neg),
-            InstructionKind::F32Sqrt => self.op(Op::F32Sqrt),
-            InstructionKind::F32Ceil => self.op(Op::F32Ceil),
-            InstructionKind::F32Floor => self.op(Op::F32Floor),
-            InstructionKind::F32Trunc => self.op(Op::F32Trunc),
-            InstructionKind::F32Nearest => self.op(Op::F32Nearest),
-            InstructionKind::F64Abs => self.op(Op::F64Abs),
-            InstructionKind::F64Neg => self.op(Op::F64Neg),
-            InstructionKind::F64Sqrt => self.op(Op::F64Sqrt),
-            InstructionKind::F64Ceil => self.op(Op::F64Ceil),
-            InstructionKind::F64Floor => self.op(Op::F64Floor),
-            InstructionKind::F64Trunc => self.op(Op::F64Trunc),
-            InstructionKind::F64Nearest => self.op(Op::F64Nearest),
-            InstructionKind::F32Eq => self.op(Op::F32Eq),
-            InstructionKind::F32Ne => self.op(Op::F32Ne),
-            InstructionKind::F32Lt => self.op(Op::F32Lt),
-            InstructionKind::F32Gt => self.op(Op::F32Gt),
-            InstructionKind::F32Le => self.op(Op::F32Le),
-            InstructionKind::F32Ge => self.op(Op::F32Ge),
-            InstructionKind::F64Eq => self.op(Op::F64Eq),
-            InstructionKind::F64Ne => self.op(Op::F64Ne),
-            InstructionKind::F64Lt => self.op(Op::F64Lt),
-            InstructionKind::F64Gt => self.op(Op::F64Gt),
-            InstructionKind::F64Le => self.op(Op::F64Le),
-            InstructionKind::F64Ge => self.op(Op::F64Ge),
-            InstructionKind::F32ConvertI32S => self.op(Op::F32ConvertI32S),
-            InstructionKind::F32ConvertI32U => self.op(Op::F32ConvertI32U),
-            InstructionKind::F32ConvertI64S => self.op(Op::F32ConvertI64S),
-            InstructionKind::F32ConvertI64U => self.op(Op::F32ConvertI64U),
-            InstructionKind::F64ConvertI32S => self.op(Op::F64ConvertI32S),
-            InstructionKind::F64ConvertI32U => self.op(Op::F64ConvertI32U),
-            InstructionKind::F64ConvertI64S => self.op(Op::F64ConvertI64S),
-            InstructionKind::F64ConvertI64U => self.op(Op::F64ConvertI64U),
-            InstructionKind::F32DemoteF64 => self.op(Op::F32DemoteF64),
-            InstructionKind::F64PromoteF32 => self.op(Op::F64PromoteF32),
-            InstructionKind::I32TruncF32S => self.op(Op::I32TruncF32S),
-            InstructionKind::I32TruncF32U => self.op(Op::I32TruncF32U),
-            InstructionKind::I32TruncF64S => self.op(Op::I32TruncF64S),
-            InstructionKind::I32TruncF64U => self.op(Op::I32TruncF64U),
-            InstructionKind::I64TruncF32S => self.op(Op::I64TruncF32S),
-            InstructionKind::I64TruncF32U => self.op(Op::I64TruncF32U),
-            InstructionKind::I64TruncF64S => self.op(Op::I64TruncF64S),
-            InstructionKind::I64TruncF64U => self.op(Op::I64TruncF64U),
-            InstructionKind::I32TruncSatF32S => self.op(Op::I32TruncSatF32S),
-            InstructionKind::I32TruncSatF32U => self.op(Op::I32TruncSatF32U),
-            InstructionKind::I32TruncSatF64S => self.op(Op::I32TruncSatF64S),
-            InstructionKind::I32TruncSatF64U => self.op(Op::I32TruncSatF64U),
-            InstructionKind::I64TruncSatF32S => self.op(Op::I64TruncSatF32S),
-            InstructionKind::I64TruncSatF32U => self.op(Op::I64TruncSatF32U),
-            InstructionKind::I64TruncSatF64S => self.op(Op::I64TruncSatF64S),
-            InstructionKind::I64TruncSatF64U => self.op(Op::I64TruncSatF64U),
-            InstructionKind::I32ReinterpretF32 => self.op(Op::I32ReinterpretF32),
-            InstructionKind::I64ReinterpretF64 => self.op(Op::I64ReinterpretF64),
-            InstructionKind::F32ReinterpretI32 => self.op(Op::F32ReinterpretI32),
-            InstructionKind::F64ReinterpretI64 => self.op(Op::F64ReinterpretI64),
-            InstructionKind::I32Eqz => self.op(Op::I32Eqz),
-            InstructionKind::I32Eq => self.op(Op::I32Eq),
-            InstructionKind::I32Ne => self.op(Op::I32Ne),
-            InstructionKind::I32LtS => self.op(Op::I32LtS),
-            InstructionKind::I32LtU => self.op(Op::I32LtU),
-            InstructionKind::I32GtS => self.op(Op::I32GtS),
-            InstructionKind::I32GtU => self.op(Op::I32GtU),
-            InstructionKind::I32LeS => self.op(Op::I32LeS),
-            InstructionKind::I32LeU => self.op(Op::I32LeU),
-            InstructionKind::I32GeS => self.op(Op::I32GeS),
-            InstructionKind::I32GeU => self.op(Op::I32GeU),
+            // Branches resolve their targets from the label stack.
+            InstructionKind::Br { label_idx } => self.emit_br(*label_idx)?,
+            InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx)?,
+            InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default)?,
+            InstructionKind::Return => self.emit_return()?,
+            InstructionKind::Unreachable => {
+                self.op(Op::Unreachable);
+                self.reachable = false;
+            }
 
+            // A v128 local or operand takes two words.
             InstructionKind::LocalGet { local_idx } => self.op(match self.local(*local_idx) {
                 (index, ValueType::V128) => Op::LocalGetV128 { index },
                 (index, _) => Op::LocalGet { index },
@@ -886,149 +545,6 @@ impl<'a> CompileContext<'a> {
                 (index, _) => Op::LocalTee { index },
             }),
 
-            InstructionKind::GlobalGet { global_idx } => {
-                self.emit(Op::GlobalGet { index: *global_idx });
-            }
-            InstructionKind::GlobalSet { global_idx } => {
-                self.emit(Op::GlobalSet { index: *global_idx });
-            }
-
-            // Memory
-            InstructionKind::I32Load { memarg } => {
-                self.emit(Op::I32Load(*memarg));
-            }
-            InstructionKind::I32Load8S { memarg } => {
-                self.emit(Op::I32Load8S(*memarg));
-            }
-            InstructionKind::I32Load8U { memarg } => {
-                self.emit(Op::I32Load8U(*memarg));
-            }
-            InstructionKind::I32Load16S { memarg } => {
-                self.emit(Op::I32Load16S(*memarg));
-            }
-            InstructionKind::I32Load16U { memarg } => {
-                self.emit(Op::I32Load16U(*memarg));
-            }
-            InstructionKind::I64Load { memarg } => {
-                self.emit(Op::I64Load(*memarg));
-            }
-            InstructionKind::I64Load8S { memarg } => {
-                self.emit(Op::I64Load8S(*memarg));
-            }
-            InstructionKind::I64Load8U { memarg } => {
-                self.emit(Op::I64Load8U(*memarg));
-            }
-            InstructionKind::I64Load16S { memarg } => {
-                self.emit(Op::I64Load16S(*memarg));
-            }
-            InstructionKind::I64Load16U { memarg } => {
-                self.emit(Op::I64Load16U(*memarg));
-            }
-            InstructionKind::I64Load32S { memarg } => {
-                self.emit(Op::I64Load32S(*memarg));
-            }
-            InstructionKind::I64Load32U { memarg } => {
-                self.emit(Op::I64Load32U(*memarg));
-            }
-            InstructionKind::F32Load { memarg } => {
-                self.emit(Op::F32Load(*memarg));
-            }
-            InstructionKind::F64Load { memarg } => {
-                self.emit(Op::F64Load(*memarg));
-            }
-            InstructionKind::Simd(SimdOp::V128Load { memarg }) => self.op(Op::V128Load(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load8x8S { memarg }) => self.op(Op::V128Load8x8S(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load8x8U { memarg }) => self.op(Op::V128Load8x8U(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load16x4S { memarg }) => self.op(Op::V128Load16x4S(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load16x4U { memarg }) => self.op(Op::V128Load16x4U(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load32x2S { memarg }) => self.op(Op::V128Load32x2S(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load32x2U { memarg }) => self.op(Op::V128Load32x2U(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load8Splat { memarg }) => self.op(Op::V128Load8Splat(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load16Splat { memarg }) => self.op(Op::V128Load16Splat(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load32Splat { memarg }) => self.op(Op::V128Load32Splat(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load64Splat { memarg }) => self.op(Op::V128Load64Splat(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load32Zero { memarg }) => self.op(Op::V128Load32Zero(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load64Zero { memarg }) => self.op(Op::V128Load64Zero(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Load8Lane { memarg, lane }) => self.op(Op::V128Load8Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Load16Lane { memarg, lane }) => self.op(Op::V128Load16Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Load32Lane { memarg, lane }) => self.op(Op::V128Load32Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Load64Lane { memarg, lane }) => self.op(Op::V128Load64Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::I32Store { memarg } => {
-                self.emit(Op::I32Store(*memarg));
-            }
-            InstructionKind::I32Store8 { memarg } => {
-                self.emit(Op::I32Store8(*memarg));
-            }
-            InstructionKind::I32Store16 { memarg } => {
-                self.emit(Op::I32Store16(*memarg));
-            }
-            InstructionKind::I64Store { memarg } => {
-                self.emit(Op::I64Store(*memarg));
-            }
-            InstructionKind::I64Store8 { memarg } => {
-                self.emit(Op::I64Store8(*memarg));
-            }
-            InstructionKind::I64Store16 { memarg } => {
-                self.emit(Op::I64Store16(*memarg));
-            }
-            InstructionKind::I64Store32 { memarg } => {
-                self.emit(Op::I64Store32(*memarg));
-            }
-            InstructionKind::F32Store { memarg } => {
-                self.emit(Op::F32Store(*memarg));
-            }
-            InstructionKind::F64Store { memarg } => {
-                self.emit(Op::F64Store(*memarg));
-            }
-            InstructionKind::Simd(SimdOp::V128Store { memarg }) => self.op(Op::V128Store(*memarg)),
-            InstructionKind::Simd(SimdOp::V128Store8Lane { memarg, lane }) => self.op(Op::V128Store8Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Store16Lane { memarg, lane }) => self.op(Op::V128Store16Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Store32Lane { memarg, lane }) => self.op(Op::V128Store32Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::Simd(SimdOp::V128Store64Lane { memarg, lane }) => self.op(Op::V128Store64Lane {
-                memarg: *memarg,
-                lane: *lane,
-            }),
-            InstructionKind::MemorySize => self.op(Op::MemorySize),
-            InstructionKind::MemoryGrow => self.op(Op::MemoryGrow),
-            InstructionKind::MemoryCopy => self.op(Op::MemoryCopy),
-            InstructionKind::MemoryFill => self.op(Op::MemoryFill),
-
-            InstructionKind::Call { func_idx } => self.op(Op::Call { func_idx: *func_idx }),
-            InstructionKind::CallIndirect { type_idx, table_idx } => self.op(Op::CallIndirect {
-                type_idx: *type_idx,
-                table_idx: *table_idx,
-            }),
-
-            InstructionKind::Br { label_idx } => self.emit_br(*label_idx)?,
-            InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx)?,
-            InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default)?,
-            InstructionKind::Return => self.emit_return()?,
-            InstructionKind::Nop => self.op(Op::Nop),
-            InstructionKind::Unreachable => {
-                self.op(Op::Unreachable);
-                self.reachable = false;
-            }
             InstructionKind::Drop => self.op(match dropped {
                 Some(ValueType::V128) => Op::DropV128,
                 _ => Op::Drop,
@@ -1038,31 +554,14 @@ impl<'a> CompileContext<'a> {
                 Some(ValueType::V128) => Op::SelectV128,
                 _ => Op::Select,
             }),
-            InstructionKind::RefNull { ref_type } => self.op(Op::RefNull(*ref_type)),
-            InstructionKind::RefIsNull => self.op(Op::RefIsNull),
-            InstructionKind::RefFunc { func_idx } => self.op(Op::RefFunc { func_idx: *func_idx }),
-            InstructionKind::TableGet { table_idx } => self.op(Op::TableGet { table_idx: *table_idx }),
-            InstructionKind::TableSet { table_idx } => self.op(Op::TableSet { table_idx: *table_idx }),
-            InstructionKind::TableSize { table_idx } => self.op(Op::TableSize { table_idx: *table_idx }),
-            InstructionKind::TableGrow { table_idx } => self.op(Op::TableGrow { table_idx: *table_idx }),
-            InstructionKind::TableFill { table_idx } => self.op(Op::TableFill { table_idx: *table_idx }),
-            InstructionKind::TableCopy { dst_table, src_table } => self.op(Op::TableCopy {
-                dst_table: *dst_table,
-                src_table: *src_table,
-            }),
-            InstructionKind::TableInit { elem_idx, table_idx } => self.op(Op::TableInit {
-                elem_idx: *elem_idx,
-                table_idx: *table_idx,
-            }),
-            InstructionKind::ElemDrop { elem_idx } => self.op(Op::ElemDrop { elem_idx: *elem_idx }),
-            InstructionKind::MemoryInit { data_idx } => self.op(Op::MemoryInit { data_idx: *data_idx }),
-            InstructionKind::DataDrop { data_idx } => self.op(Op::DataDrop { data_idx: *data_idx }),
 
             InstructionKind::Block { .. }
             | InstructionKind::Loop { .. }
             | InstructionKind::If { .. }
             | InstructionKind::Else
             | InstructionKind::End => unreachable!("structured control instruction passed to emit_plain"),
+
+            kind => self.op(lower(kind)),
         }
         Ok(())
     }

@@ -96,7 +96,7 @@ RUST_BACKTRACE=1 cargo test <pattern>
    `context_signature` when its types come from an immediate. Validation and the compiler share it.
 5. Implement it as a pure function in `src/runtime/ops/*.rs`, returning `Result<_, Trap>` if it traps.
 6. Wire both engines: an arm in `src/runtime/executor.rs`, and an `Op` in `bytecode.rs` lowered in
-   `compiler.rs` and dispatched in `flat_executor/mod.rs`.
+   `compiler/lower.rs` and dispatched in `flat_executor/mod.rs`.
 7. Add focused tests, then run `./check.sh`.
 
 ## Test Infrastructure
