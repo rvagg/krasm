@@ -25,6 +25,7 @@ exclude = [
 default = ["cli"]
 cli = ["clap"]
 instruction-profile = []
+slot-proto = []
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"], optional = true }
@@ -48,6 +49,10 @@ rstest = "0.27"
 name = "krasm"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[example]]
+name = "slot_proto"
+required-features = ["slot-proto"]
 
 [[bench]]
 name = "validation"

@@ -16,6 +16,8 @@ pub mod memory;
 pub(crate) mod ops;
 #[cfg(feature = "instruction-profile")]
 pub mod profile;
+#[cfg(feature = "slot-proto")]
+pub mod slot_proto;
 pub(crate) mod stack;
 pub mod store;
 pub mod table;
