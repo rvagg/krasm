@@ -54,33 +54,70 @@ impl Stack {
 
     /// Replace the top operand with `op` applied to it.
     #[inline(never)]
-    pub fn unary<A: Operand, R: Operand>(&mut self, op: impl FnOnce(A) -> R) -> Result<(), RuntimeError> {
+    pub fn unary<A: Operand, R: Results>(&mut self, op: impl FnOnce(A) -> R) -> Result<(), RuntimeError> {
         let a = A::pop_from(self)?;
-        self.push(op(a).into_value());
+        op(a).push_to(self);
         Ok(())
     }
 
     /// Replace the top two operands, `b` on top, with `op(a, b)`.
     #[inline(never)]
-    pub fn binary<A: Operand, B: Operand, R: Operand>(
+    pub fn binary<A: Operand, B: Operand, R: Results>(
         &mut self,
         op: impl FnOnce(A, B) -> R,
     ) -> Result<(), RuntimeError> {
         let b = B::pop_from(self)?;
         let a = A::pop_from(self)?;
-        self.push(op(a, b).into_value());
+        op(a, b).push_to(self);
+        Ok(())
+    }
+
+    /// Replace the top three operands, `c` on top, with `op(a, b, c)`.
+    #[inline(never)]
+    pub fn ternary<A: Operand, B: Operand, C: Operand, R: Results>(
+        &mut self,
+        op: impl FnOnce(A, B, C) -> R,
+    ) -> Result<(), RuntimeError> {
+        let c = C::pop_from(self)?;
+        let b = B::pop_from(self)?;
+        let a = A::pop_from(self)?;
+        op(a, b, c).push_to(self);
+        Ok(())
+    }
+
+    /// [`unary`](Self::unary) for an operation that can trap.
+    #[inline(never)]
+    pub fn try_unary<A: Operand, R: Results>(
+        &mut self,
+        op: impl FnOnce(A) -> Result<R, Trap>,
+    ) -> Result<(), RuntimeError> {
+        let a = A::pop_from(self)?;
+        op(a)?.push_to(self);
         Ok(())
     }
 
     /// [`binary`](Self::binary) for an operation that can trap.
     #[inline(never)]
-    pub fn try_binary<A: Operand, B: Operand, R: Operand>(
+    pub fn try_binary<A: Operand, B: Operand, R: Results>(
         &mut self,
         op: impl FnOnce(A, B) -> Result<R, Trap>,
     ) -> Result<(), RuntimeError> {
         let b = B::pop_from(self)?;
         let a = A::pop_from(self)?;
-        self.push(op(a, b)?.into_value());
+        op(a, b)?.push_to(self);
+        Ok(())
+    }
+
+    /// Replace the top three operands, `c` on top, with `op(a, b, c)`, which can trap.
+    #[inline(never)]
+    pub fn try_ternary<A: Operand, B: Operand, C: Operand, R: Results>(
+        &mut self,
+        op: impl FnOnce(A, B, C) -> Result<R, Trap>,
+    ) -> Result<(), RuntimeError> {
+        let c = C::pop_from(self)?;
+        let b = B::pop_from(self)?;
+        let a = A::pop_from(self)?;
+        op(a, b, c)?.push_to(self);
         Ok(())
     }
 
@@ -116,6 +153,16 @@ pub trait Operand: Sized {
     fn into_value(self) -> Value;
 }
 
+/// What an operation leaves on the stack: one operand, or nothing.
+pub trait Results {
+    fn push_to(self, stack: &mut Stack);
+}
+
+impl Results for () {
+    #[inline(always)]
+    fn push_to(self, _stack: &mut Stack) {}
+}
+
 macro_rules! operand {
     ($ty:ty, $variant:ident, $pop:ident) => {
         impl Operand for $ty {
@@ -127,6 +174,13 @@ macro_rules! operand {
             #[inline(always)]
             fn into_value(self) -> Value {
                 Value::$variant(self)
+            }
+        }
+
+        impl Results for $ty {
+            #[inline(always)]
+            fn push_to(self, stack: &mut Stack) {
+                stack.push(self.into_value());
             }
         }
     };

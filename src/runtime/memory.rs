@@ -9,7 +9,7 @@
 //! - Bounds checking: Required for all accesses
 //! - Out-of-bounds access: Traps (runtime error)
 
-use super::RuntimeError;
+use super::{RuntimeError, Trap};
 
 /// WebAssembly page size in bytes (64KB)
 pub const PAGE_SIZE: usize = 65536;
@@ -139,38 +139,34 @@ impl Memory {
     /// - Ensure the entire access range is within bounds
     /// - Handle edge cases (e.g., size = 0)
     #[inline]
-    fn check_bounds(&self, addr: u32, size: usize) -> Result<usize, RuntimeError> {
+    fn check_bounds(&self, addr: u32, size: usize) -> Result<usize, Trap> {
         let addr = addr as usize;
 
         // Check for integer overflow in the access range
-        let end = addr.checked_add(size).ok_or_else(|| {
-            RuntimeError::MemoryError(format!(
-                "Memory access overflow: address {addr} + size {size} overflows"
-            ))
-        })?;
+        let end = addr.checked_add(size).ok_or(Trap::MemoryOutOfBounds)?;
 
         // Check if access is within bounds
         if end > self.data.len() {
-            return Err(RuntimeError::MemoryError("out of bounds memory access".to_string()));
+            return Err(Trap::MemoryOutOfBounds);
         }
 
         Ok(addr)
     }
 
     /// Read a u8 from memory
-    pub fn read_u8(&self, addr: u32) -> Result<u8, RuntimeError> {
+    pub fn read_u8(&self, addr: u32) -> Result<u8, Trap> {
         let addr = self.check_bounds(addr, 1)?;
         Ok(self.data[addr])
     }
 
     /// Read a u16 from memory (little-endian)
-    pub fn read_u16(&self, addr: u32) -> Result<u16, RuntimeError> {
+    pub fn read_u16(&self, addr: u32) -> Result<u16, Trap> {
         let addr = self.check_bounds(addr, 2)?;
         Ok(u16::from_le_bytes([self.data[addr], self.data[addr + 1]]))
     }
 
     /// Read a u32 from memory (little-endian)
-    pub fn read_u32(&self, addr: u32) -> Result<u32, RuntimeError> {
+    pub fn read_u32(&self, addr: u32) -> Result<u32, Trap> {
         let addr = self.check_bounds(addr, 4)?;
         Ok(u32::from_le_bytes([
             self.data[addr],
@@ -181,7 +177,7 @@ impl Memory {
     }
 
     /// Read a u64 from memory (little-endian)
-    pub fn read_u64(&self, addr: u32) -> Result<u64, RuntimeError> {
+    pub fn read_u64(&self, addr: u32) -> Result<u64, Trap> {
         let addr = self.check_bounds(addr, 8)?;
         Ok(u64::from_le_bytes([
             self.data[addr],
@@ -196,44 +192,44 @@ impl Memory {
     }
 
     /// Read an i8 from memory
-    pub fn read_i8(&self, addr: u32) -> Result<i8, RuntimeError> {
+    pub fn read_i8(&self, addr: u32) -> Result<i8, Trap> {
         Ok(self.read_u8(addr)? as i8)
     }
 
     /// Read an i16 from memory (little-endian)
-    pub fn read_i16(&self, addr: u32) -> Result<i16, RuntimeError> {
+    pub fn read_i16(&self, addr: u32) -> Result<i16, Trap> {
         Ok(self.read_u16(addr)? as i16)
     }
 
     /// Read an i32 from memory (little-endian)
-    pub fn read_i32(&self, addr: u32) -> Result<i32, RuntimeError> {
+    pub fn read_i32(&self, addr: u32) -> Result<i32, Trap> {
         Ok(self.read_u32(addr)? as i32)
     }
 
     /// Read an i64 from memory (little-endian)
-    pub fn read_i64(&self, addr: u32) -> Result<i64, RuntimeError> {
+    pub fn read_i64(&self, addr: u32) -> Result<i64, Trap> {
         Ok(self.read_u64(addr)? as i64)
     }
 
     /// Read an f32 from memory (little-endian)
-    pub fn read_f32(&self, addr: u32) -> Result<f32, RuntimeError> {
+    pub fn read_f32(&self, addr: u32) -> Result<f32, Trap> {
         Ok(f32::from_le_bytes(self.read_u32(addr)?.to_le_bytes()))
     }
 
     /// Read an f64 from memory (little-endian)
-    pub fn read_f64(&self, addr: u32) -> Result<f64, RuntimeError> {
+    pub fn read_f64(&self, addr: u32) -> Result<f64, Trap> {
         Ok(f64::from_le_bytes(self.read_u64(addr)?.to_le_bytes()))
     }
 
     /// Write a u8 to memory
-    pub fn write_u8(&mut self, addr: u32, value: u8) -> Result<(), RuntimeError> {
+    pub fn write_u8(&mut self, addr: u32, value: u8) -> Result<(), Trap> {
         let addr = self.check_bounds(addr, 1)?;
         self.data[addr] = value;
         Ok(())
     }
 
     /// Write a u16 to memory (little-endian)
-    pub fn write_u16(&mut self, addr: u32, value: u16) -> Result<(), RuntimeError> {
+    pub fn write_u16(&mut self, addr: u32, value: u16) -> Result<(), Trap> {
         let addr = self.check_bounds(addr, 2)?;
         let bytes = value.to_le_bytes();
         self.data[addr] = bytes[0];
@@ -242,7 +238,7 @@ impl Memory {
     }
 
     /// Write a u32 to memory (little-endian)
-    pub fn write_u32(&mut self, addr: u32, value: u32) -> Result<(), RuntimeError> {
+    pub fn write_u32(&mut self, addr: u32, value: u32) -> Result<(), Trap> {
         let addr = self.check_bounds(addr, 4)?;
         let bytes = value.to_le_bytes();
         self.data[addr] = bytes[0];
@@ -253,7 +249,7 @@ impl Memory {
     }
 
     /// Write a u64 to memory (little-endian)
-    pub fn write_u64(&mut self, addr: u32, value: u64) -> Result<(), RuntimeError> {
+    pub fn write_u64(&mut self, addr: u32, value: u64) -> Result<(), Trap> {
         let addr = self.check_bounds(addr, 8)?;
         let bytes = value.to_le_bytes();
         for (i, &byte) in bytes.iter().enumerate() {
@@ -263,32 +259,32 @@ impl Memory {
     }
 
     /// Write an i8 to memory
-    pub fn write_i8(&mut self, addr: u32, value: i8) -> Result<(), RuntimeError> {
+    pub fn write_i8(&mut self, addr: u32, value: i8) -> Result<(), Trap> {
         self.write_u8(addr, value as u8)
     }
 
     /// Write an i16 to memory (little-endian)
-    pub fn write_i16(&mut self, addr: u32, value: i16) -> Result<(), RuntimeError> {
+    pub fn write_i16(&mut self, addr: u32, value: i16) -> Result<(), Trap> {
         self.write_u16(addr, value as u16)
     }
 
     /// Write an i32 to memory (little-endian)
-    pub fn write_i32(&mut self, addr: u32, value: i32) -> Result<(), RuntimeError> {
+    pub fn write_i32(&mut self, addr: u32, value: i32) -> Result<(), Trap> {
         self.write_u32(addr, value as u32)
     }
 
     /// Write an i64 to memory (little-endian)
-    pub fn write_i64(&mut self, addr: u32, value: i64) -> Result<(), RuntimeError> {
+    pub fn write_i64(&mut self, addr: u32, value: i64) -> Result<(), Trap> {
         self.write_u64(addr, value as u64)
     }
 
     /// Write an f32 to memory (little-endian)
-    pub fn write_f32(&mut self, addr: u32, value: f32) -> Result<(), RuntimeError> {
+    pub fn write_f32(&mut self, addr: u32, value: f32) -> Result<(), Trap> {
         self.write_u32(addr, u32::from_le_bytes(value.to_le_bytes()))
     }
 
     /// Write an f64 to memory (little-endian)
-    pub fn write_f64(&mut self, addr: u32, value: f64) -> Result<(), RuntimeError> {
+    pub fn write_f64(&mut self, addr: u32, value: f64) -> Result<(), Trap> {
         self.write_u64(addr, u64::from_le_bytes(value.to_le_bytes()))
     }
 
@@ -297,7 +293,7 @@ impl Memory {
     /// # Security
     /// - Bounds checks the entire range
     /// - Returns a copy to prevent aliasing issues
-    pub fn read_bytes(&self, addr: u32, len: usize) -> Result<Vec<u8>, RuntimeError> {
+    pub fn read_bytes(&self, addr: u32, len: usize) -> Result<Vec<u8>, Trap> {
         let addr = self.check_bounds(addr, len)?;
         Ok(self.data[addr..addr + len].to_vec())
     }
@@ -307,7 +303,7 @@ impl Memory {
     /// # Security
     /// - Bounds checks the entire range
     /// - Copies data to prevent aliasing issues
-    pub fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<(), RuntimeError> {
+    pub fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<(), Trap> {
         let addr = self.check_bounds(addr, bytes.len())?;
         self.data[addr..addr + bytes.len()].copy_from_slice(bytes);
         Ok(())

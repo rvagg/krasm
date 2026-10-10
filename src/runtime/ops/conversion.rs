@@ -42,26 +42,20 @@ const I64_TRUNC_F64_U_MAX: f64 = 18446744073709551616.0; // 2^64
 
 /// i32.wrap_i64 - Truncate i64 to i32 (keep low 32 bits)
 /// spec: 4.4.1.6
-pub fn i32_wrap_i64(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::I32(value as i32));
-    Ok(())
+pub fn i32_wrap_i64(value: i64) -> i32 {
+    value as i32
 }
 
 /// i64.extend_i32_s - Sign-extend i32 to i64
 /// spec: 4.4.1.6
-pub fn i64_extend_i32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I64(value as i64)); // Rust's `as` does sign extension
-    Ok(())
+pub fn i64_extend_i32_s(value: i32) -> i64 {
+    value as i64 // Rust's `as` does sign extension
 }
 
 /// i64.extend_i32_u - Zero-extend i32 to i64
 /// spec: 4.4.1.6
-pub fn i64_extend_i32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::I64((value as u32) as i64)); // Cast to u32 first for zero-extension
-    Ok(())
+pub fn i64_extend_i32_u(value: i32) -> i64 {
+    (value as u32) as i64 // Cast to u32 first for zero-extension
 }
 
 // ============================================================================
@@ -73,11 +67,9 @@ pub fn i64_extend_i32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 ///
 /// Takes the lowest 8 bits of an i32 value and sign-extends them to 32 bits.
 /// If bit 7 is set (negative in 8-bit), all upper bits are set to 1.
-pub fn i32_extend8_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
+pub fn i32_extend8_s(value: i32) -> i32 {
     let byte = value as i8; // Truncate to 8 bits and interpret as signed
-    stack.push(Value::I32(byte as i32)); // Sign-extend back to i32
-    Ok(())
+    byte as i32 // Sign-extend back to i32
 }
 
 /// i32.extend16_s - Sign-extend 16-bit value to i32
@@ -85,11 +77,9 @@ pub fn i32_extend8_s(stack: &mut Stack) -> Result<(), RuntimeError> {
 ///
 /// Takes the lowest 16 bits of an i32 value and sign-extends them to 32 bits.
 /// If bit 15 is set (negative in 16-bit), all upper bits are set to 1.
-pub fn i32_extend16_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
+pub fn i32_extend16_s(value: i32) -> i32 {
     let short = value as i16; // Truncate to 16 bits and interpret as signed
-    stack.push(Value::I32(short as i32)); // Sign-extend back to i32
-    Ok(())
+    short as i32 // Sign-extend back to i32
 }
 
 /// i64.extend8_s - Sign-extend 8-bit value to i64
@@ -97,11 +87,9 @@ pub fn i32_extend16_s(stack: &mut Stack) -> Result<(), RuntimeError> {
 ///
 /// Takes the lowest 8 bits of an i64 value and sign-extends them to 64 bits.
 /// If bit 7 is set (negative in 8-bit), all upper bits are set to 1.
-pub fn i64_extend8_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
+pub fn i64_extend8_s(value: i64) -> i64 {
     let byte = value as i8; // Truncate to 8 bits and interpret as signed
-    stack.push(Value::I64(byte as i64)); // Sign-extend back to i64
-    Ok(())
+    byte as i64 // Sign-extend back to i64
 }
 
 /// i64.extend16_s - Sign-extend 16-bit value to i64
@@ -109,11 +97,9 @@ pub fn i64_extend8_s(stack: &mut Stack) -> Result<(), RuntimeError> {
 ///
 /// Takes the lowest 16 bits of an i64 value and sign-extends them to 64 bits.
 /// If bit 15 is set (negative in 16-bit), all upper bits are set to 1.
-pub fn i64_extend16_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
+pub fn i64_extend16_s(value: i64) -> i64 {
     let short = value as i16; // Truncate to 16 bits and interpret as signed
-    stack.push(Value::I64(short as i64)); // Sign-extend back to i64
-    Ok(())
+    short as i64 // Sign-extend back to i64
 }
 
 /// i64.extend32_s - Sign-extend 32-bit value to i64
@@ -121,11 +107,9 @@ pub fn i64_extend16_s(stack: &mut Stack) -> Result<(), RuntimeError> {
 ///
 /// Takes the lowest 32 bits of an i64 value and sign-extends them to 64 bits.
 /// If bit 31 is set (negative in 32-bit), all upper bits are set to 1.
-pub fn i64_extend32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
+pub fn i64_extend32_s(value: i64) -> i64 {
     let int = value as i32; // Truncate to 32 bits and interpret as signed
-    stack.push(Value::I64(int as i64)); // Sign-extend back to i64
-    Ok(())
+    int as i64 // Sign-extend back to i64
 }
 
 // ============================================================================
@@ -134,34 +118,26 @@ pub fn i64_extend32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i32.reinterpret_f32 - Reinterpret f32 bits as i32
 /// spec: 4.4.1.6
-pub fn i32_reinterpret_f32(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::I32(value.to_bits() as i32));
-    Ok(())
+pub fn i32_reinterpret_f32(value: f32) -> i32 {
+    value.to_bits() as i32
 }
 
 /// i64.reinterpret_f64 - Reinterpret f64 bits as i64
 /// spec: 4.4.1.6
-pub fn i64_reinterpret_f64(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::I64(value.to_bits() as i64));
-    Ok(())
+pub fn i64_reinterpret_f64(value: f64) -> i64 {
+    value.to_bits() as i64
 }
 
 /// f32.reinterpret_i32 - Reinterpret i32 bits as f32
 /// spec: 4.4.1.6
-pub fn f32_reinterpret_i32(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::F32(f32::from_bits(value as u32)));
-    Ok(())
+pub fn f32_reinterpret_i32(value: i32) -> f32 {
+    f32::from_bits(value as u32)
 }
 
 /// f64.reinterpret_i64 - Reinterpret i64 bits as f64
 /// spec: 4.4.1.6
-pub fn f64_reinterpret_i64(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::F64(f64::from_bits(value as u64)));
-    Ok(())
+pub fn f64_reinterpret_i64(value: i64) -> f64 {
+    f64::from_bits(value as u64)
 }
 
 // ============================================================================
@@ -170,18 +146,14 @@ pub fn f64_reinterpret_i64(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// f32.demote_f64 - Convert f64 to f32 (may lose precision)
 /// spec: 4.4.1.6
-pub fn f32_demote_f64(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    stack.push(Value::F32(value as f32));
-    Ok(())
+pub fn f32_demote_f64(value: f64) -> f32 {
+    value as f32
 }
 
 /// f64.promote_f32 - Convert f32 to f64 (exact conversion)
 /// spec: 4.4.1.6
-pub fn f64_promote_f32(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    stack.push(Value::F64(value as f64));
-    Ok(())
+pub fn f64_promote_f32(value: f32) -> f64 {
+    value as f64
 }
 
 // ============================================================================
@@ -190,66 +162,50 @@ pub fn f64_promote_f32(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// f32.convert_i32_s - Convert signed i32 to f32
 /// spec: 4.4.1.6
-pub fn f32_convert_i32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::F32(value as f32));
-    Ok(())
+pub fn f32_convert_i32_s(value: i32) -> f32 {
+    value as f32
 }
 
 /// f32.convert_i32_u - Convert unsigned i32 to f32
 /// spec: 4.4.1.6
-pub fn f32_convert_i32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::F32((value as u32) as f32));
-    Ok(())
+pub fn f32_convert_i32_u(value: i32) -> f32 {
+    (value as u32) as f32
 }
 
 /// f32.convert_i64_s - Convert signed i64 to f32
 /// spec: 4.4.1.6
-pub fn f32_convert_i64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::F32(value as f32));
-    Ok(())
+pub fn f32_convert_i64_s(value: i64) -> f32 {
+    value as f32
 }
 
 /// f32.convert_i64_u - Convert unsigned i64 to f32
 /// spec: 4.4.1.6
-pub fn f32_convert_i64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::F32((value as u64) as f32));
-    Ok(())
+pub fn f32_convert_i64_u(value: i64) -> f32 {
+    (value as u64) as f32
 }
 
 /// f64.convert_i32_s - Convert signed i32 to f64
 /// spec: 4.4.1.6
-pub fn f64_convert_i32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::F64(value as f64));
-    Ok(())
+pub fn f64_convert_i32_s(value: i32) -> f64 {
+    value as f64
 }
 
 /// f64.convert_i32_u - Convert unsigned i32 to f64
 /// spec: 4.4.1.6
-pub fn f64_convert_i32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    stack.push(Value::F64((value as u32) as f64));
-    Ok(())
+pub fn f64_convert_i32_u(value: i32) -> f64 {
+    (value as u32) as f64
 }
 
 /// f64.convert_i64_s - Convert signed i64 to f64
 /// spec: 4.4.1.6
-pub fn f64_convert_i64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::F64(value as f64));
-    Ok(())
+pub fn f64_convert_i64_s(value: i64) -> f64 {
+    value as f64
 }
 
 /// f64.convert_i64_u - Convert unsigned i64 to f64
 /// spec: 4.4.1.6
-pub fn f64_convert_i64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    stack.push(Value::F64((value as u64) as f64));
-    Ok(())
+pub fn f64_convert_i64_u(value: i64) -> f64 {
+    (value as u64) as f64
 }
 
 // ============================================================================
@@ -259,41 +215,36 @@ pub fn f64_convert_i64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 /// i32.trunc_f32_s - Truncate f32 to signed i32
 /// spec: 4.4.1.6
 /// Traps on: NaN, infinity, or out-of-range values
-pub fn i32_trunc_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
+pub fn i32_trunc_f32_s(value: f32) -> Result<i32, Trap> {
     // Check for NaN
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     // Check for infinity
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first, then check range
     let truncated = value.trunc();
 
     if !(I32_TRUNC_F32_S_MIN..I32_TRUNC_F32_S_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I32(truncated as i32));
-    Ok(())
+    Ok(truncated as i32)
 }
 
 /// i32.trunc_f32_u - Truncate f32 to unsigned i32
 /// spec: 4.4.1.6
-pub fn i32_trunc_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
+pub fn i32_trunc_f32_u(value: f32) -> Result<i32, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first to handle subnormals that become -0.0
@@ -301,53 +252,46 @@ pub fn i32_trunc_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
     // -0.0 is valid and converts to 0
     if truncated == 0.0 {
-        stack.push(Value::I32(0));
-        return Ok(());
+        return Ok(0);
     }
 
     if !(I32_TRUNC_F32_U_MIN..I32_TRUNC_F32_U_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I32(truncated as u32 as i32));
-    Ok(())
+    Ok(truncated as u32 as i32)
 }
 
 /// i32.trunc_f64_s - Truncate f64 to signed i32
 /// spec: 4.4.1.6
-pub fn i32_trunc_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
+pub fn i32_trunc_f64_s(value: f64) -> Result<i32, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first, then check range
     let truncated = value.trunc();
 
     if !(I32_TRUNC_F64_S_MIN..I32_TRUNC_F64_S_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I32(truncated as i32));
-    Ok(())
+    Ok(truncated as i32)
 }
 
 /// i32.trunc_f64_u - Truncate f64 to unsigned i32
 /// spec: 4.4.1.6
-pub fn i32_trunc_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
+pub fn i32_trunc_f64_u(value: f64) -> Result<i32, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first to handle subnormals that become -0.0
@@ -355,53 +299,46 @@ pub fn i32_trunc_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
     // -0.0 is valid and converts to 0
     if truncated == 0.0 {
-        stack.push(Value::I32(0));
-        return Ok(());
+        return Ok(0);
     }
 
     if !(I32_TRUNC_F64_U_MIN..I32_TRUNC_F64_U_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I32(truncated as u32 as i32));
-    Ok(())
+    Ok(truncated as u32 as i32)
 }
 
 /// i64.trunc_f32_s - Truncate f32 to signed i64
 /// spec: 4.4.1.6
-pub fn i64_trunc_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
+pub fn i64_trunc_f32_s(value: f32) -> Result<i64, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first, then check range
     let truncated = value.trunc();
 
     if !(I64_TRUNC_F32_S_MIN..I64_TRUNC_F32_S_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I64(truncated as i64));
-    Ok(())
+    Ok(truncated as i64)
 }
 
 /// i64.trunc_f32_u - Truncate f32 to unsigned i64
 /// spec: 4.4.1.6
-pub fn i64_trunc_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
+pub fn i64_trunc_f32_u(value: f32) -> Result<i64, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first to handle subnormals that become -0.0
@@ -409,53 +346,46 @@ pub fn i64_trunc_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
     // -0.0 is valid and converts to 0
     if truncated == 0.0 {
-        stack.push(Value::I64(0));
-        return Ok(());
+        return Ok(0);
     }
 
     if !(I64_TRUNC_F32_U_MIN..I64_TRUNC_F32_U_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I64(truncated as u64 as i64));
-    Ok(())
+    Ok(truncated as u64 as i64)
 }
 
 /// i64.trunc_f64_s - Truncate f64 to signed i64
 /// spec: 4.4.1.6
-pub fn i64_trunc_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
+pub fn i64_trunc_f64_s(value: f64) -> Result<i64, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first, then check range
     let truncated = value.trunc();
 
     if !(I64_TRUNC_F64_S_MIN..I64_TRUNC_F64_S_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I64(truncated as i64));
-    Ok(())
+    Ok(truncated as i64)
 }
 
 /// i64.trunc_f64_u - Truncate f64 to unsigned i64
 /// spec: 4.4.1.6
-pub fn i64_trunc_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
+pub fn i64_trunc_f64_u(value: f64) -> Result<i64, Trap> {
     if value.is_nan() {
-        return Err(RuntimeError::InvalidConversion("NaN".to_string()));
+        return Err(Trap::InvalidConversionToInteger);
     }
 
     if value.is_infinite() {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
     // Truncate first to handle subnormals that become -0.0
@@ -463,16 +393,14 @@ pub fn i64_trunc_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
     // -0.0 is valid and converts to 0
     if truncated == 0.0 {
-        stack.push(Value::I64(0));
-        return Ok(());
+        return Ok(0);
     }
 
     if !(I64_TRUNC_F64_U_MIN..I64_TRUNC_F64_U_MAX).contains(&truncated) {
-        return Err(RuntimeError::IntegerOverflow);
+        return Err(Trap::IntegerOverflow);
     }
 
-    stack.push(Value::I64(truncated as u64 as i64));
-    Ok(())
+    Ok(truncated as u64 as i64)
 }
 
 // ============================================================================
@@ -481,10 +409,8 @@ pub fn i64_trunc_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
 
 /// i32.trunc_sat_f32_s - Saturating truncation of f32 to signed i32
 /// spec: Saturating truncation proposal
-pub fn i32_trunc_sat_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
-    let result = if value.is_nan() {
+pub fn i32_trunc_sat_f32_s(value: f32) -> i32 {
+    if value.is_nan() {
         0
     } else if value >= i32::MAX as f32 {
         i32::MAX
@@ -492,18 +418,13 @@ pub fn i32_trunc_sat_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
         i32::MIN
     } else {
         value.trunc() as i32
-    };
-
-    stack.push(Value::I32(result));
-    Ok(())
+    }
 }
 
 /// i32.trunc_sat_f32_u - Saturating truncation of f32 to unsigned i32
 /// spec: Saturating truncation proposal
-pub fn i32_trunc_sat_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
-    let result = if value.is_nan() {
+pub fn i32_trunc_sat_f32_u(value: f32) -> i32 {
+    if value.is_nan() {
         0
     } else if value >= u32::MAX as f32 {
         u32::MAX as i32
@@ -511,18 +432,13 @@ pub fn i32_trunc_sat_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
         0
     } else {
         value.trunc() as u32 as i32
-    };
-
-    stack.push(Value::I32(result));
-    Ok(())
+    }
 }
 
 /// i32.trunc_sat_f64_s - Saturating truncation of f64 to signed i32
 /// spec: Saturating truncation proposal
-pub fn i32_trunc_sat_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
-    let result = if value.is_nan() {
+pub fn i32_trunc_sat_f64_s(value: f64) -> i32 {
+    if value.is_nan() {
         0
     } else if value >= i32::MAX as f64 {
         i32::MAX
@@ -530,18 +446,13 @@ pub fn i32_trunc_sat_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
         i32::MIN
     } else {
         value.trunc() as i32
-    };
-
-    stack.push(Value::I32(result));
-    Ok(())
+    }
 }
 
 /// i32.trunc_sat_f64_u - Saturating truncation of f64 to unsigned i32
 /// spec: Saturating truncation proposal
-pub fn i32_trunc_sat_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
-    let result = if value.is_nan() {
+pub fn i32_trunc_sat_f64_u(value: f64) -> i32 {
+    if value.is_nan() {
         0
     } else if value >= u32::MAX as f64 {
         u32::MAX as i32
@@ -549,18 +460,13 @@ pub fn i32_trunc_sat_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
         0
     } else {
         value.trunc() as u32 as i32
-    };
-
-    stack.push(Value::I32(result));
-    Ok(())
+    }
 }
 
 /// i64.trunc_sat_f32_s - Saturating truncation of f32 to signed i64
 /// spec: Saturating truncation proposal
-pub fn i64_trunc_sat_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
-    let result = if value.is_nan() {
+pub fn i64_trunc_sat_f32_s(value: f32) -> i64 {
+    if value.is_nan() {
         0
     } else if value >= i64::MAX as f32 {
         i64::MAX
@@ -568,18 +474,13 @@ pub fn i64_trunc_sat_f32_s(stack: &mut Stack) -> Result<(), RuntimeError> {
         i64::MIN
     } else {
         value.trunc() as i64
-    };
-
-    stack.push(Value::I64(result));
-    Ok(())
+    }
 }
 
 /// i64.trunc_sat_f32_u - Saturating truncation of f32 to unsigned i64
 /// spec: Saturating truncation proposal
-pub fn i64_trunc_sat_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-
-    let result = if value.is_nan() {
+pub fn i64_trunc_sat_f32_u(value: f32) -> i64 {
+    if value.is_nan() {
         0
     } else if value >= u64::MAX as f32 {
         u64::MAX as i64
@@ -587,18 +488,13 @@ pub fn i64_trunc_sat_f32_u(stack: &mut Stack) -> Result<(), RuntimeError> {
         0
     } else {
         value.trunc() as u64 as i64
-    };
-
-    stack.push(Value::I64(result));
-    Ok(())
+    }
 }
 
 /// i64.trunc_sat_f64_s - Saturating truncation of f64 to signed i64
 /// spec: Saturating truncation proposal
-pub fn i64_trunc_sat_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
-    let result = if value.is_nan() {
+pub fn i64_trunc_sat_f64_s(value: f64) -> i64 {
+    if value.is_nan() {
         0
     } else if value >= i64::MAX as f64 {
         i64::MAX
@@ -606,18 +502,13 @@ pub fn i64_trunc_sat_f64_s(stack: &mut Stack) -> Result<(), RuntimeError> {
         i64::MIN
     } else {
         value.trunc() as i64
-    };
-
-    stack.push(Value::I64(result));
-    Ok(())
+    }
 }
 
 /// i64.trunc_sat_f64_u - Saturating truncation of f64 to unsigned i64
 /// spec: Saturating truncation proposal
-pub fn i64_trunc_sat_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-
-    let result = if value.is_nan() {
+pub fn i64_trunc_sat_f64_u(value: f64) -> i64 {
+    if value.is_nan() {
         0
     } else if value >= u64::MAX as f64 {
         u64::MAX as i64
@@ -625,10 +516,7 @@ pub fn i64_trunc_sat_f64_u(stack: &mut Stack) -> Result<(), RuntimeError> {
         0
     } else {
         value.trunc() as u64 as i64
-    };
-
-    stack.push(Value::I64(result));
-    Ok(())
+    }
 }
 
 #[cfg(test)]

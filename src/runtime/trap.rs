@@ -11,6 +11,8 @@ use super::RuntimeError;
 pub enum Trap {
     IntegerDivideByZero,
     IntegerOverflow,
+    InvalidConversionToInteger,
+    MemoryOutOfBounds,
 }
 
 impl From<Trap> for RuntimeError {
@@ -19,6 +21,8 @@ impl From<Trap> for RuntimeError {
         match trap {
             Trap::IntegerDivideByZero => RuntimeError::DivisionByZero,
             Trap::IntegerOverflow => RuntimeError::IntegerOverflow,
+            Trap::InvalidConversionToInteger => RuntimeError::InvalidConversion("NaN".to_string()),
+            Trap::MemoryOutOfBounds => RuntimeError::MemoryError("out of bounds memory access".to_string()),
         }
     }
 }

@@ -23,24 +23,18 @@ pub fn copy_to_memory(memory: &mut Memory, dest_addr: u32, data: &[u8]) -> Resul
 ///
 /// Returns an error if the sum overflows or exceeds the 32-bit address space.
 #[inline]
-fn effective_address(base: i32, memarg: &MemArg) -> Result<u32, RuntimeError> {
-    let ea = (base as u64)
-        .checked_add(memarg.offset as u64)
-        .ok_or_else(|| RuntimeError::MemoryError("out of bounds memory access".to_string()))?;
-    if ea > u32::MAX as u64 {
-        return Err(RuntimeError::MemoryError("out of bounds memory access".to_string()));
-    }
-    Ok(ea as u32)
+fn effective_address(base: i32, memarg: &MemArg) -> Result<u32, Trap> {
+    u32::try_from(base as u32 as u64 + memarg.offset as u64).map_err(|_| Trap::MemoryOutOfBounds)
 }
 
 /// Check that addr + length falls within memory bounds.
 ///
 /// WebAssembly bulk memory operations require this even when length is zero.
 #[inline]
-fn check_memory_bounds(memory: &Memory, addr: u32, length: u32) -> Result<(), RuntimeError> {
+fn check_memory_bounds(memory: &Memory, addr: u32, length: u32) -> Result<(), Trap> {
     let mem_size = memory.size() as u64 * 65536;
     if addr as u64 + length as u64 > mem_size {
-        return Err(RuntimeError::MemoryError("out of bounds memory access".to_string()));
+        return Err(Trap::MemoryOutOfBounds);
     }
     Ok(())
 }
@@ -52,183 +46,137 @@ fn check_memory_bounds(memory: &Memory, addr: u32, length: u32) -> Result<(), Ru
 /// i32.load - Load 32-bit integer from memory
 /// spec: 4.4.7.1
 /// [i32] → [i32]
-pub fn i32_load(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i32_load(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
-    let value = memory.read_i32(ea)?;
-    stack.push(Value::I32(value));
-    Ok(())
+    memory.read_i32(ea)
 }
 
 /// i32.load8_s - Load 8-bit signed integer and sign-extend to 32-bit
 /// spec: 4.4.7.1
 /// [i32] → [i32]
-pub fn i32_load8_s(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i32_load8_s(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_i8(ea)?;
-    stack.push(Value::I32(value as i32));
-    Ok(())
+    Ok(value as i32)
 }
 
 /// i32.load8_u - Load 8-bit unsigned integer and zero-extend to 32-bit
 /// spec: 4.4.7.1
 /// [i32] → [i32]
-pub fn i32_load8_u(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i32_load8_u(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_u8(ea)?;
-    stack.push(Value::I32(value as i32));
-    Ok(())
+    Ok(value as i32)
 }
 
 /// i32.load16_s - Load 16-bit signed integer and sign-extend to 32-bit
 /// spec: 4.4.7.1
 /// [i32] → [i32]
-pub fn i32_load16_s(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i32_load16_s(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_i16(ea)?;
-    stack.push(Value::I32(value as i32));
-    Ok(())
+    Ok(value as i32)
 }
 
 /// i32.load16_u - Load 16-bit unsigned integer and zero-extend to 32-bit
 /// spec: 4.4.7.1
 /// [i32] → [i32]
-pub fn i32_load16_u(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i32_load16_u(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_u16(ea)?;
-    stack.push(Value::I32(value as i32));
-    Ok(())
+    Ok(value as i32)
 }
 
 /// i64.load - Load 64-bit integer from memory
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
-    let value = memory.read_i64(ea)?;
-    stack.push(Value::I64(value));
-    Ok(())
+    memory.read_i64(ea)
 }
 
 /// i64.load8_s - Load 8-bit signed integer and sign-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load8_s(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load8_s(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_i8(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// i64.load8_u - Load 8-bit unsigned integer and zero-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load8_u(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load8_u(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_u8(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// i64.load16_s - Load 16-bit signed integer and sign-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load16_s(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load16_s(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_i16(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// i64.load16_u - Load 16-bit unsigned integer and zero-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load16_u(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load16_u(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_u16(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// i64.load32_s - Load 32-bit signed integer and sign-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load32_s(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load32_s(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_i32(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// i64.load32_u - Load 32-bit unsigned integer and zero-extend to 64-bit
 /// spec: 4.4.7.1
 /// [i32] → [i64]
-pub fn i64_load32_u(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn i64_load32_u(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<i64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
     let value = memory.read_u32(ea)?;
-    stack.push(Value::I64(value as i64));
-    Ok(())
+    Ok(value as i64)
 }
 
 /// f32.load - Load 32-bit float from memory
 /// spec: 4.4.7.1
 /// [i32] → [f32]
-pub fn f32_load(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn f32_load(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<f32, Trap> {
     let ea = effective_address(addr, memarg)?;
 
-    let value = memory.read_f32(ea)?;
-    stack.push(Value::F32(value));
-    Ok(())
+    memory.read_f32(ea)
 }
 
 /// f64.load - Load 64-bit float from memory
 /// spec: 4.4.7.1
 /// [i32] → [f64]
-pub fn f64_load(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let addr = stack.pop_i32()?;
-
+pub fn f64_load(memory: &Memory, addr: i32, memarg: &MemArg) -> Result<f64, Trap> {
     let ea = effective_address(addr, memarg)?;
 
-    let value = memory.read_f64(ea)?;
-    stack.push(Value::F64(value));
-    Ok(())
+    memory.read_f64(ea)
 }
 
 // ============================================================================
@@ -238,10 +186,7 @@ pub fn f64_load(stack: &mut Stack, memory: &Memory, memarg: &MemArg) -> Result<(
 /// i32.store - Store 32-bit integer to memory
 /// spec: 4.4.7.6
 /// [i32, i32] → []
-pub fn i32_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i32_store(memory: &mut Memory, addr: i32, value: i32, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_i32(ea, value)?;
@@ -251,10 +196,7 @@ pub fn i32_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Res
 /// i32.store8 - Store 32-bit integer as 8-bit value
 /// spec: 4.4.7.6
 /// [i32, i32] → []
-pub fn i32_store8(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i32_store8(memory: &mut Memory, addr: i32, value: i32, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_u8(ea, value as u8)?;
@@ -264,10 +206,7 @@ pub fn i32_store8(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Re
 /// i32.store16 - Store 32-bit integer as 16-bit value
 /// spec: 4.4.7.6
 /// [i32, i32] → []
-pub fn i32_store16(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i32()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i32_store16(memory: &mut Memory, addr: i32, value: i32, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_u16(ea, value as u16)?;
@@ -277,10 +216,7 @@ pub fn i32_store16(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> R
 /// i64.store - Store 64-bit integer to memory
 /// spec: 4.4.7.6
 /// [i32, i64] → []
-pub fn i64_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i64_store(memory: &mut Memory, addr: i32, value: i64, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_i64(ea, value)?;
@@ -290,10 +226,7 @@ pub fn i64_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Res
 /// i64.store8 - Store 64-bit integer as 8-bit value
 /// spec: 4.4.7.6
 /// [i32, i64] → []
-pub fn i64_store8(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i64_store8(memory: &mut Memory, addr: i32, value: i64, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_u8(ea, value as u8)?;
@@ -303,10 +236,7 @@ pub fn i64_store8(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Re
 /// i64.store16 - Store 64-bit integer as 16-bit value
 /// spec: 4.4.7.6
 /// [i32, i64] → []
-pub fn i64_store16(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i64_store16(memory: &mut Memory, addr: i32, value: i64, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_u16(ea, value as u16)?;
@@ -316,10 +246,7 @@ pub fn i64_store16(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> R
 /// i64.store32 - Store 64-bit integer as 32-bit value
 /// spec: 4.4.7.6
 /// [i32, i64] → []
-pub fn i64_store32(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_i64()?;
-    let addr = stack.pop_i32()?;
-
+pub fn i64_store32(memory: &mut Memory, addr: i32, value: i64, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_u32(ea, value as u32)?;
@@ -329,10 +256,7 @@ pub fn i64_store32(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> R
 /// f32.store - Store 32-bit float to memory
 /// spec: 4.4.7.6
 /// [i32, f32] → []
-pub fn f32_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_f32()?;
-    let addr = stack.pop_i32()?;
-
+pub fn f32_store(memory: &mut Memory, addr: i32, value: f32, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_f32(ea, value)?;
@@ -342,10 +266,7 @@ pub fn f32_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Res
 /// f64.store - Store 64-bit float to memory
 /// spec: 4.4.7.6
 /// [i32, f64] → []
-pub fn f64_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Result<(), RuntimeError> {
-    let value = stack.pop_f64()?;
-    let addr = stack.pop_i32()?;
-
+pub fn f64_store(memory: &mut Memory, addr: i32, value: f64, memarg: &MemArg) -> Result<(), Trap> {
     let ea = effective_address(addr, memarg)?;
 
     memory.write_f64(ea, value)?;
@@ -359,10 +280,8 @@ pub fn f64_store(stack: &mut Stack, memory: &mut Memory, memarg: &MemArg) -> Res
 /// memory.size - Get memory size in pages
 /// spec: 4.4.7.8
 /// [] → [i32]
-pub fn memory_size(stack: &mut Stack, memory: &Memory) -> Result<(), RuntimeError> {
-    let size_in_pages = memory.size();
-    stack.push(Value::I32(size_in_pages as i32));
-    Ok(())
+pub fn memory_size(memory: &Memory) -> i32 {
+    memory.size() as i32
 }
 
 /// memory.grow - Grow memory by delta pages
@@ -370,19 +289,11 @@ pub fn memory_size(stack: &mut Stack, memory: &Memory) -> Result<(), RuntimeErro
 /// [i32] → [i32]
 ///
 /// Returns the previous size in pages, or -1 if the operation fails
-pub fn memory_grow(stack: &mut Stack, memory: &mut Memory) -> Result<(), RuntimeError> {
-    let delta = stack.pop_i32()?;
-
+pub fn memory_grow(memory: &mut Memory, delta: i32) -> i32 {
     if delta < 0 {
-        stack.push(Value::I32(-1));
-        return Ok(());
+        return -1;
     }
-
-    // The grow function expects pages, not bytes
-    let result = memory.grow(delta as u32);
-    stack.push(Value::I32(result));
-
-    Ok(())
+    memory.grow(delta as u32)
 }
 
 // Bulk Memory Operations
@@ -437,13 +348,11 @@ pub fn memory_init(
 /// spec: 4.4.7.11
 /// [i32 i32 i32] → []
 ///
-/// Stack: [dest_addr, src_addr, length]
 /// Copies length bytes from src_addr to dest_addr
-pub fn memory_copy(stack: &mut Stack, memory: &mut Memory) -> Result<(), RuntimeError> {
-    let length = stack.pop_i32()? as u32;
-    let src_addr = stack.pop_i32()? as u32;
-    let dest_addr = stack.pop_i32()? as u32;
-
+pub fn memory_copy(memory: &mut Memory, dest_addr: i32, src_addr: i32, length: i32) -> Result<(), Trap> {
+    let length = length as u32;
+    let src_addr = src_addr as u32;
+    let dest_addr = dest_addr as u32;
     check_memory_bounds(memory, src_addr, length)?;
     check_memory_bounds(memory, dest_addr, length)?;
 
@@ -462,7 +371,6 @@ pub fn memory_copy(stack: &mut Stack, memory: &mut Memory) -> Result<(), Runtime
     for (i, byte) in bytes.iter().enumerate() {
         memory.write_u8(dest_addr + i as u32, *byte)?;
     }
-
     Ok(())
 }
 
@@ -470,13 +378,10 @@ pub fn memory_copy(stack: &mut Stack, memory: &mut Memory) -> Result<(), Runtime
 /// spec: 4.4.7.10
 /// [i32 i32 i32] → []
 ///
-/// Stack: [dest_addr, value, length]
 /// Fills length bytes at dest_addr with value
-pub fn memory_fill(stack: &mut Stack, memory: &mut Memory) -> Result<(), RuntimeError> {
-    let length = stack.pop_i32()? as u32;
-    let value = stack.pop_i32()?;
-    let dest_addr = stack.pop_i32()? as u32;
-
+pub fn memory_fill(memory: &mut Memory, dest_addr: i32, value: i32, length: i32) -> Result<(), Trap> {
+    let length = length as u32;
+    let dest_addr = dest_addr as u32;
     check_memory_bounds(memory, dest_addr, length)?;
 
     // Value is treated as a byte (truncated to u8)
@@ -486,7 +391,6 @@ pub fn memory_fill(stack: &mut Stack, memory: &mut Memory) -> Result<(), Runtime
     for i in 0..length {
         memory.write_u8(dest_addr + i, byte_value)?;
     }
-
     Ok(())
 }
 
