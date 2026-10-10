@@ -503,6 +503,11 @@ impl<'a> CompileContext<'a> {
                         self.check_top(sd, results, "else end")?;
                     }
                 } else {
+                    // The implicit empty else passes the params through as
+                    // the results.
+                    if params != results {
+                        return Err(invalid(format!("if without else turns {params:?} into {results:?}")));
+                    }
                     let end = self.pos();
                     self.apply_fixup(&Fixup::Branch(skip_then), end);
                 }
@@ -1228,6 +1233,20 @@ mod tests {
         let block = block_mut(&mut module.code.code[0].body.body, 0);
         plain_mut(block, 0).kind = InstructionKind::F32Const { value: 1.0 };
         assert_eq!(compile_error(&module), "block end has [F32], expected [I32]");
+    }
+
+    #[test]
+    fn if_without_else_must_pass_its_params_through() {
+        // Removing the else leaves an implicit empty one that cannot produce the i32.
+        let mut module = editable(
+            "(module (func (result i32)
+               (if (result i32) (i32.const 0) (then (unreachable)) (else (i32.const 2)))))",
+        );
+        match &mut module.code.code[0].body.body[1] {
+            StructuredInstruction::If { else_branch, .. } => *else_branch = None,
+            other => panic!("expected an if, got {other:?}"),
+        }
+        assert_eq!(compile_error(&module), "if without else turns [] into [I32]");
     }
 
     #[test]

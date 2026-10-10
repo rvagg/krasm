@@ -623,7 +623,9 @@ impl Executor {
                 }
 
                 ExecutionState::BranchTo(depth) => {
-                    self.handle_branch(&mut contexts, depth)?;
+                    if self.handle_branch(&mut contexts, depth)? && self.handle_return_from_function(&mut contexts)? {
+                        break 'execution;
+                    }
                 }
             }
         }
@@ -901,8 +903,10 @@ impl Executor {
     /// For block labels, the target context is popped (exiting the block).
     /// For loop labels, the target context's position is reset to 0
     /// (restarting the loop). Branch arity values are preserved on the
-    /// operand stack across the unwind.
-    fn handle_branch(&mut self, contexts: &mut Vec<ExecutionContext>, depth: u32) -> Result<(), RuntimeError> {
+    /// operand stack across the unwind. Returns true, leaving the function's
+    /// context in place, when the target is the function's own label: the
+    /// branch is a return, which the caller completes.
+    fn handle_branch(&mut self, contexts: &mut Vec<ExecutionContext>, depth: u32) -> Result<bool, RuntimeError> {
         let mut labels_to_pop = depth as usize;
 
         // Pop contexts and labels until we reach the target
@@ -920,6 +924,13 @@ impl Executor {
                     return Err(RuntimeError::InvalidLabel(depth));
                 }
             }
+        }
+
+        if contexts
+            .last()
+            .is_some_and(|ctx| matches!(ctx.on_complete, ContextCompletion::ReturnFunction))
+        {
+            return Ok(true);
         }
 
         // Now we're at the target label
@@ -940,7 +951,7 @@ impl Executor {
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 
     /// Resolve a block type to its parameter and return types

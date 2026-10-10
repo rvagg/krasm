@@ -180,7 +180,8 @@ if $RUN_FUZZ; then
         fi
     fi
 
-    if cargo +nightly fuzz run "$FUZZ_TARGET" -- "${FUZZ_ARGS[@]}"; then
+    # Debug assertions keep the flat executor's per-op stack frame check on.
+    if cargo +nightly fuzz run --debug-assertions "$FUZZ_TARGET" -- "${FUZZ_ARGS[@]}"; then
         echo -e "\n=== Fuzzing complete, no issues found ==="
     else
         echo -e "\n=== Fuzzing found issues (see above) ==="

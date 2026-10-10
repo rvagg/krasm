@@ -6,13 +6,15 @@
 //! modules from structured fuzz input. This is much more effective at finding
 //! runtime bugs because generated modules pass parsing and execute interesting code.
 
+mod differential;
+
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
 
-use krasm::parser::module::{ExportIndex, ValueType};
+use krasm::parser::module::ValueType;
 use krasm::parser::{self, reader::Reader};
-use krasm::runtime::{EngineKind, Store, Value};
+use krasm::runtime::Value;
 
 /// Configuration for generated module
 #[derive(Debug, Arbitrary)]
@@ -399,33 +401,16 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return, // Generated module was invalid (shouldn't happen often)
     };
 
-    for engine in [EngineKind::Structured, EngineKind::Flat] {
-        let mut store = Store::new();
-        store.set_engine(engine);
-        let instance_id = match store.create_instance(&module, None) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-
-        for export in &module.exports.exports {
-            if let ExportIndex::Function(func_idx) = export.index {
-                if let Some(func_type) = module.get_function_type_by_idx(func_idx) {
-                    let args = func_type
-                        .parameters
-                        .iter()
-                        .enumerate()
-                        .map(|(i, param_type)| {
-                            let arg = config.args.get(i).copied().unwrap_or(0);
-                            match param_type {
-                                ValueType::I32 => Value::I32(arg as i32),
-                                ValueType::I64 => Value::I64(arg),
-                                _ => unreachable!("generated parameters are integers"),
-                            }
-                        })
-                        .collect();
-                    let _ = store.invoke_export(instance_id, &export.name, args, Some(100_000));
+    differential::compare_engines(&module, |params| {
+        (params.iter().enumerate())
+            .map(|(i, param_type)| {
+                let arg = config.args.get(i).copied().unwrap_or(0);
+                match param_type {
+                    ValueType::I32 => Value::I32(arg as i32),
+                    ValueType::I64 => Value::I64(arg),
+                    _ => unreachable!("generated parameters are integers"),
                 }
-            }
-        }
-    }
+            })
+            .collect()
+    });
 });

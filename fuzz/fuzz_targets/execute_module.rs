@@ -1,12 +1,14 @@
 #![no_main]
 
+mod differential;
+
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
 
-use krasm::parser::module::{ExportIndex, Positional, ValueType};
+use krasm::parser::module::{Positional, ValueType};
 use krasm::ValidatedModule;
 use krasm::parser::{self, reader::Reader};
-use krasm::runtime::{EngineKind, Store, Value};
+use krasm::runtime::Value;
 
 const MAX_MEMORY_PAGES: u32 = 16;
 const MAX_TABLE_ELEMENTS: u32 = 1024;
@@ -103,26 +105,8 @@ fuzz_target!(|data: &[u8]| {
     // Tighter limits keep the module valid; the module validator must also
     // accept everything the binary decoder validated.
     let module = ValidatedModule::new(module).expect("decoder and module validation agree");
-    for engine in [EngineKind::Structured, EngineKind::Flat] {
-        let mut store = Store::new();
-        store.set_engine(engine);
-        let instance_id = match store.create_instance(&module, None) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        let mut arg_data = &data[split_point..];
-        for export in &module.exports.exports {
-            if let ExportIndex::Function(func_idx) = export.index {
-                if let Some(func_type) = module.get_function_type_by_idx(func_idx) {
-                    let args = func_type
-                        .parameters
-                        .iter()
-                        .map(|typ| generate_value(typ, &mut arg_data))
-                        .collect();
-                    // Engine-specific budgets bound execution, not equivalent instruction counts.
-                    let _ = store.invoke_export(instance_id, &export.name, args, Some(100_000));
-                }
-            }
-        }
-    }
+    let mut arg_data = &data[split_point..];
+    differential::compare_engines(&module, |params| {
+        params.iter().map(|typ| generate_value(typ, &mut arg_data)).collect()
+    });
 });

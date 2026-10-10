@@ -112,13 +112,15 @@ RUST_BACKTRACE=1 cargo test <pattern>
 cargo install cargo-fuzz
 ./fuzz/seed_corpus.sh
 cargo +nightly fuzz run parse_module -- -dict=fuzz/wasm.dict
-cargo +nightly fuzz run execute_module -- -max_total_time=60 -dict=fuzz/wasm.dict
-cargo +nightly fuzz run generate_module -- -max_total_time=60
+cargo +nightly fuzz run -a execute_module -- -max_total_time=60 -dict=fuzz/wasm.dict
+cargo +nightly fuzz run -a generate_module -- -max_total_time=60
 cargo +nightly fuzz run lex_wat -- -max_total_time=60 -dict=fuzz/wat.dict
 cargo +nightly fuzz run parse_wat -- -max_total_time=60 -dict=fuzz/wat.dict
 ```
 
 Targets: `parse_module`, `execute_module`, `generate_module`, `lex_wat`, `parse_wat`.
+`execute_module` and `generate_module` run every export on both engines and fail on any difference
+in results or trap kind; `-a` keeps debug assertions, including the flat executor's frame check.
 Commit fuzz source files and dictionaries; ignore `fuzz/target/`, `fuzz/corpus/`, and `fuzz/artifacts/`.
 
 ## Benchmarks
