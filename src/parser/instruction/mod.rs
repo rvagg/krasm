@@ -5,6 +5,7 @@
 
 pub mod decode;
 pub mod encode;
+pub(crate) mod signature;
 pub mod streaming_decode;
 
 pub use decode::{DecodeError, InstructionIterator, ParseType};

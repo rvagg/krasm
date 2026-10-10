@@ -20,6 +20,7 @@ use super::module::{
     ValueType, ValueType::*,
 };
 use super::structured::StructuredInstruction;
+use crate::parser::instruction::signature::{Signature, fixed_signature, simd_signature};
 use crate::parser::instruction::{BlockType, ByteRange, Instruction, InstructionKind, SimdOp};
 use MaybeValue::{Unknown, Val};
 use std::ops::Deref;
@@ -360,10 +361,6 @@ impl MaybeValue {
     }
 }
 
-const I32_VALUE: ValueType = I32;
-const I64_VALUE: ValueType = I64;
-const F32_VALUE: ValueType = F32;
-const F64_VALUE: ValueType = F64;
 #[allow(dead_code)]
 const V128_VALUE: ValueType = V128;
 
@@ -518,20 +515,21 @@ impl<'a> CodeValidator<'a> {
         }
     }
 
-    fn sig_unary(&mut self, in_type: MaybeValue, out_type: MaybeValue) -> Result<(), ValidationError> {
-        self.pop_expected(in_type).ok_or(ValidationError::TypeMismatch)?;
-        self.push_val(out_type).ok_or(ValidationError::TypeMismatch)
+    /// Pop a signature's parameters, last first, and push its results.
+    fn apply_signature(&mut self, signature: Signature) -> Result<(), ValidationError> {
+        for param in signature.params.iter().rev() {
+            self.pop_expected(Val(*param)).ok_or(ValidationError::TypeMismatch)?;
+        }
+        for result in signature.results {
+            self.push_val(Val(*result)).ok_or(ValidationError::TypeMismatch)?;
+        }
+        Ok(())
     }
 
-    fn sig_binary(
-        &mut self,
-        in1_type: MaybeValue,
-        in2_type: MaybeValue,
-        out_type: MaybeValue,
-    ) -> Result<(), ValidationError> {
-        self.pop_expected(in1_type).ok_or(ValidationError::TypeMismatch)?;
-        self.pop_expected(in2_type).ok_or(ValidationError::TypeMismatch)?;
-        self.push_val(out_type).ok_or(ValidationError::TypeMismatch)
+    /// Apply the signature an instruction's opcode fixes; see [`fixed_signature`].
+    fn apply_fixed(&mut self, kind: &InstructionKind) -> Result<(), ValidationError> {
+        let signature = fixed_signature(kind).ok_or(ValidationError::InvalidInstruction)?;
+        self.apply_signature(signature)
     }
 
     fn local(&mut self, local_index: u32) -> Result<&ValueType, ValidationError> {
@@ -597,18 +595,12 @@ impl<'a> CodeValidator<'a> {
     /// any validation error rejects the entire function — partial stack state is discarded.
     fn validate_simd(&mut self, op: &SimdOp) -> Result<(), ValidationError> {
         use SimdOp::*;
-        let v = Val(V128);
-        let i32v = Val(I32_VALUE);
-        let i64v = Val(I64_VALUE);
-        let f32v = Val(F32_VALUE);
-        let f64v = Val(F64_VALUE);
 
         match op {
             // [i32] → [v128] : loads (pop address, push result)
             V128Load { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 4)
             }
             V128Load8x8S { memarg }
@@ -619,40 +611,34 @@ impl<'a> CodeValidator<'a> {
             | V128Load32x2U { memarg }
             | V128Load64Splat { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 3)
             }
             V128Load32Splat { memarg } | V128Load32Zero { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 2)
             }
             V128Load16Splat { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 1)
             }
             V128Load8Splat { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 0)
             }
             V128Load64Zero { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 3)
             }
 
             // [i32 v128] → [] : stores (pop v128 value, pop i32 address)
             V128Store { memarg } => {
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 4)
             }
 
@@ -660,33 +646,25 @@ impl<'a> CodeValidator<'a> {
             V128Load8Lane { memarg, lane } => {
                 validate_lane_index(*lane, 16)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 0)
             }
             V128Load16Lane { memarg, lane } => {
                 validate_lane_index(*lane, 8)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 1)
             }
             V128Load32Lane { memarg, lane } => {
                 validate_lane_index(*lane, 4)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 2)
             }
             V128Load64Lane { memarg, lane } => {
                 validate_lane_index(*lane, 2)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v.clone()).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 3)
             }
 
@@ -694,34 +672,27 @@ impl<'a> CodeValidator<'a> {
             V128Store8Lane { memarg, lane } => {
                 validate_lane_index(*lane, 16)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 0)
             }
             V128Store16Lane { memarg, lane } => {
                 validate_lane_index(*lane, 8)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 1)
             }
             V128Store32Lane { memarg, lane } => {
                 validate_lane_index(*lane, 4)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 2)
             }
             V128Store64Lane { memarg, lane } => {
                 validate_lane_index(*lane, 2)?;
                 self.validate_memory_exists()?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(i32v).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_signature(simd_signature(op))?;
                 check_alignment(memarg, 3)
             }
-
-            // [] → [v128] : constant
-            V128Const { .. } => self.push_val(v).ok_or(ValidationError::TypeMismatch),
 
             // [v128 v128] → [v128] : shuffle (lane indices must be 0-31)
             I8x16Shuffle { lanes } => {
@@ -730,275 +701,75 @@ impl<'a> CodeValidator<'a> {
                         return Err(ValidationError::InvalidLaneIndex);
                     }
                 }
-                self.sig_binary(v.clone(), v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
-
-            // [v128 v128] → [v128] : swizzle, binary arithmetic, comparisons,
-            // narrow, extmul, dot, q15mulr, add_sat, sub_sat, avgr
-            I8x16Swizzle
-            | I8x16Eq
-            | I8x16Ne
-            | I8x16LtS
-            | I8x16LtU
-            | I8x16GtS
-            | I8x16GtU
-            | I8x16LeS
-            | I8x16LeU
-            | I8x16GeS
-            | I8x16GeU
-            | I16x8Eq
-            | I16x8Ne
-            | I16x8LtS
-            | I16x8LtU
-            | I16x8GtS
-            | I16x8GtU
-            | I16x8LeS
-            | I16x8LeU
-            | I16x8GeS
-            | I16x8GeU
-            | I32x4Eq
-            | I32x4Ne
-            | I32x4LtS
-            | I32x4LtU
-            | I32x4GtS
-            | I32x4GtU
-            | I32x4LeS
-            | I32x4LeU
-            | I32x4GeS
-            | I32x4GeU
-            | I64x2Eq
-            | I64x2Ne
-            | I64x2LtS
-            | I64x2GtS
-            | I64x2LeS
-            | I64x2GeS
-            | F32x4Eq
-            | F32x4Ne
-            | F32x4Lt
-            | F32x4Gt
-            | F32x4Le
-            | F32x4Ge
-            | F64x2Eq
-            | F64x2Ne
-            | F64x2Lt
-            | F64x2Gt
-            | F64x2Le
-            | F64x2Ge
-            | V128And
-            | V128AndNot
-            | V128Or
-            | V128Xor
-            | I8x16NarrowI16x8S
-            | I8x16NarrowI16x8U
-            | I16x8NarrowI32x4S
-            | I16x8NarrowI32x4U
-            | I8x16Add
-            | I8x16AddSatS
-            | I8x16AddSatU
-            | I8x16Sub
-            | I8x16SubSatS
-            | I8x16SubSatU
-            | I8x16MinS
-            | I8x16MinU
-            | I8x16MaxS
-            | I8x16MaxU
-            | I8x16AvgrU
-            | I16x8Add
-            | I16x8AddSatS
-            | I16x8AddSatU
-            | I16x8Sub
-            | I16x8SubSatS
-            | I16x8SubSatU
-            | I16x8Mul
-            | I16x8MinS
-            | I16x8MinU
-            | I16x8MaxS
-            | I16x8MaxU
-            | I16x8AvgrU
-            | I16x8Q15MulrSatS
-            | I16x8ExtMulLowI8x16S
-            | I16x8ExtMulHighI8x16S
-            | I16x8ExtMulLowI8x16U
-            | I16x8ExtMulHighI8x16U
-            | I32x4Add
-            | I32x4Sub
-            | I32x4Mul
-            | I32x4MinS
-            | I32x4MinU
-            | I32x4MaxS
-            | I32x4MaxU
-            | I32x4DotI16x8S
-            | I32x4ExtMulLowI16x8S
-            | I32x4ExtMulHighI16x8S
-            | I32x4ExtMulLowI16x8U
-            | I32x4ExtMulHighI16x8U
-            | I64x2Add
-            | I64x2Sub
-            | I64x2Mul
-            | I64x2ExtMulLowI32x4S
-            | I64x2ExtMulHighI32x4S
-            | I64x2ExtMulLowI32x4U
-            | I64x2ExtMulHighI32x4U
-            | F32x4Add
-            | F32x4Sub
-            | F32x4Mul
-            | F32x4Div
-            | F32x4Min
-            | F32x4Max
-            | F32x4PMin
-            | F32x4PMax
-            | F64x2Add
-            | F64x2Sub
-            | F64x2Mul
-            | F64x2Div
-            | F64x2Min
-            | F64x2Max
-            | F64x2PMin
-            | F64x2PMax => self.sig_binary(v.clone(), v.clone(), v),
-
-            // [v128 v128 v128] → [v128] : bitselect
-            V128Bitselect => {
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(v.clone()).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(v).ok_or(ValidationError::TypeMismatch)
-            }
-
-            // [v128] → [v128] : unary v128→v128 (abs, neg, extend, convert, etc.)
-            V128Not
-            | I8x16Abs
-            | I8x16Neg
-            | I8x16Popcnt
-            | I16x8Abs
-            | I16x8Neg
-            | I16x8ExtendLowI8x16S
-            | I16x8ExtendHighI8x16S
-            | I16x8ExtendLowI8x16U
-            | I16x8ExtendHighI8x16U
-            | I16x8ExtAddPairwiseI8x16S
-            | I16x8ExtAddPairwiseI8x16U
-            | I32x4Abs
-            | I32x4Neg
-            | I32x4ExtendLowI16x8S
-            | I32x4ExtendHighI16x8S
-            | I32x4ExtendLowI16x8U
-            | I32x4ExtendHighI16x8U
-            | I32x4ExtAddPairwiseI16x8S
-            | I32x4ExtAddPairwiseI16x8U
-            | I64x2Abs
-            | I64x2Neg
-            | I64x2ExtendLowI32x4S
-            | I64x2ExtendHighI32x4S
-            | I64x2ExtendLowI32x4U
-            | I64x2ExtendHighI32x4U
-            | F32x4Abs
-            | F32x4Neg
-            | F32x4Sqrt
-            | F32x4Ceil
-            | F32x4Floor
-            | F32x4Trunc
-            | F32x4Nearest
-            | F64x2Abs
-            | F64x2Neg
-            | F64x2Sqrt
-            | F64x2Ceil
-            | F64x2Floor
-            | F64x2Trunc
-            | F64x2Nearest
-            | I32x4TruncSatF32x4S
-            | I32x4TruncSatF32x4U
-            | F32x4ConvertI32x4S
-            | F32x4ConvertI32x4U
-            | I32x4TruncSatF64x2SZero
-            | I32x4TruncSatF64x2UZero
-            | F64x2ConvertLowI32x4S
-            | F64x2ConvertLowI32x4U
-            | F32x4DemoteF64x2Zero
-            | F64x2PromoteLowF32x4 => self.sig_unary(v.clone(), v),
-
-            // [v128] → [i32] : test/bitmask
-            V128AnyTrue | I8x16AllTrue | I8x16Bitmask | I16x8AllTrue | I16x8Bitmask | I32x4AllTrue | I32x4Bitmask
-            | I64x2AllTrue | I64x2Bitmask => self.sig_unary(v, i32v),
 
             // [v128] → [i32] : extract lane to i32 (with lane bounds check)
             I8x16ExtractLaneS { lane } | I8x16ExtractLaneU { lane } => {
                 validate_lane_index(*lane, 16)?;
-                self.sig_unary(v, i32v)
+                self.apply_signature(simd_signature(op))
             }
             I16x8ExtractLaneS { lane } | I16x8ExtractLaneU { lane } => {
                 validate_lane_index(*lane, 8)?;
-                self.sig_unary(v, i32v)
+                self.apply_signature(simd_signature(op))
             }
             I32x4ExtractLane { lane } => {
                 validate_lane_index(*lane, 4)?;
-                self.sig_unary(v, i32v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128] → [i64] : extract i64 lane
             I64x2ExtractLane { lane } => {
                 validate_lane_index(*lane, 2)?;
-                self.sig_unary(v, i64v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128] → [f32] : extract f32 lane
             F32x4ExtractLane { lane } => {
                 validate_lane_index(*lane, 4)?;
-                self.sig_unary(v, f32v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128] → [f64] : extract f64 lane
             F64x2ExtractLane { lane } => {
                 validate_lane_index(*lane, 2)?;
-                self.sig_unary(v, f64v)
+                self.apply_signature(simd_signature(op))
             }
-
-            // [v128 i32] → [v128] : shifts
-            I8x16Shl | I8x16ShrS | I8x16ShrU | I16x8Shl | I16x8ShrS | I16x8ShrU | I32x4Shl | I32x4ShrS | I32x4ShrU
-            | I64x2Shl | I64x2ShrS | I64x2ShrU => self.sig_binary(i32v, v.clone(), v),
 
             // [v128 i32] → [v128] : replace lane (i32 replacement value)
             I8x16ReplaceLane { lane } => {
                 validate_lane_index(*lane, 16)?;
-                self.sig_binary(i32v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
             I16x8ReplaceLane { lane } => {
                 validate_lane_index(*lane, 8)?;
-                self.sig_binary(i32v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
             I32x4ReplaceLane { lane } => {
                 validate_lane_index(*lane, 4)?;
-                self.sig_binary(i32v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128 i64] → [v128] : i64 replace lane
             I64x2ReplaceLane { lane } => {
                 validate_lane_index(*lane, 2)?;
-                self.sig_binary(i64v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128 f32] → [v128] : f32 replace lane
             F32x4ReplaceLane { lane } => {
                 validate_lane_index(*lane, 4)?;
-                self.sig_binary(f32v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
 
             // [v128 f64] → [v128] : f64 replace lane
             F64x2ReplaceLane { lane } => {
                 validate_lane_index(*lane, 2)?;
-                self.sig_binary(f64v, v.clone(), v)
+                self.apply_signature(simd_signature(op))
             }
 
-            // [i32] → [v128] : splat from i32
-            I8x16Splat | I16x8Splat | I32x4Splat => self.sig_unary(i32v, v),
-
-            // [i64] → [v128] : splat from i64
-            I64x2Splat => self.sig_unary(i64v, v),
-
-            // [f32] → [v128] : splat from f32
-            F32x4Splat => self.sig_unary(f32v, v),
-
-            // [f64] → [v128] : splat from f64
-            F64x2Splat => self.sig_unary(f64v, v),
+            // Every other SIMD instruction is checked by its signature alone.
+            _ => self.apply_signature(simd_signature(op)),
         }
     }
 }
@@ -1009,124 +780,6 @@ impl Validator for CodeValidator<'_> {
         use InstructionKind::*;
 
         match kind {
-            I32Const { .. } => self.push_val(Val(I32_VALUE)).ok_or(ValidationError::TypeMismatch),
-
-            // iunop (i32):i32
-            I32Clz | I32Ctz | I32Popcnt => self.sig_unary(Val(I32_VALUE), Val(I32_VALUE)),
-
-            // ibinop (i32,i32):i32
-            I32Add | I32Sub | I32Mul | I32DivS | I32DivU | I32RemS | I32RemU | I32And | I32Or | I32Xor | I32Shl
-            | I32ShrS | I32ShrU | I32Rotr | I32Rotl => self.sig_binary(Val(I32_VALUE), Val(I32_VALUE), Val(I32_VALUE)),
-
-            // itestop (i32):i32
-            I32Eqz => self.sig_unary(Val(I32_VALUE), Val(I32_VALUE)),
-
-            // irelop (i32,i32):i32
-            I32Eq | I32Ne | I32LtS | I32LtU | I32GtS | I32GtU | I32LeS | I32LeU | I32GeS | I32GeU => {
-                self.sig_binary(Val(I32_VALUE), Val(I32_VALUE), Val(I32_VALUE))
-            }
-
-            // cvtop (i32):i32
-            I32Extend8S | I32Extend16S => self.sig_unary(Val(I32_VALUE), Val(I32_VALUE)),
-
-            // cvtop (i64):i32
-            I32WrapI64 => self.sig_unary(Val(I64_VALUE), Val(I32_VALUE)),
-
-            // cvtop (f32):i32
-            I32TruncF32S | I32TruncF32U | I32TruncSatF32S | I32TruncSatF32U | I32ReinterpretF32 => {
-                self.sig_unary(Val(F32_VALUE), Val(I32_VALUE))
-            }
-
-            // cvtop (f64):i32
-            I32TruncF64S | I32TruncF64U | I32TruncSatF64S | I32TruncSatF64U => {
-                self.sig_unary(Val(F64_VALUE), Val(I32_VALUE))
-            }
-
-            I64Const { .. } => self.push_val(Val(I64_VALUE)).ok_or(ValidationError::TypeMismatch),
-
-            // iunop (i64):i64
-            I64Clz | I64Ctz | I64Popcnt => self.sig_unary(Val(I64_VALUE), Val(I64_VALUE)),
-
-            // ibinop (i64,i64):i64
-            I64Add | I64Sub | I64Mul | I64DivS | I64DivU | I64RemS | I64RemU | I64And | I64Or | I64Xor | I64Shl
-            | I64ShrS | I64ShrU | I64Rotr | I64Rotl => self.sig_binary(Val(I64_VALUE), Val(I64_VALUE), Val(I64_VALUE)),
-
-            // itestop (i64):i32
-            I64Eqz => self.sig_unary(Val(I64_VALUE), Val(I32_VALUE)),
-
-            // irelop (i64,i64):i32
-            I64Eq | I64Ne | I64LtS | I64LtU | I64GtS | I64GtU | I64LeS | I64LeU | I64GeS | I64GeU => {
-                self.sig_binary(Val(I64_VALUE), Val(I64_VALUE), Val(I32_VALUE))
-            }
-
-            // cvtop (i64):i64
-            I64Extend8S | I64Extend16S | I64Extend32S => self.sig_unary(Val(I64_VALUE), Val(I64_VALUE)),
-
-            // cvtop (i32):i64
-            I64ExtendI32S | I64ExtendI32U => self.sig_unary(Val(I32_VALUE), Val(I64_VALUE)),
-
-            // cvtop (f32):i64
-            I64TruncF32S | I64TruncF32U | I64TruncSatF32S | I64TruncSatF32U => {
-                self.sig_unary(Val(F32_VALUE), Val(I64_VALUE))
-            }
-
-            // cvtop (f64):i64
-            I64TruncF64S | I64TruncF64U | I64TruncSatF64S | I64TruncSatF64U | I64ReinterpretF64 => {
-                self.sig_unary(Val(F64_VALUE), Val(I64_VALUE))
-            }
-
-            F32Const { .. } => self.push_val(Val(F32_VALUE)).ok_or(ValidationError::TypeMismatch),
-
-            // funop (f32):f32
-            F32Abs | F32Neg | F32Sqrt | F32Ceil | F32Floor | F32Trunc | F32Nearest => {
-                self.sig_unary(Val(F32_VALUE), Val(F32_VALUE))
-            }
-
-            // fbinop (f32,f32):f32
-            F32Add | F32Sub | F32Mul | F32Div | F32Min | F32Max | F32Copysign => {
-                self.sig_binary(Val(F32_VALUE), Val(F32_VALUE), Val(F32_VALUE))
-            }
-
-            // frelop (f32,f32):i32
-            F32Eq | F32Ne | F32Lt | F32Gt | F32Le | F32Ge => {
-                self.sig_binary(Val(F32_VALUE), Val(F32_VALUE), Val(I32_VALUE))
-            }
-
-            // cvtop (f64):f32
-            F32DemoteF64 => self.sig_unary(Val(F64_VALUE), Val(F32_VALUE)),
-
-            // cvtop (i32):f32
-            F32ConvertI32S | F32ConvertI32U | F32ReinterpretI32 => self.sig_unary(Val(I32_VALUE), Val(F32_VALUE)),
-
-            // cvtop (i64):f32
-            F32ConvertI64S | F32ConvertI64U => self.sig_unary(Val(I64_VALUE), Val(F32_VALUE)),
-
-            F64Const { .. } => self.push_val(Val(F64_VALUE)).ok_or(ValidationError::TypeMismatch),
-
-            // funop (f64):f64
-            F64Abs | F64Neg | F64Sqrt | F64Ceil | F64Floor | F64Trunc | F64Nearest => {
-                self.sig_unary(Val(F64_VALUE), Val(F64_VALUE))
-            }
-
-            // fbinop (f64,f64):f64
-            F64Add | F64Sub | F64Mul | F64Div | F64Min | F64Max | F64Copysign => {
-                self.sig_binary(Val(F64_VALUE), Val(F64_VALUE), Val(F64_VALUE))
-            }
-
-            // frelop (f64,f64):i32
-            F64Eq | F64Ne | F64Lt | F64Gt | F64Le | F64Ge => {
-                self.sig_binary(Val(F64_VALUE), Val(F64_VALUE), Val(I32_VALUE))
-            }
-
-            // cvtop (f32):f64
-            F64PromoteF32 => self.sig_unary(Val(F32_VALUE), Val(F64_VALUE)),
-
-            // cvtop (i32):f64
-            F64ConvertI32S | F64ConvertI32U => self.sig_unary(Val(I32_VALUE), Val(F64_VALUE)),
-
-            // cvtop (i64):f64
-            F64ConvertI64S | F64ConvertI64U | F64ReinterpretI64 => self.sig_unary(Val(I64_VALUE), Val(F64_VALUE)),
-
             LocalGet { local_idx } => {
                 let local = *self.local(*local_idx)?;
                 self.push_val(Val(local)).ok_or(ValidationError::TypeMismatch)?;
@@ -1170,8 +823,7 @@ impl Validator for CodeValidator<'_> {
             | I32Load16U { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let align_exp = match &kind {
                     I32Load { .. } => 2,                        // 4 bytes = 2^2
                     I32Load8S { .. } | I32Load8U { .. } => 0,   // 1 byte = 2^0
@@ -1190,8 +842,7 @@ impl Validator for CodeValidator<'_> {
             | I64Load32U { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(I64)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let align_exp = match &kind {
                     I64Load { .. } => 3,                        // 8 bytes = 2^3
                     I64Load8S { .. } | I64Load8U { .. } => 0,   // 1 byte = 2^0
@@ -1205,24 +856,21 @@ impl Validator for CodeValidator<'_> {
             F32Load { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(F32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 check_alignment(memarg, 2 /* 4 bytes = 2^2 */)
             }
 
             F64Load { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(F64)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 check_alignment(memarg, 3 /* 8 bytes = 2^3 */)
             }
 
             I32Store { memarg } | I32Store8 { memarg } | I32Store16 { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let align_exp = match &kind {
                     I32Store { .. } => 2,   // 4 bytes = 2^2
                     I32Store8 { .. } => 0,  // 1 byte = 2^0
@@ -1235,8 +883,7 @@ impl Validator for CodeValidator<'_> {
             I64Store { memarg } | I64Store8 { memarg } | I64Store16 { memarg } | I64Store32 { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I64)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let align_exp = match &kind {
                     I64Store { .. } => 3,   // 8 bytes = 2^3
                     I64Store8 { .. } => 0,  // 1 byte = 2^0
@@ -1250,32 +897,27 @@ impl Validator for CodeValidator<'_> {
             F32Store { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(F32)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 check_alignment(memarg, 2 /* 4 bytes = 2^2 */)
             }
 
             F64Store { memarg } => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(F64)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 check_alignment(memarg, 3 /* 8 bytes = 2^3 */)
             }
 
             MemorySize => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             MemoryGrow => {
                 // Check that memory exists (imported or declared)
                 self.validate_memory_exists()?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             MemoryFill | MemoryCopy => {
@@ -1283,9 +925,7 @@ impl Validator for CodeValidator<'_> {
                 if self.module.memory.is_empty() && self.module.imports.memory_count() == 0 {
                     return Err(ValidationError::UnknownMemoryWithIndex(0));
                 }
-                self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
-                    .ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             MemoryInit { data_idx } => {
@@ -1308,14 +948,11 @@ impl Validator for CodeValidator<'_> {
                 if *data_idx >= self.module.data_count.count {
                     return Err(ValidationError::UnknownDataSegmentWithIndex(*data_idx));
                 }
-                self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
-                    .ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             TableInit { elem_idx, table_idx } => {
-                self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
-                    .ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let table = self
                     .module
                     .get_table(*table_idx)
@@ -1333,8 +970,7 @@ impl Validator for CodeValidator<'_> {
             }
 
             TableCopy { src_table, dst_table } => {
-                self.pop_expecteds(vec![Val(I32), Val(I32), Val(I32)])
-                    .ok_or(ValidationError::TypeMismatch)?;
+                self.apply_fixed(kind)?;
                 let src_table_type = self.module.get_table(*src_table).ok_or(ValidationError::UnknownTable)?;
                 let dst_table_type = self.module.get_table(*dst_table).ok_or(ValidationError::UnknownTable)?;
                 if src_table_type.ref_type != dst_table_type.ref_type {
@@ -1725,8 +1361,7 @@ impl Validator for CodeValidator<'_> {
                         return Err(ValidationError::UndeclaredFunctionReference);
                     }
                 }
-                self.push_val(Val(FuncRef)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             RefNull { ref_type } => {
@@ -1758,9 +1393,7 @@ impl Validator for CodeValidator<'_> {
             TableSize { table_idx } => {
                 // Verify table exists
                 self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-                // table.size pushes the current size as i32
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
+                self.apply_fixed(kind)
             }
 
             TableGrow { table_idx } => {
@@ -1784,6 +1417,9 @@ impl Validator for CodeValidator<'_> {
             }
 
             Simd(op) => self.validate_simd(op),
+
+            // Every other instruction is checked by its signature alone.
+            _ => self.apply_fixed(kind),
         }
     }
 
