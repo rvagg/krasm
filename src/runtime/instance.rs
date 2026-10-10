@@ -74,12 +74,14 @@ impl Instance {
     /// Resources (memories, tables, globals) live in the Store. The instance
     /// holds address maps that translate module-local indices to global addresses.
     /// Function addresses are linked separately via link_functions().
+    /// `max_stack_words` limits the flat engine's stack.
     pub(super) fn new_unlinked(
         module: Arc<Module>,
         memory_addresses: Vec<MemoryAddr>,
         table_addresses: Vec<TableAddr>,
         global_addresses: Vec<GlobalAddr>,
         engine: EngineKind,
+        max_stack_words: usize,
     ) -> Result<Self, RuntimeError> {
         let mut exports = HashMap::new();
 
@@ -98,7 +100,8 @@ impl Instance {
             )?),
             EngineKind::Flat => {
                 let funcs = compile_module(&module)?;
-                let executor = FlatExecutor::new();
+                let mut executor = FlatExecutor::new();
+                executor.set_max_stack_words(max_stack_words);
                 #[cfg(feature = "instruction-profile")]
                 let executor = {
                     let mut executor = executor;
@@ -605,6 +608,7 @@ impl Instance {
     /// fresh resources. Data sections are initialised; globals remain at their
     /// defaults for tests to configure explicitly.
     pub(crate) fn new_test_executor(module: Arc<Module>) -> Result<(Executor, Resources, SegmentState), RuntimeError> {
+        use super::flat_executor::DEFAULT_MAX_STACK_WORDS;
         use super::imports::default_value_for_type;
         use super::memory::Memory;
         use super::table::Table;
@@ -664,6 +668,7 @@ impl Instance {
             table_addresses,
             global_addresses,
             EngineKind::Structured,
+            DEFAULT_MAX_STACK_WORDS,
         )?;
 
         // Initialise data sections (writes module data into memory)

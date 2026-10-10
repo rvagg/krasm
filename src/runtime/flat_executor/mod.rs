@@ -139,8 +139,12 @@ pub(crate) fn build_func_entries(module: &Module, function_addresses: &[FuncAddr
 
 const MAX_CALL_DEPTH: usize = 1000;
 
-/// Most words the stack may grow to (128 MiB).
-const MAX_STACK_WORDS: usize = 1 << 24;
+/// Most words the stack may grow to unless set otherwise (128 MiB).
+pub(crate) const DEFAULT_MAX_STACK_WORDS: usize = 1 << 24;
+
+/// Words an idle stack keeps (1 MiB). A deeper spike is released when it
+/// ends, so one deep recursion does not pin its memory for the instance's life.
+const RETAINED_STACK_WORDS: usize = 1 << 17;
 
 /// A function's place on the stack, saved while it waits on a callee.
 #[derive(Debug, Clone, Copy)]
@@ -263,13 +267,13 @@ struct SuspendedState {
     expected_results: Box<[ValueType]>,
 }
 
-/// Grow `stack` to at least `len`, or fail if that passes the stack limit.
-fn reserve(stack: &mut Vec<Word>, len: usize) -> Result<(), RuntimeError> {
+/// Grow `stack` to at least `len` words, or fail if that passes `max`.
+fn reserve(stack: &mut Vec<Word>, len: usize, max: usize) -> Result<(), RuntimeError> {
     if len > stack.len() {
-        if len > MAX_STACK_WORDS {
+        if len > max {
             return Err(RuntimeError::CallStackOverflow);
         }
-        stack.resize(len.max(stack.len() * 2).min(MAX_STACK_WORDS), 0);
+        stack.resize(len.max(stack.len() * 2).min(max), 0);
     }
     Ok(())
 }
@@ -323,6 +327,8 @@ pub struct FlatExecutor {
     call_stack: Vec<CallFrame>,
     /// Suspended activations, innermost last.
     suspended: Vec<SuspendedState>,
+    /// Most words `stack` may grow to.
+    max_stack_words: usize,
     instruction_budget: Option<u64>,
     #[cfg(feature = "instruction-profile")]
     instruction_counts: Option<Vec<Vec<u64>>>,
@@ -341,6 +347,7 @@ impl FlatExecutor {
             sp: 0,
             call_stack: Vec::new(),
             suspended: Vec::new(),
+            max_stack_words: DEFAULT_MAX_STACK_WORDS,
             instruction_budget: None,
             #[cfg(feature = "instruction-profile")]
             instruction_counts: None,
@@ -365,12 +372,46 @@ impl FlatExecutor {
         self.instruction_budget = budget;
     }
 
+    /// Limit the stack to `words`; a call that needs more traps as call
+    /// stack exhaustion.
+    pub(crate) fn set_max_stack_words(&mut self, words: usize) {
+        self.max_stack_words = words;
+    }
+
     /// Discard every activation after an error, or when the Store abandons
     /// suspended work, without changing the instruction budget.
     pub(crate) fn reset(&mut self) {
         self.sp = 0;
         self.call_stack.clear();
         self.suspended.clear();
+        self.release_idle_stack();
+    }
+
+    /// With nothing running or suspended, give back stack memory beyond
+    /// what an idle executor keeps.
+    fn release_idle_stack(&mut self) {
+        if self.suspended.is_empty() && self.stack.len() > RETAINED_STACK_WORDS {
+            self.stack.truncate(RETAINED_STACK_WORDS);
+            self.stack.shrink_to_fit();
+        }
+    }
+
+    /// Run until the activation completes or suspends, leaving the executor
+    /// reusable after an error.
+    fn run_activation(
+        &mut self,
+        funcs: &[CompiledFunction],
+        frame: CallFrame,
+        activation: Activation,
+        ctx: Option<&mut ExecContext<'_>>,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let result = self.run(funcs, frame, activation, ctx);
+        match result {
+            Ok(ExecutionOutcome::Complete(_)) => self.release_idle_stack(),
+            Ok(ExecutionOutcome::NeedsExternalCall(_)) => {}
+            Err(_) => self.reset(),
+        }
+        result
     }
 
     /// Execute a compiled function with the given arguments.
@@ -412,7 +453,11 @@ impl FlatExecutor {
         }
         let fp = self.sp;
         let base = fp + func.local_words as usize;
-        reserve(&mut self.stack, base + func.max_stack_words as usize)?;
+        reserve(
+            &mut self.stack,
+            base + func.max_stack_words as usize,
+            self.max_stack_words,
+        )?;
         // SAFETY: the frame was reserved above, and the arguments fill
         // exactly the parameter words.
         unsafe {
@@ -429,11 +474,7 @@ impl FlatExecutor {
             fp,
             base,
         };
-        let result = self.run(funcs, frame, activation, ctx);
-        if result.is_err() {
-            self.reset();
-        }
-        result
+        self.run_activation(funcs, frame, activation, ctx)
     }
 
     /// Resume execution after an external call completes, pushing its
@@ -475,11 +516,7 @@ impl FlatExecutor {
             self.sp = sp.offset_from(self.stack.as_ptr()) as usize;
         }
 
-        let result = self.run(funcs, frame, activation, ctx);
-        if result.is_err() {
-            self.reset();
-        }
-        result
+        self.run_activation(funcs, frame, activation, ctx)
     }
 
     /// The dispatch loop: walk bytecode from `frame` until the entry
@@ -498,6 +535,7 @@ impl FlatExecutor {
             sp: saved_sp,
             call_stack,
             suspended,
+            max_stack_words,
             instruction_budget,
             #[cfg(feature = "instruction-profile")]
             instruction_counts,
@@ -636,7 +674,11 @@ impl FlatExecutor {
                 let callee_fp = index!(sp) - callee.param_words as usize;
                 let callee_base = callee_fp + callee.local_words as usize;
                 if callee_base + callee.max_stack_words as usize > stack.len() {
-                    reserve(stack, callee_base + callee.max_stack_words as usize)?;
+                    reserve(
+                        stack,
+                        callee_base + callee.max_stack_words as usize,
+                        *max_stack_words,
+                    )?;
                     start = stack.as_mut_ptr();
                 }
                 fp = start.add(callee_fp);

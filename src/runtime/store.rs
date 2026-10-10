@@ -56,6 +56,7 @@
 //! The call stack enables arbitrarily deep cross-module chains (A -> B -> C -> ...)
 //! where each module can perform computation before/after its external calls.
 
+use super::flat_executor::DEFAULT_MAX_STACK_WORDS;
 use super::{EngineKind, ExecutionOutcome, Instance, Memory, RuntimeError, Table, Value};
 use crate::parser::ValidatedModule;
 use crate::parser::module::{ExportIndex, ExternalKind, FunctionType, GlobalType, Limits};
@@ -252,6 +253,9 @@ pub struct Store<T = ()> {
 
     /// Interpreter used by instances created in this store
     engine: EngineKind,
+
+    /// Most words each new instance's flat-engine stack may grow to
+    max_stack_words: usize,
 }
 
 impl Default for Store<()> {
@@ -263,6 +267,7 @@ impl Default for Store<()> {
             global_types: Vec::new(),
             data: (),
             engine: EngineKind::default(),
+            max_stack_words: DEFAULT_MAX_STACK_WORDS,
         }
     }
 }
@@ -288,6 +293,7 @@ impl<T> Store<T> {
             global_types: Vec::new(),
             data,
             engine: EngineKind::default(),
+            max_stack_words: DEFAULT_MAX_STACK_WORDS,
         }
     }
 
@@ -296,6 +302,14 @@ impl<T> Store<T> {
     /// Existing instances keep the engine they were created with.
     pub fn set_engine(&mut self, engine: EngineKind) {
         self.engine = engine;
+    }
+
+    /// Limit the memory each instance's flat-engine stack may use, in bytes;
+    /// a call that needs more traps with call stack exhaustion. The default
+    /// is 128 MiB. Existing instances keep the limit they were created with,
+    /// and the structured engine ignores it.
+    pub fn set_stack_limit(&mut self, bytes: usize) {
+        self.max_stack_words = bytes / size_of::<u64>();
     }
 
     /// Access the embedder's user data (read-only)
@@ -458,6 +472,7 @@ impl<T> Store<T> {
             table_addresses,
             global_addresses,
             self.engine,
+            self.max_stack_words,
         )?;
 
         let function_addresses = self.resolve_functions(&module, imports, instance_id)?;
@@ -1809,6 +1824,26 @@ mod tests {
         );
         let result = store.invoke_export(id, "add", vec![Value::I32(3), Value::I32(4)], None);
         assert_eq!(result.unwrap(), vec![Value::I32(7)]);
+    }
+
+    #[test]
+    fn stack_limit_applies_to_new_instances() {
+        let module = crate::wat::parse(
+            "(module (func $r (export \"r\") (param i32) (local i64 i64 i64 i64 i64 i64 i64)
+               (if (local.get 0) (then (call $r (i32.sub (local.get 0) (i32.const 1)))))))",
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let unlimited = store.create_instance(&module, None).unwrap();
+        store.set_stack_limit(4096);
+        let limited = store.create_instance(&module, None).unwrap();
+        // Each frame takes about eight words; 4 KiB holds 512.
+        assert!(store.invoke_export(unlimited, "r", vec![Value::I32(500)], None).is_ok());
+        assert!(matches!(
+            store.invoke_export(limited, "r", vec![Value::I32(500)], None),
+            Err(RuntimeError::CallStackOverflow)
+        ));
+        assert!(store.invoke_export(limited, "r", vec![Value::I32(50)], None).is_ok());
     }
 
     #[test]

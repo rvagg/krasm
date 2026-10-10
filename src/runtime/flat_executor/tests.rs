@@ -791,6 +791,41 @@ fn local_tee() {
     assert_eq!(result, vec![Value::I32(42)]);
 }
 
+/// A recursion whose frames hold 200 i64 locals each, returning 7 at the bottom.
+fn deep_frames() -> Vec<CompiledFunction> {
+    compile_wat(&format!(
+        "(module (func $r (param i32) (result i32) (local{})
+           (if (result i32) (local.get 0)
+             (then (call $r (i32.sub (local.get 0) (i32.const 1))))
+             (else (i32.const 7)))))",
+        " i64".repeat(200)
+    ))
+}
+
+#[test]
+fn a_stack_spike_is_released_when_execution_ends() {
+    let funcs = deep_frames();
+    let mut executor = FlatExecutor::new();
+    // 900 frames of about 200 words pass the words an idle stack keeps.
+    let result = executor.invoke(&funcs, 0, &[Value::I32(900)], None).unwrap();
+    assert_eq!(expect_complete(result), vec![Value::I32(7)]);
+    assert!(executor.stack.capacity() <= RETAINED_STACK_WORDS);
+    // A shallow call reuses what remains.
+    let result = executor.invoke(&funcs, 0, &[Value::I32(3)], None).unwrap();
+    assert_eq!(expect_complete(result), vec![Value::I32(7)]);
+}
+
+#[test]
+fn the_stack_limit_traps_and_leaves_the_executor_usable() {
+    let funcs = deep_frames();
+    let mut executor = FlatExecutor::new();
+    executor.set_max_stack_words(10_000);
+    let error = executor.invoke(&funcs, 0, &[Value::I32(100)], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::CallStackOverflow));
+    let result = executor.invoke(&funcs, 0, &[Value::I32(10)], None).unwrap();
+    assert_eq!(expect_complete(result), vec![Value::I32(7)]);
+}
+
 #[test]
 fn traps_clear_the_stack() {
     let mut executor = FlatExecutor::new();
