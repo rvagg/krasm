@@ -15,9 +15,10 @@
 //! proves (operand types, stack heights, index bounds) instead of rechecking
 //! them per instruction.
 
+use super::index_spaces::IndexSpaceTypes;
 use super::module::{
     DataMode, ElementMode, ExportIndex, ExternalKind, FunctionType, GlobalType, Limits, Module, Positional, RefType,
-    ValueType, ValueType::*,
+    TableType, ValueType, ValueType::*,
 };
 use super::structured::StructuredInstruction;
 use crate::parser::instruction::signature::{Signature, fixed_signature, simd_signature};
@@ -55,7 +56,7 @@ impl ValidatedModule {
     pub fn into_inner(self) -> Result<Module, Self> {
         let mut module = Arc::try_unwrap(self.0).map_err(Self)?;
         // Edits can invalidate the cached lookups.
-        module.validation_context = OnceLock::new();
+        module.index_space_types = OnceLock::new();
         Ok(module)
     }
 
@@ -375,7 +376,7 @@ struct CtrlFrame {
 
 pub struct CodeValidator<'a> {
     module: &'a super::module::Module,
-    ctx: &'a super::module::ValidationContext,
+    spaces: &'a IndexSpaceTypes,
     locals: &'a super::module::Locals,
     function_type: &'a FunctionType,
     vals: Vec<MaybeValue>,
@@ -385,9 +386,13 @@ pub struct CodeValidator<'a> {
 }
 
 impl<'a> CodeValidator<'a> {
+    fn table(&self, index: u32) -> Option<TableType> {
+        self.spaces.table_types.get(index as usize).copied()
+    }
+
     #[inline]
     fn validate_memory_exists(&self) -> Result<(), ValidationError> {
-        if !self.ctx.has_memory {
+        if !self.spaces.has_memory {
             return Err(ValidationError::UnknownMemory);
         }
         Ok(())
@@ -395,14 +400,13 @@ impl<'a> CodeValidator<'a> {
 
     pub fn new(
         module: &'a super::module::Module,
-        ctx: &'a super::module::ValidationContext,
         locals: &'a super::module::Locals,
         function_type: &'a FunctionType,
         current_function_index: u32,
     ) -> CodeValidator<'a> {
         let mut v = CodeValidator {
             module,
-            ctx,
+            spaces: module.index_space_types(),
             locals,
             function_type,
             vals: vec![],
@@ -546,26 +550,10 @@ impl<'a> CodeValidator<'a> {
     }
 
     fn global(&mut self, global_index: u32) -> Result<&GlobalType, ValidationError> {
-        // TODO: get the imported global type
-        let imported_global_count = self.module.imports.global_count();
-        let global = if global_index < imported_global_count as u32 {
-            self.module
-                .imports
-                .get_global_import(global_index)
-                .and_then(|import| match &import.external_kind {
-                    ExternalKind::Global(global_type) => Some(global_type),
-                    _ => None,
-                })
-        } else {
-            self.module
-                .globals
-                .get(global_index - imported_global_count as u32)
-                .map(|g| &g.global_type)
-        };
-        match global {
-            Some(global) => Ok(global),
-            None => Err(ValidationError::UnknownGlobal(global_index)),
-        }
+        self.spaces
+            .global_types
+            .get(global_index as usize)
+            .ok_or(ValidationError::UnknownGlobal(global_index))
     }
 
     fn label_types_at(&mut self, li: u32) -> Result<Vec<MaybeValue>, ValidationError> {
@@ -579,7 +567,7 @@ impl<'a> CodeValidator<'a> {
 
     fn get_function_type(&self, fi: u32) -> Result<&FunctionType, ValidationError> {
         // Use pre-computed function type indices for O(1) lookup
-        self.ctx
+        self.spaces
             .function_type_indices
             .get(fi as usize)
             .ok_or(ValidationError::UnknownFunction(fi))
@@ -954,8 +942,7 @@ impl Validator for CodeValidator<'_> {
             TableInit { elem_idx, table_idx } => {
                 self.apply_fixed(kind)?;
                 let table = self
-                    .module
-                    .get_table(*table_idx)
+                    .table(*table_idx)
                     .ok_or(ValidationError::UnknownTableWithIndex(*table_idx))?;
                 let elem = self
                     .module
@@ -971,8 +958,8 @@ impl Validator for CodeValidator<'_> {
 
             TableCopy { src_table, dst_table } => {
                 self.apply_fixed(kind)?;
-                let src_table_type = self.module.get_table(*src_table).ok_or(ValidationError::UnknownTable)?;
-                let dst_table_type = self.module.get_table(*dst_table).ok_or(ValidationError::UnknownTable)?;
+                let src_table_type = self.table(*src_table).ok_or(ValidationError::UnknownTable)?;
+                let dst_table_type = self.table(*dst_table).ok_or(ValidationError::UnknownTable)?;
                 if src_table_type.ref_type != dst_table_type.ref_type {
                     return Err(ValidationError::TypeMismatch);
                 }
@@ -980,7 +967,7 @@ impl Validator for CodeValidator<'_> {
             }
 
             TableGet { table_idx } => {
-                let table = self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
                 self.push_val(Val(table.ref_type.into()))
                     .ok_or(ValidationError::TypeMismatch)?;
@@ -988,7 +975,7 @@ impl Validator for CodeValidator<'_> {
             }
 
             TableSet { table_idx } => {
-                let table = self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 self.pop_expected(Val(table.ref_type.into()))
                     .ok_or(ValidationError::TypeMismatch)?;
                 self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
@@ -1225,7 +1212,7 @@ impl Validator for CodeValidator<'_> {
             Call { func_idx } => {
                 // Get type index directly from pre-computed data
                 let type_idx = self
-                    .ctx
+                    .spaces
                     .function_type_indices
                     .get(*func_idx as usize)
                     .ok_or(ValidationError::UnknownFunction(*func_idx))?;
@@ -1235,25 +1222,11 @@ impl Validator for CodeValidator<'_> {
                     .types
                     .get(*type_idx)
                     .ok_or(ValidationError::UnknownFunctionType)?;
-
-                // parameters are stack ordered, so pick them in reverse
-                for param in ftype.parameters.iter().rev() {
-                    self.pop_expected(Val(*param)).ok_or(ValidationError::TypeMismatch)?;
-                }
-
-                for return_type in &ftype.return_types {
-                    self.push_val(Val(*return_type)).ok_or(ValidationError::TypeMismatch)?;
-                }
-                Ok(())
+                self.apply_signature(ftype.signature())
             }
 
             CallIndirect { type_idx, table_idx } => {
-                // Validate table exists using pre-computed data
-                if *table_idx as usize >= self.ctx.has_table.len() || !self.ctx.has_table[*table_idx as usize] {
-                    return Err(ValidationError::UnknownTable);
-                }
-
-                let table = self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
 
                 if ValueType::from(table.ref_type) != FuncRef {
                     return Err(ValidationError::TypeMismatch);
@@ -1268,16 +1241,7 @@ impl Validator for CodeValidator<'_> {
                     .types
                     .get(*type_idx)
                     .ok_or(ValidationError::UnknownFunctionType)?;
-
-                // parameters are stack ordered, so pick them in reverse
-                for param in ftype.parameters.iter().rev() {
-                    self.pop_expected(Val(*param)).ok_or(ValidationError::TypeMismatch)?;
-                }
-
-                for return_type in &ftype.return_types {
-                    self.push_val(Val(*return_type)).ok_or(ValidationError::TypeMismatch)?;
-                }
-                Ok(())
+                self.apply_signature(ftype.signature())
             }
 
             Select => {
@@ -1392,12 +1356,12 @@ impl Validator for CodeValidator<'_> {
 
             TableSize { table_idx } => {
                 // Verify table exists
-                self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 self.apply_fixed(kind)
             }
 
             TableGrow { table_idx } => {
-                let table = self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 // table.grow pops: [n:i32, init:reftype] and pushes: [prev_size:i32]
                 self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
                 self.pop_expected(Val(table.ref_type.into()))
@@ -1407,7 +1371,7 @@ impl Validator for CodeValidator<'_> {
             }
 
             TableFill { table_idx } => {
-                let table = self.module.get_table(*table_idx).ok_or(ValidationError::UnknownTable)?;
+                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 // table.fill pops: [i:i32, val:reftype, n:i32]
                 self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
                 self.pop_expected(Val(table.ref_type.into()))
@@ -1635,7 +1599,6 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
     }
 
     // Validate function bodies
-    let ctx = module.validation_context();
     let import_func_count = module.imports.function_count() as u32;
 
     for (i, body) in module.code.code.iter().enumerate() {
@@ -1644,7 +1607,7 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
             .get_function_type(i)
             .ok_or(ValidationError::UnknownFunctionType)?;
 
-        let mut v = CodeValidator::new(module, ctx, &body.locals, ftype, func_index);
+        let mut v = CodeValidator::new(module, &body.locals, ftype, func_index);
         validate_structured(&body.body.body, &mut v)?;
         v.validate(&validation_instr(InstructionKind::End))?;
         v.finalise()?;

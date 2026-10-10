@@ -115,8 +115,7 @@ pub fn decode_function(
         .get_function_type(function_index as usize)
         .ok_or(super::super::validate::ValidationError::UnknownFunctionType)?;
 
-    let ctx = module.validation_context();
-    let mut validator = CodeValidator::new(module, ctx, locals, ftype, function_index);
+    let mut validator = CodeValidator::new(module, locals, ftype, function_index);
 
     // local_count covers parameters plus declared locals: the code section's
     // locals vector never includes parameters, but StructuredFunction's

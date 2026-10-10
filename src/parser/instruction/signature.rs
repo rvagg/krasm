@@ -9,22 +9,32 @@
 //! about what an instruction consumes and produces.
 
 use super::{InstructionKind, SimdOp};
+use crate::parser::module::FunctionType;
 use crate::parser::module::ValueType::{self, *};
 
 /// Parameter and result types, parameters in stack order: the last is on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Signature {
-    pub params: &'static [ValueType],
-    pub results: &'static [ValueType],
+pub struct Signature<'a> {
+    pub params: &'a [ValueType],
+    pub results: &'a [ValueType],
 }
 
-const fn sig(params: &'static [ValueType], results: &'static [ValueType]) -> Option<Signature> {
+impl FunctionType {
+    pub fn signature(&self) -> Signature<'_> {
+        Signature {
+            params: &self.parameters,
+            results: &self.return_types,
+        }
+    }
+}
+
+const fn sig(params: &'static [ValueType], results: &'static [ValueType]) -> Option<Signature<'static>> {
     Some(Signature { params, results })
 }
 
 /// The signature of an instruction whose types depend only on its opcode,
 /// or `None` when they depend on the module or the operand stack.
-pub fn fixed_signature(kind: &InstructionKind) -> Option<Signature> {
+pub fn fixed_signature(kind: &InstructionKind) -> Option<Signature<'static>> {
     use InstructionKind::*;
     match kind {
         // Types come from labels, blocks, callees, locals, globals, tables or the stack.
@@ -121,7 +131,7 @@ pub fn fixed_signature(kind: &InstructionKind) -> Option<Signature> {
 }
 
 /// Every SIMD instruction has a fixed signature.
-pub(crate) fn simd_signature(op: &SimdOp) -> Signature {
+pub(crate) fn simd_signature(op: &SimdOp) -> Signature<'static> {
     use SimdOp::*;
     let (params, results): (&'static [ValueType], &'static [ValueType]) = match op {
         V128Load { .. }

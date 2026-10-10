@@ -806,6 +806,7 @@ fn local_tee_errors_clear_operand_stack() {
             local_defaults: vec![Value::I32(0)],
             param_count: 0,
             result_count: 0,
+            max_stack_slots: 2,
         }];
         let error = executor.invoke(&funcs, 0, &[], None).unwrap_err();
         if has_values {

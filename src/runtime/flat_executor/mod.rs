@@ -1212,8 +1212,7 @@ impl FlatExecutor {
                 // `return` can leave operands beneath its results; validation
                 // guarantees the function's final `end` leaves exactly them.
                 Op::Return => {
-                    let result_count = funcs[current_func_idx].result_count as u16;
-                    branch_cleanup(stack, result_count, stack_base)?;
+                    branch_cleanup(stack, funcs[current_func_idx].result_count, stack_base)?;
                     return_to_caller!();
                 }
                 Op::End => return_to_caller!(),

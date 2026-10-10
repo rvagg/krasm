@@ -14,14 +14,19 @@
 //!
 //! Branch ops carry stack cleanup metadata (arity + stack_depth) so the flat
 //! executor can properly handle multi-value blocks without a runtime label
-//! stack. The compiler tracks stack depth during emission to compute these
-//! values.
+//! stack. The compiler tracks the operand types during emission, as
+//! validation does, to compute these values and each function's maximum
+//! stack size. It checks each instruction's operands against those types, so
+//! any disagreement with validation fails compilation instead of producing
+//! bytecode that relies on a false assumption.
 
 use super::RuntimeError;
 use super::bytecode::{BrTarget, CompiledFunction, Op};
 use super::imports::default_value_for_type;
+use crate::parser::index_spaces::IndexSpaceTypes;
+use crate::parser::instruction::signature::{Signature, fixed_signature};
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
-use crate::parser::module::{ExternalKind, FunctionType, Locals, Module};
+use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
 use std::fmt;
 
@@ -43,32 +48,22 @@ enum Fixup {
     TableEntry { op_pos: usize, index: Option<usize> },
 }
 
-/// A label on the compile-time stack, tracking where branches should go
-/// and how to clean up the stack on branch.
-enum Label {
-    /// Block/if: branch goes to end (forward). Target unknown until body is
-    /// emitted, so we record the positions that need patching.
-    Block {
-        fixups: Vec<Fixup>,
-        stack_depth: u32,
-        arity: u16,
-    },
-    /// Loop: branch goes to start (backward). Target is known at entry.
-    Loop { start: u32, stack_depth: u32, arity: u16 },
+/// A label on the compile-time stack: where its branches go, the operand
+/// depth they unwind to, and the types they carry (a block's results, or a
+/// loop's parameters).
+struct Label<'a> {
+    target: LabelTarget,
+    stack_depth: u32,
+    /// Its length fits a branch op's `u16` arity: `open_label` checks it.
+    types: &'a [ValueType],
 }
 
-impl Label {
-    fn stack_depth(&self) -> u32 {
-        match self {
-            Label::Block { stack_depth, .. } | Label::Loop { stack_depth, .. } => *stack_depth,
-        }
-    }
-
-    fn arity(&self) -> u16 {
-        match self {
-            Label::Block { arity, .. } | Label::Loop { arity, .. } => *arity,
-        }
-    }
+enum LabelTarget {
+    /// Block, if or function body: branches go to the end (forward), unknown
+    /// until the body is emitted, so their positions are recorded for patching.
+    End(Vec<Fixup>),
+    /// Loop: branches go to the start (backward), known at entry.
+    Start(u32),
 }
 
 /// A module that validation should have rejected.
@@ -76,29 +71,15 @@ fn invalid(what: impl fmt::Display) -> RuntimeError {
     RuntimeError::Compile(what.to_string())
 }
 
-/// Count a function type's parameters and results.
-fn signature(ft: &FunctionType) -> (u16, u16) {
-    (ft.parameters.len() as u16, ft.return_types.len() as u16)
+/// A parameter, result or branch-arity count, which validation keeps far below
+/// `u16::MAX` for decoded modules; others are checked rather than truncated.
+fn count(len: usize) -> Result<u16, RuntimeError> {
+    u16::try_from(len).map_err(|_| invalid(format!("{len} values exceed the supported count")))
 }
 
-/// Build a `(param_count, result_count)` table for all functions in a module,
-/// indexed by module-level function index (imports first, then locals).
-pub fn build_func_sigs(module: &Module) -> Result<Vec<(u16, u16)>, RuntimeError> {
-    let imported = module.imports.imports.iter().filter_map(|imp| match imp.external_kind {
-        ExternalKind::Function(type_idx) => Some(type_idx),
-        _ => None,
-    });
-    let local = module.functions.functions.iter().map(|func| func.ftype_index);
-    imported
-        .chain(local)
-        .map(|type_idx| {
-            module
-                .types
-                .get(type_idx)
-                .map(signature)
-                .ok_or_else(|| invalid(format!("unknown function type {type_idx}")))
-        })
-        .collect()
+/// Operand-stack slots a value occupies: a `v128` takes two, everything else one.
+pub fn slot_width(value_type: ValueType) -> u32 {
+    if value_type == ValueType::V128 { 2 } else { 1 }
 }
 
 /// Compile all local functions in a module to flat bytecode.
@@ -106,7 +87,6 @@ pub fn build_func_sigs(module: &Module) -> Result<Vec<(u16, u16)>, RuntimeError>
 /// The module must be valid; compilation relies on validation and reports any
 /// inconsistency it meets as [`RuntimeError::Compile`] rather than guessing.
 pub fn compile_module(module: &Module) -> Result<Vec<CompiledFunction>, RuntimeError> {
-    let func_sigs = build_func_sigs(module)?;
     if module.code.code.len() != module.functions.functions.len() {
         return Err(invalid("function and code counts differ"));
     }
@@ -120,98 +100,91 @@ pub fn compile_module(module: &Module) -> Result<Vec<CompiledFunction>, RuntimeE
                 .types
                 .get(decl.ftype_index)
                 .ok_or_else(|| invalid(format!("unknown function type {}", decl.ftype_index)))?;
-            compile(
-                &func.body,
-                ftype.parameters.len() as u32,
-                &func.locals,
-                &module.types.types,
-                &func_sigs,
-            )
+            compile(&func.body, ftype, &func.locals, module)
         })
         .collect()
 }
 
 /// Compile a structured function into flat bytecode.
 ///
-/// `locals` is the function's declared (non-parameter) locals, used to
-/// pre-compute typed zero defaults for frame initialisation.
-/// `types` is the module's type section, needed to resolve `BlockType::FuncType`.
-/// `func_sigs` maps module-level function index to `(param_count, result_count)`,
-/// needed to compute the stack effect of `call` instructions.
-pub fn compile(
-    func: &StructuredFunction,
-    param_count: u32,
+/// `ftype` is the function's signature and `locals` its declared
+/// (non-parameter) locals, which also give the typed zero defaults for frame
+/// initialisation. `module` supplies block and callee signatures, and its index
+/// space types the types of functions, globals and tables by index.
+pub fn compile<'a>(
+    func: &'a StructuredFunction,
+    ftype: &'a FunctionType,
     locals: &Locals,
-    types: &[FunctionType],
-    func_sigs: &[(u16, u16)],
+    module: &'a Module,
 ) -> Result<CompiledFunction, RuntimeError> {
+    let mut local_types = ftype.parameters.clone();
+    for (count, value_type) in locals.iter() {
+        local_types.resize(local_types.len() + *count as usize, *value_type);
+    }
     let mut ctx = CompileContext {
         ops: Vec::new(),
         labels: Vec::new(),
-        depth: 0,
+        stack: Vec::new(),
+        slots: 0,
+        max_slots: 0,
         reachable: true,
-        types,
-        func_sigs,
+        locals: local_types,
+        module,
+        spaces: module.index_space_types(),
         error: None,
     };
 
-    // The function body itself acts as an implicit block. Branches at full
-    // depth become Return ops (handled in emit_br). The function label's
-    // arity is the result count, and stack_depth is 0 (nothing below it).
-    ctx.labels.push(Label::Block {
-        fixups: Vec::new(),
+    // The function body is the outermost label. A `br` to it is a return; a
+    // `br_if` or `br_table` entry jumps to the final End.
+    let result_count = count(ftype.return_types.len())?;
+    ctx.labels.push(Label {
+        target: LabelTarget::End(Vec::new()),
         stack_depth: 0,
-        arity: func.return_types.len() as u16,
+        types: &ftype.return_types,
     });
-
     ctx.emit_body(&func.body);
-
-    // Patch any fixups on the implicit function block.
-    let end_pos = ctx.ops.len() as u32;
-    if let Some(Label::Block { fixups, .. }) = ctx.labels.pop() {
-        for fixup in &fixups {
-            ctx.apply_fixup(fixup, end_pos);
-        }
+    if ctx.reachable {
+        ctx.check_top(0, &ftype.return_types, "function end");
     }
-
+    ctx.close_label();
     ctx.ops.push(Op::End);
     if let Some(error) = ctx.error {
         return Err(error);
     }
 
-    // Expand run-length locals declarations into one typed zero per local,
-    // so frame initialisation is a plain copy.
-    let mut local_defaults = Vec::with_capacity(locals.len() as usize);
-    for (count, value_type) in locals.iter() {
-        local_defaults.resize(
-            local_defaults.len() + *count as usize,
-            default_value_for_type(*value_type),
-        );
-    }
-
+    // One typed zero per declared local, so frame initialisation is a plain copy.
+    let local_defaults = ctx.locals[ftype.parameters.len()..]
+        .iter()
+        .map(|value_type| default_value_for_type(*value_type))
+        .collect();
     Ok(CompiledFunction {
         ops: ctx.ops,
         local_defaults,
-        param_count,
-        result_count: func.return_types.len() as u32,
+        param_count: count(ftype.parameters.len())?,
+        result_count,
+        max_stack_slots: ctx.max_slots,
     })
 }
 
 struct CompileContext<'a> {
     ops: Vec<Op>,
     /// Compile-time label stack. Innermost label is last.
-    labels: Vec<Label>,
-    /// Tracked stack depth (number of values on the operand stack).
-    depth: u32,
+    labels: Vec<Label<'a>>,
+    /// Types of the operand stack's values, top last. Its length is the depth.
+    stack: Vec<ValueType>,
+    /// Slots the operand stack occupies, and the most it reaches.
+    slots: u32,
+    max_slots: u32,
     /// False after an unconditional transfer (br, br_table, return,
     /// unreachable) until the enclosing block ends. Dead code is skipped
     /// entirely: validation allows it to be stack-polymorphic, so tracking
     /// depth through it is meaningless (and would underflow).
     reachable: bool,
-    /// Module type section for resolving BlockType::FuncType.
-    types: &'a [FunctionType],
-    /// (param_count, result_count) per module-level function index.
-    func_sigs: &'a [(u16, u16)],
+    /// Parameter then declared local types, by local index.
+    locals: Vec<ValueType>,
+    module: &'a Module,
+    /// Function, global and table types by index, imports first.
+    spaces: &'a IndexSpaceTypes,
     /// The first inconsistency met. Compilation continues with placeholders,
     /// whose output is discarded, so emitters need not propagate errors.
     error: Option<RuntimeError>,
@@ -224,37 +197,230 @@ impl<'a> CompileContext<'a> {
         }
     }
 
-    /// Apply a stack effect; validation guarantees the stack never underflows.
-    fn adjust_depth(&mut self, delta: i32) {
-        match self.depth.checked_add_signed(delta) {
-            Some(depth) => self.depth = depth,
-            None => {
-                self.fail("operand stack underflow");
-                self.depth = 0;
-            }
+    /// Number of values on the operand stack.
+    fn depth(&self) -> u32 {
+        self.stack.len() as u32
+    }
+
+    fn push(&mut self, value_type: ValueType) {
+        self.stack.push(value_type);
+        self.slots += slot_width(value_type);
+        self.max_slots = self.max_slots.max(self.slots);
+    }
+
+    fn pop(&mut self) -> Option<ValueType> {
+        let popped = self.stack.pop();
+        match popped {
+            Some(value_type) => self.slots -= slot_width(value_type),
+            None => self.fail("operand stack underflow"),
+        }
+        popped
+    }
+
+    fn pop_expect(&mut self, expected: ValueType) {
+        if let Some(found) = self.pop()
+            && found != expected
+        {
+            self.fail(format_args!("expected {expected:?} operand, found {found:?}"));
+        }
+    }
+
+    /// Pop parameters, last first, and push results.
+    fn apply_signature(&mut self, signature: Signature) {
+        for param in signature.params.iter().rev() {
+            self.pop_expect(*param);
+        }
+        for result in signature.results {
+            self.push(*result);
+        }
+    }
+
+    /// Discard operands down to `depth`.
+    fn truncate(&mut self, depth: u32) {
+        while self.depth() > depth {
+            self.pop();
+        }
+    }
+
+    /// Check that the operands above `depth` are exactly `expected`.
+    fn check_top(&mut self, depth: u32, expected: &[ValueType], what: &str) {
+        let above = self.stack.get(depth as usize..).unwrap_or_default();
+        if above != expected {
+            let message = format!("{what} has {above:?}, expected {expected:?}");
+            self.fail(message);
         }
     }
 
     /// The depth beneath the top `count` operands.
-    fn depth_below(&mut self, count: u32) -> u32 {
-        self.depth.checked_sub(count).unwrap_or_else(|| {
+    fn depth_below(&mut self, count: usize) -> u32 {
+        self.depth().checked_sub(count as u32).unwrap_or_else(|| {
             self.fail("operand stack underflow");
             0
         })
     }
 
-    /// Resolve a BlockType to (param_count, result_count).
-    fn block_signature(&mut self, block_type: &BlockType) -> (u16, u16) {
+    /// Resolve a BlockType to its parameter and result types.
+    fn block_signature<'b>(&mut self, block_type: &'b BlockType) -> Signature<'b>
+    where
+        'a: 'b,
+    {
+        const EMPTY: Signature<'static> = Signature {
+            params: &[],
+            results: &[],
+        };
+        let module = self.module;
         match block_type {
-            BlockType::Empty => (0, 0),
-            BlockType::Value(_) => (0, 1),
-            BlockType::FuncType(idx) => match self.types.get(*idx as usize) {
-                Some(ft) => signature(ft),
+            BlockType::Empty => EMPTY,
+            BlockType::Value(value_type) => Signature {
+                params: &[],
+                results: std::slice::from_ref(value_type),
+            },
+            BlockType::FuncType(idx) => match module.types.get(*idx) {
+                Some(ft) => ft.signature(),
                 None => {
                     self.fail(format_args!("unknown block type {idx}"));
-                    (0, 0)
+                    EMPTY
                 }
             },
+        }
+    }
+
+    fn local_type(&mut self, index: u32) -> ValueType {
+        self.locals.get(index as usize).copied().unwrap_or_else(|| {
+            self.fail(format_args!("unknown local {index}"));
+            ValueType::I32
+        })
+    }
+
+    fn global_type(&mut self, index: u32) -> ValueType {
+        match self.spaces.global_types.get(index as usize) {
+            Some(global) => global.value_type,
+            None => {
+                self.fail(format_args!("unknown global {index}"));
+                ValueType::I32
+            }
+        }
+    }
+
+    fn table_type(&mut self, index: u32) -> ValueType {
+        match self.spaces.table_types.get(index as usize) {
+            Some(table) => table.ref_type.into(),
+            None => {
+                self.fail(format_args!("unknown table {index}"));
+                ValueType::FuncRef
+            }
+        }
+    }
+
+    /// Apply a plain instruction's effect on the operand types.
+    fn apply_types(&mut self, kind: &InstructionKind) {
+        use InstructionKind::*;
+        if let Some(signature) = fixed_signature(kind) {
+            return self.apply_signature(signature);
+        }
+        match kind {
+            LocalGet { local_idx } => {
+                let local = self.local_type(*local_idx);
+                self.push(local);
+            }
+            LocalSet { local_idx } => {
+                let local = self.local_type(*local_idx);
+                self.pop_expect(local);
+            }
+            LocalTee { local_idx } => {
+                let local = self.local_type(*local_idx);
+                self.apply_signature(Signature {
+                    params: &[local],
+                    results: &[local],
+                });
+            }
+            GlobalGet { global_idx } => {
+                let global = self.global_type(*global_idx);
+                self.push(global);
+            }
+            GlobalSet { global_idx } => {
+                let global = self.global_type(*global_idx);
+                self.pop_expect(global);
+            }
+            Call { func_idx } => {
+                let callee = (self.spaces.function_type_indices.get(*func_idx as usize))
+                    .and_then(|type_idx| self.module.types.get(*type_idx));
+                match callee {
+                    Some(callee) => self.apply_signature(callee.signature()),
+                    None => self.fail(format_args!("unknown function {func_idx}")),
+                }
+            }
+            CallIndirect { type_idx, .. } => {
+                self.pop_expect(ValueType::I32);
+                match self.module.types.get(*type_idx) {
+                    Some(callee) => self.apply_signature(callee.signature()),
+                    None => self.fail(format_args!("unknown type {type_idx}")),
+                }
+            }
+            Drop => {
+                self.pop();
+            }
+            Select => {
+                self.pop_expect(ValueType::I32);
+                let second = self.pop();
+                let first = self.pop();
+                match (first, second) {
+                    (Some(first), Some(second)) if first == second => self.push(first),
+                    (Some(first), Some(second)) => self.fail(format_args!("select of {first:?} and {second:?}")),
+                    _ => {}
+                }
+            }
+            SelectTyped { val_types } => match val_types.as_slice() {
+                [value_type] => {
+                    let value_type = *value_type;
+                    self.apply_signature(Signature {
+                        params: &[value_type, value_type, ValueType::I32],
+                        results: &[value_type],
+                    });
+                }
+                _ => self.fail("select must name one type"),
+            },
+            RefNull { ref_type } => self.push(*ref_type),
+            RefIsNull => {
+                if let Some(operand) = self.pop()
+                    && !matches!(operand, ValueType::FuncRef | ValueType::ExternRef)
+                {
+                    self.fail(format_args!("ref.is_null of {operand:?}"));
+                }
+                self.push(ValueType::I32);
+            }
+            TableGet { table_idx } => {
+                let element = self.table_type(*table_idx);
+                self.apply_signature(Signature {
+                    params: &[ValueType::I32],
+                    results: &[element],
+                });
+            }
+            TableSet { table_idx } => {
+                let element = self.table_type(*table_idx);
+                self.apply_signature(Signature {
+                    params: &[ValueType::I32, element],
+                    results: &[],
+                });
+            }
+            TableGrow { table_idx } => {
+                let element = self.table_type(*table_idx);
+                self.apply_signature(Signature {
+                    params: &[element, ValueType::I32],
+                    results: &[ValueType::I32],
+                });
+            }
+            TableFill { table_idx } => {
+                let element = self.table_type(*table_idx);
+                self.apply_signature(Signature {
+                    params: &[ValueType::I32, element, ValueType::I32],
+                    results: &[],
+                });
+            }
+            BrIf { .. } | BrTable { .. } => self.pop_expect(ValueType::I32),
+            // Control leaves; what follows is unreachable and not emitted.
+            Br { .. } | Return | Unreachable => {}
+            _ => self.fail(format_args!("no operand types for {kind:?}")),
         }
     }
 
@@ -273,30 +439,20 @@ impl<'a> CompileContext<'a> {
         self.ops.len() as u32
     }
 
-    /// Emit an op whose stack effect is fully described by `Op::stack_delta`.
-    /// The one-line arm form for mechanical 1:1 instruction mappings.
+    /// Emit an op; the one-line arm form for mechanical 1:1 instruction mappings.
     fn op(&mut self, op: Op) {
         self.emit(op);
     }
 
-    /// Emit an op, adjust stack depth, and return its position.
+    /// Emit an op and return its position. Operand types follow the source
+    /// instruction (`apply_types`), not the ops emitted for it.
     fn emit(&mut self, op: Op) -> usize {
         let pos = self.ops.len();
-        self.adjust_depth(op.stack_delta());
         self.ops.push(op);
         pos
     }
 
-    /// Patch the target pc of a Br, BrIf, or Label at a known position.
-    fn patch_target(&mut self, pos: usize, target: u32) {
-        match &mut self.ops[pos] {
-            Op::Br { target: t, .. } | Op::BrIf { target: t, .. } => *t = target,
-            Op::Label { end_target } => *end_target = target,
-            _ => {}
-        }
-    }
-
-    /// Apply a fixup, setting the target pc to `target`.
+    /// Patch the target pc of a Br, BrIf or Label op, or of one br_table entry.
     fn apply_fixup(&mut self, fixup: &Fixup, target: u32) {
         match fixup {
             Fixup::Branch(pos) => match &mut self.ops[*pos] {
@@ -315,15 +471,50 @@ impl<'a> CompileContext<'a> {
         }
     }
 
+    /// Push a label, checking its arity fits in a branch op.
+    fn open_label(&mut self, target: LabelTarget, stack_depth: u32, types: &'a [ValueType]) {
+        if let Err(error) = count(types.len()) {
+            self.error.get_or_insert(error);
+        }
+        self.labels.push(Label {
+            target,
+            stack_depth,
+            types,
+        });
+    }
+
+    /// Pop the innermost label, pointing its forward branches here.
+    fn close_label(&mut self) {
+        let end = self.pos();
+        if let Some(Label {
+            target: LabelTarget::End(fixups),
+            ..
+        }) = self.labels.pop()
+        {
+            for fixup in &fixups {
+                self.apply_fixup(fixup, end);
+            }
+        }
+    }
+
+    /// Continue after a block: reachable, with `types` above `depth`.
+    fn end_block(&mut self, depth: u32, types: &[ValueType]) {
+        self.truncate(depth);
+        for value_type in types {
+            self.push(*value_type);
+        }
+        self.reachable = true;
+    }
+
     /// Emit a sequence of structured instructions.
-    fn emit_body(&mut self, body: &[StructuredInstruction]) {
+    fn emit_body(&mut self, body: &'a [StructuredInstruction]) {
         for inst in body {
             self.emit_instruction(inst);
         }
     }
 
     /// Emit a single structured instruction.
-    fn emit_instruction(&mut self, inst: &StructuredInstruction) {
+    fn emit_instruction(&mut self, inst: &'a StructuredInstruction) {
         // Dead code after an unconditional transfer is never emitted.
         // Branch targets cannot point into it, so nothing is lost.
         if !self.reachable {
@@ -333,56 +524,39 @@ impl<'a> CompileContext<'a> {
             StructuredInstruction::Plain(i) => self.emit_plain(i),
 
             StructuredInstruction::Block { block_type, body, .. } => {
-                let (params, results) = self.block_signature(block_type);
-
-                // stack_depth is below the parameters (params are "inside" the block)
-                let sd = self.depth_below(params as u32);
+                let Signature { params, results } = self.block_signature(block_type);
+                // Params are inside the block: branches unwind to below them.
+                let sd = self.depth_below(params.len());
+                self.check_top(sd, params, "block entry");
 
                 let label_pos = self.emit(Op::Label { end_target: 0 });
-                self.labels.push(Label::Block {
-                    fixups: vec![Fixup::Branch(label_pos)],
-                    stack_depth: sd,
-                    arity: results,
-                });
-
+                self.open_label(LabelTarget::End(vec![Fixup::Branch(label_pos)]), sd, results);
                 self.emit_body(body);
-
-                let end_pos = self.pos();
-                if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
-                    for fixup in &fixups {
-                        self.apply_fixup(fixup, end_pos);
-                    }
+                if self.reachable {
+                    self.check_top(sd, results, "block end");
                 }
-                // The code after a block is reached either by fall-through
-                // or by branching to the block's label; in both cases the
-                // stack holds exactly the block's results above sd.
-                self.depth = sd + results as u32;
-                self.reachable = true;
+                self.close_label();
+                // Reached by fall-through or by a branch to the label: either
+                // way the block's results sit above sd.
+                self.end_block(sd, results);
             }
 
             StructuredInstruction::Loop { block_type, body, .. } => {
-                let (params, results) = self.block_signature(block_type);
+                let Signature { params, results } = self.block_signature(block_type);
+                let sd = self.depth_below(params.len());
+                self.check_top(sd, params, "loop entry");
 
-                // For loops, branch arity is the param count (restart with params)
-                let sd = self.depth_below(params as u32);
-
-                let loop_start = self.pos();
-                self.emit(Op::Label { end_target: 0 });
-                self.labels.push(Label::Loop {
-                    start: loop_start + 1,
-                    stack_depth: sd,
-                    arity: params,
-                });
-
+                // Branches restart the loop, carrying its params.
+                let loop_start = self.emit(Op::Label { end_target: 0 });
+                self.open_label(LabelTarget::Start(loop_start as u32 + 1), sd, params);
                 self.emit_body(body);
-
-                let end_pos = self.pos();
-                self.patch_target(loop_start as usize, end_pos);
-
+                if self.reachable {
+                    self.check_top(sd, results, "loop end");
+                }
+                let end = self.pos();
+                self.apply_fixup(&Fixup::Branch(loop_start), end);
                 self.labels.pop();
-                // Fall-through past the loop leaves its results above sd.
-                self.depth = sd + results as u32;
-                self.reachable = true;
+                self.end_block(sd, results);
             }
 
             StructuredInstruction::If {
@@ -391,79 +565,62 @@ impl<'a> CompileContext<'a> {
                 else_branch,
                 ..
             } => {
-                let (params, results) = self.block_signature(block_type);
+                let Signature { params, results } = self.block_signature(block_type);
+                // The i32.eqz + br_if below consume the condition; the block's
+                // params sit directly beneath it.
+                self.pop_expect(ValueType::I32);
+                let sd = self.depth_below(params.len());
+                self.check_top(sd, params, "if entry");
 
-                // The condition has been consumed by the i32.eqz + br_if below.
-                // stack_depth is below the block params (after condition is popped).
-                // At this point, depth includes the condition. After eqz (no net
-                // change) and br_if (pops 1), depth = depth - 1. The block params
-                // are the next `params` values below the condition.
-                let sd = self.depth_below(1 + params as u32);
-
-                // Invert condition: skip then-body when condition is 0. The
-                // skip keeps the block params, which sit directly beneath the
-                // condition it pops.
+                // Skip the then-body when the condition is 0, keeping the params.
                 self.emit(Op::I32Eqz);
                 let skip_then = self.emit(Op::BrIf {
                     target: 0,
                     arity: 0,
-                    stack_depth: sd + params as u32,
+                    stack_depth: self.depth(),
                 });
-
-                self.labels.push(Label::Block {
-                    fixups: Vec::new(),
-                    stack_depth: sd,
-                    arity: results,
-                });
-
+                self.open_label(LabelTarget::End(Vec::new()), sd, results);
                 self.emit_body(then_branch);
+                if self.reachable {
+                    self.check_top(sd, results, "if end");
+                }
 
                 if let Some(else_body) = else_branch {
-                    // Jump past else at end of then-body. If the block has
-                    // results, this branch carries them.
+                    // The then-body jumps past the else, carrying the results.
                     let skip_else = self.emit(Op::Br {
                         target: 0,
-                        arity: results,
+                        arity: results.len() as u16,
                         stack_depth: sd,
                     });
-
-                    // The else branch is entered directly via the skip_then
-                    // br_if with the block params on the stack, regardless
-                    // of how the then branch ended.
-                    self.depth = sd + params as u32;
-                    self.reachable = true;
-
+                    if let Some(Label {
+                        target: LabelTarget::End(fixups),
+                        ..
+                    }) = self.labels.last_mut()
+                    {
+                        fixups.push(Fixup::Branch(skip_else));
+                    }
+                    // The skip enters the else with the params on the stack,
+                    // however the then-body ended.
                     let else_start = self.pos();
-                    self.patch_target(skip_then, else_start);
-
+                    self.apply_fixup(&Fixup::Branch(skip_then), else_start);
+                    self.end_block(sd, params);
                     self.emit_body(else_body);
-
-                    let end_pos = self.pos();
-                    self.patch_target(skip_else, end_pos);
-                    if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
-                        for fixup in &fixups {
-                            self.apply_fixup(fixup, end_pos);
-                        }
+                    if self.reachable {
+                        self.check_top(sd, results, "else end");
                     }
                 } else {
-                    let end_pos = self.pos();
-                    self.patch_target(skip_then, end_pos);
-                    if let Some(Label::Block { fixups, .. }) = self.labels.pop() {
-                        for fixup in &fixups {
-                            self.apply_fixup(fixup, end_pos);
-                        }
-                    }
+                    let end = self.pos();
+                    self.apply_fixup(&Fixup::Branch(skip_then), end);
                 }
-                // As with block: reached by fall-through or branch, with
-                // the if's results above sd either way.
-                self.depth = sd + results as u32;
-                self.reachable = true;
+                self.close_label();
+                self.end_block(sd, results);
             }
         }
     }
 
     /// Emit a plain (non-control-flow-structure) instruction.
-    fn emit_plain(&mut self, inst: &Instruction) {
+    fn emit_plain(&mut self, inst: &'a Instruction) {
+        self.apply_types(&inst.kind);
         match &inst.kind {
             InstructionKind::I32Const { value } => self.op(Op::I32Const(*value)),
             InstructionKind::I64Const { value } => self.op(Op::I64Const(*value)),
@@ -958,35 +1115,16 @@ impl<'a> CompileContext<'a> {
             InstructionKind::MemoryCopy => self.op(Op::MemoryCopy),
             InstructionKind::MemoryFill => self.op(Op::MemoryFill),
 
-            InstructionKind::Call { func_idx } => {
-                // Stack effect depends on callee's signature: pops params, pushes results.
-                // We bypass self.emit() and adjust depth manually.
-                let Some(&(params, results)) = self.func_sigs.get(*func_idx as usize) else {
-                    return self.fail(format_args!("unknown function {func_idx}"));
-                };
-                self.ops.push(Op::Call { func_idx: *func_idx });
-                self.adjust_depth(results as i32 - params as i32);
-            }
-            InstructionKind::CallIndirect { type_idx, table_idx } => {
-                // Pops the i32 element index, then the params; pushes results.
-                // The signature comes from the type section, not func_sigs.
-                let Some((params, results)) = self.types.get(*type_idx as usize).map(signature) else {
-                    return self.fail(format_args!("unknown type {type_idx}"));
-                };
-                self.ops.push(Op::CallIndirect {
-                    type_idx: *type_idx,
-                    table_idx: *table_idx,
-                });
-                self.adjust_depth(results as i32 - 1 - params as i32);
-            }
+            InstructionKind::Call { func_idx } => self.op(Op::Call { func_idx: *func_idx }),
+            InstructionKind::CallIndirect { type_idx, table_idx } => self.op(Op::CallIndirect {
+                type_idx: *type_idx,
+                table_idx: *table_idx,
+            }),
 
             InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
             InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
             InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),
-            InstructionKind::Return => {
-                self.op(Op::Return);
-                self.reachable = false;
-            }
+            InstructionKind::Return => self.emit_return(),
             InstructionKind::Nop => self.op(Op::Nop),
             InstructionKind::Unreachable => {
                 self.op(Op::Unreachable);
@@ -1023,130 +1161,80 @@ impl<'a> CompileContext<'a> {
         }
     }
 
-    /// Emit an unconditional branch to the label at the given depth.
-    fn emit_br(&mut self, depth: u32) {
-        let label_index = self.label_index(depth);
-
-        // label_index 0 is the implicit function block. A branch targeting
-        // it is a return from the function.
-        if label_index == 0 {
-            self.emit(Op::Return);
-            self.reachable = false;
-            return;
-        }
-
-        let arity = self.labels[label_index].arity();
-        let stack_depth = self.labels[label_index].stack_depth();
-
-        match &mut self.labels[label_index] {
-            Label::Loop { start, .. } => {
-                let target = *start;
-                self.emit(Op::Br {
-                    target,
-                    arity,
-                    stack_depth,
-                });
+    /// Resolve a branch `depth` labels out: check the operands it carries,
+    /// record `fixup` if its target is still unknown, and return the target.
+    fn branch_target(&mut self, depth: u32, fixup: Fixup) -> BrTarget {
+        let index = self.label_index(depth);
+        let label = &mut self.labels[index];
+        let (stack_depth, types) = (label.stack_depth, label.types);
+        let pc = match &mut label.target {
+            LabelTarget::Start(start) => *start,
+            LabelTarget::End(fixups) => {
+                fixups.push(fixup);
+                0
             }
-            Label::Block { fixups, .. } => {
-                let pos = self.ops.len();
-                fixups.push(Fixup::Branch(pos));
-                self.emit(Op::Br {
-                    target: 0,
-                    arity,
-                    stack_depth,
-                });
-            }
+        };
+        self.check_branch(stack_depth, types);
+        BrTarget {
+            pc,
+            arity: types.len() as u16,
+            stack_depth,
         }
+    }
+
+    /// Check that a branch's operands are on top, above the depth it unwinds to.
+    fn check_branch(&mut self, stack_depth: u32, types: &[ValueType]) {
+        let depth = self.depth() as usize;
+        match depth.checked_sub(types.len()) {
+            Some(start) if start >= stack_depth as usize => {
+                if self.stack[start..] != *types {
+                    let message = format!("branch carries {:?}, label expects {types:?}", &self.stack[start..]);
+                    self.fail(message);
+                }
+            }
+            _ => self.fail(format_args!("branch needs {types:?} above depth {stack_depth}")),
+        }
+    }
+
+    /// `return`, or a `br` to the function body: leave with the results on top.
+    fn emit_return(&mut self) {
+        let results = self.labels[0].types;
+        self.check_branch(0, results);
+        self.emit(Op::Return);
         self.reachable = false;
     }
 
-    /// Emit a conditional branch to the label at the given depth.
-    fn emit_br_if(&mut self, depth: u32) {
-        let label_index = self.label_index(depth);
-
-        // br_if to function-level block: conditional branch to End.
-        if label_index == 0 {
-            let arity = self.labels[0].arity();
-            let stack_depth = self.labels[0].stack_depth();
-            if let Label::Block { fixups, .. } = &mut self.labels[label_index] {
-                let pos = self.ops.len();
-                fixups.push(Fixup::Branch(pos));
-                self.emit(Op::BrIf {
-                    target: 0,
-                    arity,
-                    stack_depth,
-                });
-            }
-            return;
+    fn emit_br(&mut self, depth: u32) {
+        if self.label_index(depth) == 0 {
+            return self.emit_return();
         }
-
-        let arity = self.labels[label_index].arity();
-        let stack_depth = self.labels[label_index].stack_depth();
-
-        match &mut self.labels[label_index] {
-            Label::Loop { start, .. } => {
-                let target = *start;
-                self.emit(Op::BrIf {
-                    target,
-                    arity,
-                    stack_depth,
-                });
-            }
-            Label::Block { fixups, .. } => {
-                let pos = self.ops.len();
-                fixups.push(Fixup::Branch(pos));
-                self.emit(Op::BrIf {
-                    target: 0,
-                    arity,
-                    stack_depth,
-                });
-            }
-        }
+        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()));
+        self.emit(Op::Br {
+            target: pc,
+            arity,
+            stack_depth,
+        });
+        self.reachable = false;
     }
 
-    /// Emit a table branch (br_table).
-    fn emit_br_table(&mut self, labels: &[u32], default: u32) {
-        let label_indices: Vec<usize> = labels.iter().map(|depth| self.label_index(*depth)).collect();
-        let default_index = self.label_index(default);
-        let resolve = |label_index: usize, ctx: &Self| -> BrTarget {
-            let arity = ctx.labels[label_index].arity();
-            let stack_depth = ctx.labels[label_index].stack_depth();
-            let pc = match &ctx.labels[label_index] {
-                Label::Loop { start, .. } => *start,
-                Label::Block { .. } => 0, // patched later
-            };
-            BrTarget { pc, arity, stack_depth }
-        };
-
-        let targets: Vec<BrTarget> = label_indices.iter().map(|index| resolve(*index, self)).collect();
-        let default_target = resolve(default_index, self);
-
-        let pos = self.ops.len();
-
-        // Record fixups for forward (Block) targets
-        for (i, label_index) in label_indices.into_iter().enumerate() {
-            if let Label::Block { fixups, .. } = &mut self.labels[label_index] {
-                fixups.push(Fixup::TableEntry {
-                    op_pos: pos,
-                    index: Some(i),
-                });
-            }
-        }
-        {
-            if let Label::Block { fixups, .. } = &mut self.labels[default_index] {
-                fixups.push(Fixup::TableEntry {
-                    op_pos: pos,
-                    index: None,
-                });
-            }
-        }
-
-        self.ops.push(Op::BrTable {
-            targets,
-            default: default_target,
+    fn emit_br_if(&mut self, depth: u32) {
+        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()));
+        self.emit(Op::BrIf {
+            target: pc,
+            arity,
+            stack_depth,
         });
-        // br_table pops an i32 index
-        self.adjust_depth(-1);
+    }
+
+    fn emit_br_table(&mut self, labels: &[u32], default: u32) {
+        let op_pos = self.ops.len();
+        let targets = labels
+            .iter()
+            .enumerate()
+            .map(|(i, depth)| self.branch_target(*depth, Fixup::TableEntry { op_pos, index: Some(i) }))
+            .collect();
+        let default = self.branch_target(default, Fixup::TableEntry { op_pos, index: None });
+        self.emit(Op::BrTable { targets, default });
         self.reachable = false;
     }
 }
@@ -1161,11 +1249,42 @@ mod tests {
         wat::parse(source).expect("WAT parse failed").into_inner().unwrap()
     }
 
+    /// The plain instruction at `index` in a body, for editing.
+    fn plain_mut(body: &mut [StructuredInstruction], index: usize) -> &mut Instruction {
+        match &mut body[index] {
+            StructuredInstruction::Plain(instruction) => instruction,
+            other => panic!("expected a plain instruction, got {other:?}"),
+        }
+    }
+
+    /// The body of the block at `index`, for editing.
+    fn block_mut(body: &mut [StructuredInstruction], index: usize) -> &mut Vec<StructuredInstruction> {
+        match &mut body[index] {
+            StructuredInstruction::Block { body, .. } => body,
+            other => panic!("expected a block, got {other:?}"),
+        }
+    }
+
     fn compile_error(module: &Module) -> String {
         match compile_module(module) {
             Err(RuntimeError::Compile(what)) => what,
             other => panic!("expected a compile error, got {other:?}"),
         }
+    }
+
+    fn compile_first_func(source: &str) -> CompiledFunction {
+        let module = wat::parse(source).expect("WAT parse failed");
+        compile_module(&module).expect("compile failed").remove(0)
+    }
+
+    /// The function's ops, one numbered line each.
+    fn listing(source: &str) -> String {
+        let cf = compile_first_func(source);
+        cf.ops
+            .iter()
+            .enumerate()
+            .map(|(i, op)| format!("{i}: {op}\n"))
+            .collect()
     }
 
     #[test]
@@ -1175,10 +1294,7 @@ mod tests {
         assert_eq!(compile_error(&module), "unknown function type 9");
 
         let mut module = editable("(module (func (call 0)))");
-        let StructuredInstruction::Plain(call) = &mut module.code.code[0].body.body[0] else {
-            panic!("expected a plain call");
-        };
-        call.kind = InstructionKind::Call { func_idx: 9 };
+        plain_mut(&mut module.code.code[0].body.body, 0).kind = InstructionKind::Call { func_idx: 9 };
         assert_eq!(compile_error(&module), "unknown function 9");
 
         // `i32.add` with nothing beneath it.
@@ -1187,144 +1303,177 @@ mod tests {
         assert_eq!(compile_error(&module), "operand stack underflow");
     }
 
-    /// Helper: parse WAT, extract first function, compile it.
-    fn compile_first_func(source: &str) -> CompiledFunction {
-        let module = wat::parse(source).expect("WAT parse failed");
-        let func_sigs = build_func_sigs(&module).unwrap();
-        let func = &module.code.code[0];
-        let ftype_idx = module.functions.functions[0].ftype_index;
-        let ftype = module.types.get(ftype_idx).expect("function type not found");
-        compile(
-            &func.body,
-            ftype.parameters.len() as u32,
-            &func.locals,
-            &module.types.types,
-            &func_sigs,
-        )
-        .expect("compile failed")
+    #[test]
+    fn operand_types_that_disagree_with_validation_are_rejected() {
+        let mut module = editable("(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))");
+        plain_mut(&mut module.code.code[0].body.body, 1).kind = InstructionKind::I64Const { value: 2 };
+        assert_eq!(compile_error(&module), "expected I32 operand, found I64");
+
+        let mut module = editable("(module (func (result i32) (block (result i32) (i32.const 1))))");
+        let block = block_mut(&mut module.code.code[0].body.body, 0);
+        plain_mut(block, 0).kind = InstructionKind::F32Const { value: 1.0 };
+        assert_eq!(compile_error(&module), "block end has [F32], expected [I32]");
     }
 
     #[test]
-    fn compile_noop_loop() {
-        let cf = compile_first_func(include_str!("../../benches/modules/noop_loop.wat"));
-        println!("{cf}");
+    fn branch_operands_that_disagree_with_validation_are_rejected() {
+        let mut module = editable("(module (func (result i32) (block (result i32) (br 0 (i32.const 1)))))");
+        let block = block_mut(&mut module.code.code[0].body.body, 0);
+        plain_mut(block, 0).kind = InstructionKind::I64Const { value: 1 };
+        assert_eq!(compile_error(&module), "branch carries [I64], label expects [I32]");
 
-        assert!(matches!(cf.ops.last().unwrap(), Op::End));
-
-        let has_backward_br = cf
-            .ops
-            .iter()
-            .enumerate()
-            .any(|(i, op)| matches!(op, Op::Br { target, .. } if (*target as usize) < i));
-        assert!(has_backward_br, "loop should have a backward branch");
-    }
-
-    #[test]
-    fn compile_fib_iterative() {
-        let cf = compile_first_func(include_str!("../../benches/modules/fib_iterative.wat"));
-        println!("{cf}");
-
-        assert_eq!(cf.param_count, 1);
-        assert_eq!(cf.result_count, 1);
-        assert_eq!(cf.local_count(), 5);
-        assert!(matches!(cf.ops.last().unwrap(), Op::End));
-    }
-
-    #[test]
-    fn compile_block_br() {
-        let cf = compile_first_func("(module (func (block (br 0))))");
-        println!("{cf}");
-
-        let br_pos = cf.ops.iter().position(|op| matches!(op, Op::Br { .. })).unwrap();
-        if let Op::Br { target, .. } = &cf.ops[br_pos] {
-            assert!(*target as usize > br_pos, "block br should jump forward");
-        }
-    }
-
-    #[test]
-    fn compile_loop_br() {
-        let cf = compile_first_func("(module (func (loop (br 0))))");
-        println!("{cf}");
-
-        let br_pos = cf.ops.iter().position(|op| matches!(op, Op::Br { .. })).unwrap();
-        if let Op::Br { target, .. } = &cf.ops[br_pos] {
-            assert!(
-                (*target as usize) <= br_pos,
-                "loop br should jump backward or self-loop"
-            );
-        }
-    }
-
-    #[test]
-    fn compile_if_then() {
-        let cf = compile_first_func("(module (func (param i32) (if (local.get 0) (then (nop)))))");
-        println!("{cf}");
-
-        assert!(cf.ops.iter().any(|op| matches!(op, Op::I32Eqz)));
-        assert!(cf.ops.iter().any(|op| matches!(op, Op::BrIf { .. })));
-    }
-
-    #[test]
-    fn compile_if_then_else() {
-        let cf = compile_first_func(
-            "(module (func (param i32) (result i32)
-                (if (result i32) (local.get 0)
-                    (then (i32.const 1))
-                    (else (i32.const 2)))))",
-        );
-        println!("{cf}");
-
-        let consts: Vec<_> = cf
-            .ops
-            .iter()
-            .filter_map(|op| if let Op::I32Const(v) = op { Some(*v) } else { None })
-            .collect();
-        assert!(consts.contains(&1));
-        assert!(consts.contains(&2));
-    }
-
-    #[test]
-    fn compile_return_from_if() {
-        let cf = compile_first_func(
-            "(module (func (param i32) (result i32)
-                (if (i32.eqz (local.get 0))
-                    (then (return (i32.const 0))))
-                (i32.const 1)))",
-        );
-        println!("{cf}");
-
-        assert!(cf.ops.iter().any(|op| matches!(op, Op::Return)));
-    }
-
-    #[test]
-    fn compile_block_result_arity() {
-        // Block with result -- br should carry arity=1
-        let cf = compile_first_func(
+        // br_if keeps its operand beneath the condition; remove the operand.
+        let mut module = editable(
             "(module (func (result i32)
-                (block (result i32)
-                    (i32.const 42)
-                    (br 0))))",
+               (block (result i32) (br_if 0 (i32.const 1) (i32.const 1)))))",
         );
-        println!("{cf}");
+        block_mut(&mut module.code.code[0].body.body, 0).remove(0);
+        assert_eq!(compile_error(&module), "branch needs [I32] above depth 0");
 
-        let br = cf.ops.iter().find(|op| matches!(op, Op::Br { .. })).unwrap();
-        if let Op::Br { arity, .. } = br {
-            assert_eq!(*arity, 1, "block result branch should have arity 1");
-        }
+        let mut module = editable("(module (func (result i32) (return (i32.const 1))))");
+        plain_mut(&mut module.code.code[0].body.body, 0).kind = InstructionKind::F32Const { value: 1.0 };
+        assert_eq!(compile_error(&module), "branch carries [F32], label expects [I32]");
     }
 
     #[test]
-    fn compile_br_table() {
-        let cf = compile_first_func(
-            "(module (func (param i32) (result i32)
-                (block $a (result i32)
-                    (block $b (result i32)
-                        (i32.const 10)
-                        (local.get 0)
-                        (br_table 0 1 0)))))",
+    fn max_stack_slots_is_the_deepest_point_counting_v128_as_two() {
+        let slots = |source: &str| compile_first_func(source).max_stack_slots;
+        assert_eq!(
+            slots("(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))"),
+            2
         );
-        println!("{cf}");
+        assert_eq!(
+            slots("(module (func (result v128) (i32x4.add (v128.const i64x2 0 0) (v128.const i64x2 1 1))))"),
+            4
+        );
+        // Across a block and a br_if carrying its result.
+        assert_eq!(
+            slots(
+                "(module (func (param i32) (result i64)
+                   (i64.const 1)
+                   (block (result i64)
+                     (drop (f64.add (f64.const 1) (f64.const 2)))
+                     (br_if 0 (i64.const 2) (local.get 0))
+                     (drop)
+                     (i64.const 3))
+                   (i64.add)))"
+            ),
+            3
+        );
+        // The deeper arm of an if decides.
+        assert_eq!(
+            slots(
+                "(module (func (param i32) (result v128)
+                   (if (result v128) (local.get 0)
+                     (then (v128.const i64x2 0 0))
+                     (else (i8x16.add (v128.const i64x2 0 0) (v128.const i64x2 1 1))))))"
+            ),
+            4
+        );
+        // A loop's v128 parameter stays on the stack beneath its body.
+        assert_eq!(
+            slots(
+                "(module (func (result v128)
+                   (v128.const i64x2 1 1)
+                   (loop (param v128) (result v128)
+                     (i32x4.add (v128.const i64x2 2 2)))))"
+            ),
+            4
+        );
+        // Locals and parameters are not on the operand stack.
+        assert_eq!(slots("(module (func (param v128 v128) (local i64)))"), 0);
+    }
 
-        assert!(cf.ops.iter().any(|op| matches!(op, Op::BrTable { .. })));
+    #[test]
+    fn fib_iterative_frame_and_lowering() {
+        let source = include_str!("../../benches/modules/fib_iterative.wat");
+        let cf = compile_first_func(source);
+        assert_eq!((cf.param_count, cf.result_count, cf.local_count()), (1, 1, 5));
+        assert_eq!(
+            listing(source),
+            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6\n4: i32.const 0\n5: return\n\
+             6: i32.const 0\n7: local.set 1\n8: i32.const 1\n9: local.set 2\n10: i32.const 1\n\
+             11: local.set 4\n12: label (end -> 31)\n13: label (end -> 31)\n14: local.get 4\n\
+             15: local.get 0\n16: i32.ge_u\n17: br_if -> 31\n18: local.get 1\n19: local.get 2\n\
+             20: i32.add\n21: local.set 3\n22: local.get 2\n23: local.set 1\n24: local.get 3\n\
+             25: local.set 2\n26: local.get 4\n27: i32.const 1\n28: i32.add\n29: local.set 4\n\
+             30: br -> 14\n31: local.get 2\n32: end\n"
+        );
+    }
+
+    #[test]
+    fn noop_loop_branches_back_to_the_loop_body() {
+        assert_eq!(
+            listing(include_str!("../../benches/modules/noop_loop.wat")),
+            "0: label (end -> 11)\n1: label (end -> 11)\n2: local.get 1\n3: local.get 0\n\
+             4: i32.ge_u\n5: br_if -> 11\n6: local.get 1\n7: i32.const 1\n8: i32.add\n\
+             9: local.set 1\n10: br -> 2\n11: local.get 1\n12: end\n"
+        );
+    }
+
+    #[test]
+    fn block_branches_forward_and_loop_branches_back() {
+        assert_eq!(
+            listing("(module (func (block (br 0))))"),
+            "0: label (end -> 2)\n1: br -> 2\n2: end\n"
+        );
+        assert_eq!(
+            listing("(module (func (loop (br 0))))"),
+            "0: label (end -> 2)\n1: br -> 1\n2: end\n"
+        );
+    }
+
+    #[test]
+    fn branch_to_a_block_with_a_result_keeps_it() {
+        assert_eq!(
+            listing("(module (func (result i32) (block (result i32) (i32.const 42) (br 0))))"),
+            "0: label (end -> 3)\n1: i32.const 42\n2: br -> 3 (stack 0, keep 1 values)\n3: end\n"
+        );
+    }
+
+    #[test]
+    fn if_skips_its_then_body_on_zero() {
+        assert_eq!(
+            listing("(module (func (param i32) (if (local.get 0) (then (nop)))))"),
+            "0: local.get 0\n1: i32.eqz\n2: br_if -> 4\n3: nop\n4: end\n"
+        );
+        // With an else, the then-body jumps past it carrying the result.
+        assert_eq!(
+            listing(
+                "(module (func (param i32) (result i32)
+                   (if (result i32) (local.get 0) (then (i32.const 1)) (else (i32.const 2)))))"
+            ),
+            "0: local.get 0\n1: i32.eqz\n2: br_if -> 5\n3: i32.const 1\n\
+             4: br -> 6 (stack 0, keep 1 values)\n5: i32.const 2\n6: end\n"
+        );
+    }
+
+    #[test]
+    fn return_inside_an_if_leaves_the_function() {
+        assert_eq!(
+            listing(
+                "(module (func (param i32) (result i32)
+                   (if (i32.eqz (local.get 0)) (then (return (i32.const 0))))
+                   (i32.const 1)))"
+            ),
+            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6\n4: i32.const 0\n5: return\n\
+             6: i32.const 1\n7: end\n"
+        );
+    }
+
+    #[test]
+    fn br_table_entries_resolve_to_their_labels() {
+        assert_eq!(
+            listing(
+                "(module (func (param i32) (result i32)
+                   (block $a (result i32)
+                     (block $b (result i32)
+                       (i32.const 10)
+                       (local.get 0)
+                       (br_table 0 1 0)))))"
+            ),
+            "0: label (end -> 5)\n1: label (end -> 5)\n2: i32.const 10\n3: local.get 0\n\
+             4: br_table [5, 5] default -> 5\n5: end\n"
+        );
     }
 }

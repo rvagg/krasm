@@ -4,8 +4,8 @@
 //! ([`crate::parser::parse`]) and the WAT text parser ([`crate::wat::parse`]).
 //! It contains one section struct per WebAssembly section kind (type, import,
 //! function, table, memory, global, export, start, element, code, data, custom)
-//! plus a lazily built [`ValidationContext`] that caches derived lookups used
-//! during type checking and execution.
+//! plus lazily built [`IndexSpaceTypes`] for resolving indices to types during
+//! validation and compilation.
 
 use std::fmt;
 use std::io;
@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 
 use fhex::ToHex;
 
+use crate::parser::index_spaces::IndexSpaceTypes;
 use crate::parser::instruction::{self, InstructionKind};
 
 /// Checks if a string contains the specific control character sequence that WABT displays as empty.
@@ -72,16 +73,16 @@ pub struct Module {
     pub data_count: DataCountSection,
     pub custom: Vec<CustomSection>,
 
-    /// Cached validation context for efficient lookups during validation
-    /// and streaming decode. Built lazily via `validation_context()`.
-    /// `OnceLock` keeps `Module` `Sync`, so `Arc<Module>` is shareable.
-    pub(crate) validation_context: OnceLock<ValidationContext>,
+    /// Built on first use, which during binary decoding is the code section:
+    /// every section it reads has been decoded by then. `OnceLock` keeps
+    /// `Module` `Sync`, so `Arc<Module>` is shareable.
+    pub(crate) index_space_types: OnceLock<IndexSpaceTypes>,
 }
 
 impl Module {
-    /// Get the cached validation context, building it lazily if needed
-    pub fn validation_context(&self) -> &ValidationContext {
-        self.validation_context.get_or_init(|| self.build_validation_context())
+    /// The types in the function, global and table index spaces.
+    pub fn index_space_types(&self) -> &IndexSpaceTypes {
+        self.index_space_types.get_or_init(|| IndexSpaceTypes::new(self))
     }
 
     /// Finds and formats the export name for a function at the given index.
@@ -2073,7 +2074,7 @@ impl Module {
             data: DataSection::new(),
             data_count: DataCountSection::new(),
             custom: Vec::new(),
-            validation_context: OnceLock::new(),
+            index_space_types: OnceLock::new(),
         }
     }
 }
@@ -2278,95 +2279,5 @@ impl fmt::Display for ValueType {
                 ValueType::ExternRef => "externref",
             }
         )
-    }
-}
-
-/// Pre-computed validation context for efficient lookups during validation
-#[derive(Debug)]
-pub struct ValidationContext {
-    /// Quick check if module has any memory (imported or defined)
-    pub has_memory: bool,
-
-    /// Quick check if module has tables by index
-    pub has_table: Vec<bool>,
-
-    /// Import type indices
-    pub import_func_types: Vec<u32>, // function_idx -> type_idx (for imports only)
-    pub import_global_types: Vec<GlobalType>, // global_idx -> type (for imports only)
-    pub import_table_types: Vec<TableType>,   // table_idx -> type (for imports only)
-
-    /// Counts of imported items
-    pub import_counts: ImportCounts,
-
-    /// Combined function type lookup (imports + defined)
-    pub function_type_indices: Vec<u32>, // function_idx -> type_idx
-
-    /// Cached function names for display
-    pub function_names: std::collections::HashMap<u32, String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ImportCounts {
-    pub functions: u32,
-    pub tables: u32,
-    pub memories: u32,
-    pub globals: u32,
-}
-
-impl Module {
-    /// Build a validation context with pre-computed indices
-    pub fn build_validation_context(&self) -> ValidationContext {
-        // Check if module has memory
-        let has_memory = !self.memory.is_empty() || self.imports.memory_count() > 0;
-
-        // Build table existence vector
-        let total_tables = self.imports.table_count() + self.table.tables.len();
-        let has_table = vec![true; total_tables];
-
-        // Extract import types
-        let mut import_func_types = Vec::new();
-        let mut import_global_types = Vec::new();
-        let mut import_table_types = Vec::new();
-
-        for import in &self.imports.imports {
-            match &import.external_kind {
-                ExternalKind::Function(type_idx) => {
-                    import_func_types.push(*type_idx);
-                }
-                ExternalKind::Global(global_type) => {
-                    import_global_types.push(*global_type);
-                }
-                ExternalKind::Table(table_type) => {
-                    import_table_types.push(*table_type);
-                }
-                _ => {}
-            }
-        }
-
-        // Count imports
-        let import_counts = ImportCounts {
-            functions: import_func_types.len() as u32,
-            tables: import_table_types.len() as u32,
-            memories: self.imports.memory_count() as u32,
-            globals: import_global_types.len() as u32,
-        };
-
-        // Build combined function type indices (imports + defined)
-        let mut function_type_indices = import_func_types.clone();
-        function_type_indices.extend(self.functions.functions.iter().map(|f| f.ftype_index));
-
-        // Cache function names (simplified for now)
-        let function_names = std::collections::HashMap::new();
-
-        ValidationContext {
-            has_memory,
-            has_table,
-            import_func_types,
-            import_global_types,
-            import_table_types,
-            import_counts,
-            function_type_indices,
-            function_names,
-        }
     }
 }

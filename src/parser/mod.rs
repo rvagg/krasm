@@ -9,6 +9,7 @@
 //! returns a fully decoded `Module`.
 
 pub(crate) mod encoding;
+pub mod index_spaces;
 pub mod instruction;
 pub(crate) mod limits;
 pub mod module;
