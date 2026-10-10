@@ -1391,9 +1391,14 @@ impl Executor {
             // Stack: [dest_addr, src_offset, length]
             MemoryInit { data_idx } => {
                 let memory = &mut resources.memories[self.resolve_memory_idx()?];
+                let length = self.stack.pop_i32()?;
+                let src_offset = self.stack.pop_i32()?;
+                let dest_addr = self.stack.pop_i32()?;
                 ops::memory::memory_init(
-                    &mut self.stack,
                     memory,
+                    dest_addr,
+                    src_offset,
+                    length,
                     *data_idx,
                     &self.module.data.data,
                     &segments.dropped_data,

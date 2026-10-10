@@ -37,13 +37,14 @@ src/wast/                .wast spec test support
 src/runtime/             Interpreter and host integration
   store.rs               Store, global addresses, cross-module calls, host funcs
   instance.rs            Module instantiation and resource address maps
-  executor.rs            Primary structured interpreter; resumable external calls
-  bytecode.rs            Experimental flat bytecode representation
-  compiler.rs            Structured tree -> flat bytecode compiler
-  flat_executor.rs       Experimental flat bytecode executor
+  flat_executor/         Default engine: untagged stack of 64-bit words; resumable external calls
+  bytecode.rs            Flat bytecode ops; depths, arities and locals counted in words
+  compiler.rs            Structured tree -> flat bytecode, type-checked against validation
+  executor.rs            Structured interpreter on tagged values; the differential reference
   imports.rs             Import resolution
   memory.rs/table.rs     Linear memory and tables
-  ops/                   Instruction implementations by category
+  ops/                   Pure instruction implementations shared by both engines
+  trap.rs                One-byte Trap that operations return
   wasi/                  WASI preview1 plus AssemblyScript env.abort
 
 src/encoder.rs           Module -> .wasm binary encoder
@@ -57,8 +58,10 @@ fuzz/                    cargo-fuzz targets and dictionaries
 ## Current Status
 - WebAssembly 2.0 binary parser, WAT parser, encoder, interpreter, disassembler, and CLI.
 - 427+ instructions implemented, including all 236 SIMD instructions.
-- Native `.wast` runner passes 148 spec files: 90 core + 58 SIMD, pinned to `wg-2.0` (2025-08-28).
-- Test inventory: 877 unit tests, 82 encoder tests, 148 dump tests, 148 wast tests, 23 WASI tests, 20 doctests.
+- Native `.wast` runner passes 148 spec files (90 core + 58 SIMD, pinned to `wg-2.0`, 2025-08-28)
+  and 6 regression files, each on both engines.
+- Test inventory: 940 unit tests, 82 encoder tests, 148 dump tests, 308 wast runs, 46 WASI tests,
+  7 host-boundary tests, 2 validation tests, 14 doctests.
 - WASI preview1: 46 imports registered; implemented calls plus NOSYS stubs where appropriate.
 - AssemblyScript support: `env.abort` with UTF-16 string extraction.
 - No external `wat` crate dependency; use `krasm::wat::parse()`.
@@ -89,8 +92,12 @@ RUST_BACKTRACE=1 cargo test <pattern>
 1. Add the opcode to `InstructionKind` in `src/parser/instruction/mod.rs`.
 2. Decode it in `src/parser/instruction/decode.rs`.
 3. Encode it in `src/parser/instruction/encode.rs` if it must round-trip.
-4. Execute it in `src/runtime/executor.rs` or the relevant `src/runtime/ops/*.rs`.
-5. Add focused tests, then run `./check.sh`.
+4. Give it a signature in `src/parser/instruction/signature.rs`: `fixed_signature`, or
+   `context_signature` when its types come from an immediate. Validation and the compiler share it.
+5. Implement it as a pure function in `src/runtime/ops/*.rs`, returning `Result<_, Trap>` if it traps.
+6. Wire both engines: an arm in `src/runtime/executor.rs`, and an `Op` in `bytecode.rs` lowered in
+   `compiler.rs` and dispatched in `flat_executor/mod.rs`.
+7. Add focused tests, then run `./check.sh`.
 
 ## Test Infrastructure
 - `tests/wast_tests.rs`: native `.wast` runner for assertions, traps, invalid/malformed/unlinkable/uninstantiable/exhaustion cases.

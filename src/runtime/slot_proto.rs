@@ -2,7 +2,7 @@
 //!
 //! Untagged 8-byte slots, the stack pointer, frame pointer and program counter
 //! held in locals, pure operations inlined into each arm, and stack capacity
-//! checked once per call from `max_stack_slots`. It runs only modules without
+//! checked once per call from `max_stack_words`. It runs only modules without
 //! imports, using integer operations, locals, branches and direct calls, all
 //! of whose values occupy one slot.
 //!
@@ -131,9 +131,9 @@ unsafe fn put_i64(p: *mut u64, v: i64) {
 #[inline(always)]
 unsafe fn enter(func: &CompiledFunction, fp: *mut u64, end: *mut u64) -> Result<*mut u64, RuntimeError> {
     unsafe {
-        let params = func.param_count as usize;
-        let locals = func.local_defaults.len();
-        if (end.offset_from(fp) as usize) < params + locals + func.max_stack_slots as usize {
+        let params = func.param_words as usize;
+        let locals = (func.local_words - func.param_words) as usize;
+        if (end.offset_from(fp) as usize) < params + locals + func.max_stack_words as usize {
             return Err(RuntimeError::CallStackOverflow);
         }
         // Every supported local type's zero is all-zero bits.
@@ -157,7 +157,7 @@ unsafe fn run(
         let mut ops = funcs[func].ops.as_slice();
         let mut pc = 0usize;
         let mut fp = start;
-        if args.len() != funcs[func].param_count as usize {
+        if args.len() != funcs[func].param_words as usize {
             return Err(RuntimeError::Trap("slot prototype: wrong argument count".into()));
         }
         fp.copy_from_nonoverlapping(args.as_ptr(), args.len());
@@ -297,14 +297,14 @@ unsafe fn run(
                     });
                     func = *func_idx as usize;
                     let callee = &funcs[func];
-                    fp = sp.sub(callee.param_count as usize);
+                    fp = sp.sub(callee.param_words as usize);
                     base = enter(callee, fp, end)?;
                     sp = base;
                     ops = callee.ops.as_slice();
                     pc = 0;
                 }
                 Op::Return | Op::End => {
-                    let results = funcs[func].result_count as usize;
+                    let results = funcs[func].result_words as usize;
                     fp.copy_from(sp.sub(results), results);
                     sp = fp.add(results);
                     let Some(caller) = frames.pop() else {

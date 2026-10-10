@@ -4,8 +4,11 @@
 //! function compiles to a `CompiledFunction` containing a `Vec<Op>` that the
 //! flat executor (`flat_executor.rs`) walks with a program counter. Branch
 //! targets are absolute indices into the bytecode array.
+//!
+//! Operands live in 64-bit words: a `v128` takes two, every other value one.
+//! Stack depths, branch arities and local indices all count words, and ops
+//! whose operand width depends on its type come in a `V128` variant.
 
-use super::value::Value;
 use crate::parser::instruction::MemArg;
 use crate::parser::module::ValueType;
 use std::fmt;
@@ -16,9 +19,10 @@ use std::fmt;
 pub struct BrTarget {
     /// Absolute index in the bytecode array.
     pub pc: u32,
-    /// Number of values to keep across the branch.
+    /// Words to keep across the branch.
     pub arity: u16,
-    /// Stack depth to restore to (below the kept values).
+    /// Word depth, above the frame's operand base, to restore to below the
+    /// kept words.
     pub stack_depth: u32,
 }
 
@@ -426,6 +430,7 @@ pub enum Op {
     I32GeU,
 
     // -- Local variables --
+    // `index` is the local's first word in the frame.
     /// Push the value of local `index` onto the stack.
     LocalGet {
         index: u32,
@@ -436,6 +441,15 @@ pub enum Op {
     },
     /// Copy top of stack into local `index` (value stays on stack).
     LocalTee {
+        index: u32,
+    },
+    LocalGetV128 {
+        index: u32,
+    },
+    LocalSetV128 {
+        index: u32,
+    },
+    LocalTeeV128 {
         index: u32,
     },
 
@@ -530,8 +544,8 @@ pub enum Op {
 
     // -- Control flow --
     // Branch ops carry stack cleanup metadata: `arity` is the number of
-    // values to keep (block results or loop params), `stack_depth` is
-    // the stack depth to restore to before pushing kept values back.
+    // words to keep (block results or loop params), `stack_depth` is the
+    // word depth to restore to before pushing kept words back.
     // For branches that don't cross block boundaries (e.g. compiler-internal
     // skip-then jumps), arity=0 and the cleanup is a no-op.
     /// Unconditional jump to `target` (absolute index in bytecode).
@@ -588,10 +602,12 @@ pub enum Op {
 
     /// Drop top of stack.
     Drop,
+    DropV128,
     /// Pop an i32 condition and two values; push the first if the condition
     /// is non-zero, the second otherwise. Typed and untyped select compile
-    /// to the same op (the type annotation is validation-only).
+    /// to the same op, or `SelectV128` for vectors.
     Select,
+    SelectV128,
 
     // -- References --
     /// Push a null reference of the given type (FuncRef or ExternRef).
@@ -643,35 +659,25 @@ pub enum Op {
 pub struct CompiledFunction {
     /// The flat bytecode for this function.
     pub ops: Vec<Op>,
-    /// Typed zero values for the declared (non-parameter) locals, expanded
-    /// at compile time. The executor copies these when building a frame, so
-    /// an untouched local reads as the correct type's zero, per spec.
-    pub local_defaults: Vec<Value>,
-    /// Number of parameters (first N locals).
-    pub param_count: u16,
-    /// Number of return values.
-    pub result_count: u16,
-    /// Most operand-stack slots the function's own operands occupy at once:
-    /// a `v128` takes two, every other value one.
-    pub max_stack_slots: u32,
-}
-
-impl CompiledFunction {
-    /// Total locals: parameters plus declared locals.
-    pub fn local_count(&self) -> usize {
-        self.param_count as usize + self.local_defaults.len()
-    }
+    /// Result types, for reading the entry function's results back out.
+    pub result_types: Box<[ValueType]>,
+    /// Words the parameters occupy: the first locals.
+    pub param_words: u32,
+    /// Words all locals occupy, parameters included. Declared locals start
+    /// as all-zero words, which is every type's zero.
+    pub local_words: u32,
+    /// Words the results occupy.
+    pub result_words: u32,
+    /// Most operand-stack words the function's own operands occupy at once.
+    pub max_stack_words: u32,
 }
 
 impl fmt::Display for CompiledFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "CompiledFunction(params={}, locals={}, results={}, max_stack_slots={})",
-            self.param_count,
-            self.local_defaults.len(),
-            self.result_count,
-            self.max_stack_slots,
+            "CompiledFunction(param_words={}, local_words={}, result_words={}, max_stack_words={})",
+            self.param_words, self.local_words, self.result_words, self.max_stack_words,
         )?;
         for (i, op) in self.ops.iter().enumerate() {
             writeln!(f, "  {i:4}: {op}")?;
@@ -1041,6 +1047,7 @@ impl fmt::Display for Op {
             Op::F32x4ReplaceLane(lane) => write!(f, "f32x4.replace_lane {lane}"),
             Op::F64x2ReplaceLane(lane) => write!(f, "f64x2.replace_lane {lane}"),
             Op::Select => write!(f, "select"),
+            Op::SelectV128 => write!(f, "select.v128"),
             Op::RefNull(t) => write!(f, "ref.null {t}"),
             Op::RefIsNull => write!(f, "ref.is_null"),
             Op::RefFunc { func_idx } => write!(f, "ref.func {func_idx}"),
@@ -1068,6 +1075,9 @@ impl fmt::Display for Op {
             Op::LocalGet { index } => write!(f, "local.get {index}"),
             Op::LocalSet { index } => write!(f, "local.set {index}"),
             Op::LocalTee { index } => write!(f, "local.tee {index}"),
+            Op::LocalGetV128 { index } => write!(f, "local.get.v128 {index}"),
+            Op::LocalSetV128 { index } => write!(f, "local.set.v128 {index}"),
+            Op::LocalTeeV128 { index } => write!(f, "local.tee.v128 {index}"),
             Op::GlobalGet { index } => write!(f, "global.get {index}"),
             Op::GlobalSet { index } => write!(f, "global.set {index}"),
             Op::I32Load(m) => write!(f, "i32.load offset={}", m.offset),
@@ -1177,6 +1187,7 @@ impl fmt::Display for Op {
             Op::Label { end_target } => write!(f, "label (end -> {end_target})"),
             Op::Unreachable => write!(f, "unreachable"),
             Op::Drop => write!(f, "drop"),
+            Op::DropV128 => write!(f, "drop.v128"),
         }
     }
 }

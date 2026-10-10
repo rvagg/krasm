@@ -303,18 +303,17 @@ pub fn memory_grow(memory: &mut Memory, delta: i32) -> i32 {
 /// spec: 4.4.7.12
 /// [i32 i32 i32] → []
 ///
-/// Stack: [dest_addr, src_offset, length]
 /// Copies length bytes from data segment at src_offset to memory at dest_addr
 pub fn memory_init(
-    stack: &mut Stack,
     memory: &mut Memory,
+    dest_addr: i32,
+    src_offset: i32,
+    length: i32,
     data_idx: u32,
     data_segments: &[crate::parser::module::Data],
     dropped_data: &std::collections::HashSet<u32>,
 ) -> Result<(), RuntimeError> {
-    let length = stack.pop_i32()? as u32;
-    let src_offset = stack.pop_i32()? as u32;
-    let dest_addr = stack.pop_i32()? as u32;
+    let (dest_addr, src_offset, length) = (dest_addr as u32, src_offset as u32, length as u32);
 
     // A dropped segment acts as an empty segment
     let effective_len = if dropped_data.contains(&data_idx) {

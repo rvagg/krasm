@@ -792,33 +792,23 @@ fn local_tee() {
 }
 
 #[test]
-fn local_tee_errors_clear_operand_stack() {
+fn traps_clear_the_stack() {
     let mut executor = FlatExecutor::new();
     let valid = compile_wat("(module (func (result i32) i32.const 9))");
-    for has_values in [false, true] {
-        let mut ops = Vec::new();
-        if has_values {
-            ops.extend([Op::I32Const(9), Op::I32Const(42)]);
-        }
-        ops.push(Op::LocalTee { index: 1 });
-        let funcs = [CompiledFunction {
-            ops,
-            local_defaults: vec![Value::I32(0)],
-            param_count: 0,
-            result_count: 0,
-            max_stack_slots: 2,
-        }];
-        let error = executor.invoke(&funcs, 0, &[], None).unwrap_err();
-        if has_values {
-            assert!(matches!(error, RuntimeError::LocalIndexOutOfBounds(1)));
-        } else {
-            assert!(matches!(error, RuntimeError::StackUnderflow));
-        }
-        assert_eq!(executor.stack.len(), 0);
+    // Operands and locals are live when the division traps.
+    let trapping = compile_wat(
+        "(module (func (result i32) (local i64)
+           i32.const 1 i32.const 2 i32.const 0 i32.div_u i32.add))",
+    );
+    for _ in 0..2 {
+        let error = executor.invoke(&trapping, 0, &[], None).unwrap_err();
+        assert!(matches!(error, RuntimeError::DivisionByZero));
+        assert_eq!(executor.sp, 0);
         assert_eq!(
             expect_complete(executor.invoke(&valid, 0, &[], None).unwrap()),
             vec![Value::I32(9)]
         );
+        assert_eq!(executor.sp, 0);
     }
 }
 
@@ -1308,7 +1298,7 @@ fn resume_without_suspension_traps() {
 }
 
 #[test]
-fn resume_with_wrong_result_count_traps() {
+fn resume_with_wrong_results_traps() {
     let funcs = compile_wat(
         "(module
             (import \"env\" \"get\" (func $get (result i32)))
@@ -1338,14 +1328,15 @@ fn resume_with_wrong_result_count_traps() {
     let outcome = executor.invoke(&funcs, 0, &[], Some(&mut ctx)).expect("invoke failed");
     expect_external_call(outcome);
 
-    // The import declares one result; resuming with two must trap
-    let err = executor
-        .resume_with_results(&funcs, vec![Value::I32(1), Value::I32(2)], Some(&mut ctx))
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("returned 2 values, expected 1"),
-        "unexpected error: {err}"
-    );
+    // The import declares one i32; resuming with two values, or with a
+    // wider one, must trap rather than corrupt the stack.
+    for results in [vec![Value::I32(1), Value::I32(2)], vec![Value::V128([0; 16])]] {
+        let err = executor
+            .resume_with_results(&funcs, results, Some(&mut ctx))
+            .unwrap_err();
+        assert!(err.to_string().contains("expected [I32]"), "unexpected error: {err}");
+        expect_external_call(executor.invoke(&funcs, 0, &[], Some(&mut ctx)).expect("invoke failed"));
+    }
 }
 
 #[test]

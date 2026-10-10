@@ -15,14 +15,14 @@
 //! Branch ops carry stack cleanup metadata (arity + stack_depth) so the flat
 //! executor can properly handle multi-value blocks without a runtime label
 //! stack. The compiler tracks the operand types during emission, as
-//! validation does, to compute these values and each function's maximum
-//! stack size. It checks each instruction's operands against those types, so
-//! any disagreement with validation fails compilation instead of producing
+//! validation does, to compute these values in words, each function's
+//! maximum stack size, and the word width of `drop`, `select` and locals.
+//! It checks each instruction's operands against those types, so any
+//! disagreement with validation fails compilation instead of producing
 //! bytecode that relies on a false assumption.
 
 use super::RuntimeError;
 use super::bytecode::{BrTarget, CompiledFunction, Op};
-use super::imports::default_value_for_type;
 use crate::parser::instruction::signature::{Signature, context_signature, fixed_signature};
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
@@ -53,8 +53,10 @@ enum Fixup {
 struct Label<'a> {
     target: LabelTarget,
     stack_depth: u32,
-    /// Its length fits a branch op's `u16` arity: `open_label` checks it.
     types: &'a [ValueType],
+    /// `stack_depth` and the words `types` occupy, as branch ops count them.
+    word_depth: u32,
+    word_arity: u16,
 }
 
 enum LabelTarget {
@@ -78,9 +80,14 @@ fn count(len: usize) -> Result<u16> {
     u16::try_from(len).map_err(|_| invalid(format!("{len} values exceed the supported count")))
 }
 
-/// Operand-stack slots a value occupies: a `v128` takes two, everything else one.
-pub fn slot_width(value_type: ValueType) -> u32 {
+/// Operand-stack words a value occupies: a `v128` takes two, everything else one.
+pub fn value_words(value_type: ValueType) -> u32 {
     if value_type == ValueType::V128 { 2 } else { 1 }
+}
+
+/// Words a sequence of values occupies.
+fn words_of(types: &[ValueType]) -> u32 {
+    types.iter().map(|value_type| value_words(*value_type)).sum()
 }
 
 /// Compile all local functions in a module to flat bytecode.
@@ -118,14 +125,23 @@ pub fn compile<'a>(
     locals: &Locals,
     module: &'a Module,
 ) -> Result<CompiledFunction> {
+    let locals = locals.types(&ftype.parameters);
+    let local_offsets = (locals.iter())
+        .scan(0, |next, value_type| {
+            let first = *next;
+            *next += value_words(*value_type);
+            Some(first)
+        })
+        .collect();
     let mut ctx = CompileContext {
         ops: Vec::new(),
         labels: Vec::new(),
         stack: Vec::new(),
-        slots: 0,
-        max_slots: 0,
+        words: 0,
+        max_words: 0,
         reachable: true,
-        locals: locals.types(&ftype.parameters),
+        locals,
+        local_offsets,
         module,
     };
 
@@ -139,17 +155,13 @@ pub fn compile<'a>(
     ctx.close_label();
     ctx.ops.push(Op::End);
 
-    // One typed zero per declared local, so frame initialisation is a plain copy.
-    let local_defaults = ctx.locals[ftype.parameters.len()..]
-        .iter()
-        .map(|value_type| default_value_for_type(*value_type))
-        .collect();
     Ok(CompiledFunction {
         ops: ctx.ops,
-        local_defaults,
-        param_count: count(ftype.parameters.len())?,
-        result_count: count(ftype.return_types.len())?,
-        max_stack_slots: ctx.max_slots,
+        result_types: ftype.return_types.clone().into_boxed_slice(),
+        param_words: words_of(&ftype.parameters),
+        local_words: words_of(&ctx.locals),
+        result_words: words_of(&ftype.return_types),
+        max_stack_words: ctx.max_words,
     })
 }
 
@@ -159,9 +171,9 @@ struct CompileContext<'a> {
     labels: Vec<Label<'a>>,
     /// Types of the operand stack's values, top last. Its length is the depth.
     stack: Vec<ValueType>,
-    /// Slots the operand stack occupies, and the most it reaches.
-    slots: u32,
-    max_slots: u32,
+    /// Words the operand stack occupies, and the most it reaches.
+    words: u32,
+    max_words: u32,
     /// False after an unconditional transfer (br, br_table, return,
     /// unreachable) until the enclosing block ends. Dead code is skipped
     /// entirely: validation allows it to be stack-polymorphic, so tracking
@@ -169,6 +181,8 @@ struct CompileContext<'a> {
     reachable: bool,
     /// Parameter then declared local types, by local index.
     locals: Vec<ValueType>,
+    /// Each local's first word in the frame, by local index.
+    local_offsets: Vec<u32>,
     /// Block and callee signatures, and function, global and table types.
     module: &'a Module,
 }
@@ -181,8 +195,8 @@ impl<'a> CompileContext<'a> {
 
     fn push(&mut self, value_type: ValueType) {
         self.stack.push(value_type);
-        self.slots += slot_width(value_type);
-        self.max_slots = self.max_slots.max(self.slots);
+        self.words += value_words(value_type);
+        self.max_words = self.max_words.max(self.words);
     }
 
     /// The depth the innermost label unwinds to. Operands beneath it belong
@@ -220,7 +234,7 @@ impl<'a> CompileContext<'a> {
     fn truncate(&mut self, depth: u32) {
         let depth = self.stack.len().min(depth as usize);
         for value_type in self.stack.drain(depth..) {
-            self.slots -= slot_width(value_type);
+            self.words -= value_words(value_type);
         }
     }
 
@@ -304,6 +318,11 @@ impl<'a> CompileContext<'a> {
         }
     }
 
+    /// A local's first word and its type. Typing has already checked the index.
+    fn local(&self, index: u32) -> (u32, ValueType) {
+        (self.local_offsets[index as usize], self.locals[index as usize])
+    }
+
     /// Index into `labels` of the label `depth` levels out from the innermost.
     fn label_index(&self, depth: u32) -> Result<usize> {
         (self.labels.len().checked_sub(1 + depth as usize)).ok_or_else(|| invalid(format!("unknown label {depth}")))
@@ -348,11 +367,13 @@ impl<'a> CompileContext<'a> {
 
     /// Push a label, checking its arity fits in a branch op.
     fn open_label(&mut self, target: LabelTarget, stack_depth: u32, types: &'a [ValueType]) -> Result {
-        count(types.len())?;
+        let word_arity = count(words_of(types) as usize)?;
         self.labels.push(Label {
             target,
             stack_depth,
             types,
+            word_depth: words_of(&self.stack[..stack_depth as usize]),
+            word_arity,
         });
         Ok(())
     }
@@ -449,7 +470,7 @@ impl<'a> CompileContext<'a> {
                 let skip_then = self.emit(Op::BrIf {
                     target: 0,
                     arity: 0,
-                    stack_depth: self.depth(),
+                    stack_depth: self.words,
                 });
                 self.open_label(LabelTarget::End(Vec::new()), sd, results)?;
                 self.emit_body(then_branch)?;
@@ -459,10 +480,11 @@ impl<'a> CompileContext<'a> {
 
                 if let Some(else_body) = else_branch {
                     // The then-body jumps past the else, carrying the results.
+                    let label = &self.labels[self.labels.len() - 1];
                     let skip_else = self.emit(Op::Br {
                         target: 0,
-                        arity: results.len() as u16,
-                        stack_depth: sd,
+                        arity: label.word_arity,
+                        stack_depth: label.word_depth,
                     });
                     if let Some(Label {
                         target: LabelTarget::End(fixups),
@@ -493,6 +515,7 @@ impl<'a> CompileContext<'a> {
 
     /// Emit a plain (non-control-flow-structure) instruction.
     fn emit_plain(&mut self, inst: &'a Instruction) -> Result {
+        let dropped = self.stack.last().copied();
         self.apply_types(&inst.kind)?;
         match &inst.kind {
             InstructionKind::I32Const { value } => self.op(Op::I32Const(*value)),
@@ -850,15 +873,18 @@ impl<'a> CompileContext<'a> {
             InstructionKind::I32GeS => self.op(Op::I32GeS),
             InstructionKind::I32GeU => self.op(Op::I32GeU),
 
-            InstructionKind::LocalGet { local_idx } => {
-                self.emit(Op::LocalGet { index: *local_idx });
-            }
-            InstructionKind::LocalSet { local_idx } => {
-                self.emit(Op::LocalSet { index: *local_idx });
-            }
-            InstructionKind::LocalTee { local_idx } => {
-                self.emit(Op::LocalTee { index: *local_idx });
-            }
+            InstructionKind::LocalGet { local_idx } => self.op(match self.local(*local_idx) {
+                (index, ValueType::V128) => Op::LocalGetV128 { index },
+                (index, _) => Op::LocalGet { index },
+            }),
+            InstructionKind::LocalSet { local_idx } => self.op(match self.local(*local_idx) {
+                (index, ValueType::V128) => Op::LocalSetV128 { index },
+                (index, _) => Op::LocalSet { index },
+            }),
+            InstructionKind::LocalTee { local_idx } => self.op(match self.local(*local_idx) {
+                (index, ValueType::V128) => Op::LocalTeeV128 { index },
+                (index, _) => Op::LocalTee { index },
+            }),
 
             InstructionKind::GlobalGet { global_idx } => {
                 self.emit(Op::GlobalGet { index: *global_idx });
@@ -1003,9 +1029,15 @@ impl<'a> CompileContext<'a> {
                 self.op(Op::Unreachable);
                 self.reachable = false;
             }
-            InstructionKind::Drop => self.op(Op::Drop),
-            InstructionKind::Select => self.op(Op::Select),
-            InstructionKind::SelectTyped { .. } => self.op(Op::Select),
+            InstructionKind::Drop => self.op(match dropped {
+                Some(ValueType::V128) => Op::DropV128,
+                _ => Op::Drop,
+            }),
+            // The result, now on top, has the type of both operands.
+            InstructionKind::Select | InstructionKind::SelectTyped { .. } => self.op(match self.stack.last() {
+                Some(ValueType::V128) => Op::SelectV128,
+                _ => Op::Select,
+            }),
             InstructionKind::RefNull { ref_type } => self.op(Op::RefNull(*ref_type)),
             InstructionKind::RefIsNull => self.op(Op::RefIsNull),
             InstructionKind::RefFunc { func_idx } => self.op(Op::RefFunc { func_idx: *func_idx }),
@@ -1039,7 +1071,13 @@ impl<'a> CompileContext<'a> {
     /// record `fixup` if its target is still unknown, and return the target.
     fn branch_target(&mut self, depth: u32, fixup: Fixup) -> Result<BrTarget> {
         let index = self.label_index(depth)?;
-        let (stack_depth, types) = (self.labels[index].stack_depth, self.labels[index].types);
+        let Label {
+            stack_depth,
+            types,
+            word_depth,
+            word_arity,
+            ..
+        } = self.labels[index];
         self.check_branch(stack_depth, types)?;
         let pc = match &mut self.labels[index].target {
             LabelTarget::Start(start) => *start,
@@ -1050,8 +1088,8 @@ impl<'a> CompileContext<'a> {
         };
         Ok(BrTarget {
             pc,
-            arity: types.len() as u16,
-            stack_depth,
+            arity: word_arity,
+            stack_depth: word_depth,
         })
     }
 
@@ -1213,19 +1251,19 @@ mod tests {
     }
 
     #[test]
-    fn max_stack_slots_is_the_deepest_point_counting_v128_as_two() {
-        let slots = |source: &str| compile_first_func(source).max_stack_slots;
+    fn max_stack_words_is_the_deepest_point_counting_v128_as_two() {
+        let words = |source: &str| compile_first_func(source).max_stack_words;
         assert_eq!(
-            slots("(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))"),
+            words("(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))"),
             2
         );
         assert_eq!(
-            slots("(module (func (result v128) (i32x4.add (v128.const i64x2 0 0) (v128.const i64x2 1 1))))"),
+            words("(module (func (result v128) (i32x4.add (v128.const i64x2 0 0) (v128.const i64x2 1 1))))"),
             4
         );
         // Across a block and a br_if carrying its result.
         assert_eq!(
-            slots(
+            words(
                 "(module (func (param i32) (result i64)
                    (i64.const 1)
                    (block (result i64)
@@ -1239,7 +1277,7 @@ mod tests {
         );
         // The deeper arm of an if decides.
         assert_eq!(
-            slots(
+            words(
                 "(module (func (param i32) (result v128)
                    (if (result v128) (local.get 0)
                      (then (v128.const i64x2 0 0))
@@ -1249,7 +1287,7 @@ mod tests {
         );
         // A loop's v128 parameter stays on the stack beneath its body.
         assert_eq!(
-            slots(
+            words(
                 "(module (func (result v128)
                    (v128.const i64x2 1 1)
                    (loop (param v128) (result v128)
@@ -1258,14 +1296,14 @@ mod tests {
             4
         );
         // Locals and parameters are not on the operand stack.
-        assert_eq!(slots("(module (func (param v128 v128) (local i64)))"), 0);
+        assert_eq!(words("(module (func (param v128 v128) (local i64)))"), 0);
     }
 
     #[test]
     fn fib_iterative_frame_and_lowering() {
         let source = include_str!("../../benches/modules/fib_iterative.wat");
         let cf = compile_first_func(source);
-        assert_eq!((cf.param_count, cf.result_count, cf.local_count()), (1, 1, 5));
+        assert_eq!((cf.param_words, cf.result_words, cf.local_words), (1, 1, 5));
         assert_eq!(
             listing(source),
             "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6\n4: i32.const 0\n5: return\n\
