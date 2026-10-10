@@ -56,9 +56,9 @@
 //! The call stack enables arbitrarily deep cross-module chains (A -> B -> C -> ...)
 //! where each module can perform computation before/after its external calls.
 
-use super::imports::{global_value_type, is_global_mutable};
 use super::{EngineKind, ExecutionOutcome, Instance, Memory, RuntimeError, Table, Value};
-use crate::parser::module::{ExportIndex, ExternalKind, FunctionType, Limits};
+use crate::parser::ValidatedModule;
+use crate::parser::module::{ExportIndex, ExternalKind, FunctionType, GlobalType, Limits};
 use std::sync::Arc;
 
 /// Nested external calls allowed in one execution, such as instances calling
@@ -243,6 +243,10 @@ pub struct Store<T = ()> {
     /// All runtime resources (memories, tables, globals) owned directly
     pub(super) resources: Resources,
 
+    /// Type and mutability of each global, indexed by GlobalAddr. Values in
+    /// `resources.globals` keep this type; validation guarantees Wasm writes do.
+    global_types: Vec<GlobalType>,
+
     /// Embedder-defined user data, accessible via `Caller<T>` in host functions
     data: T,
 
@@ -256,6 +260,7 @@ impl Default for Store<()> {
             functions: Vec::new(),
             instances: Vec::new(),
             resources: Resources::new(),
+            global_types: Vec::new(),
             data: (),
             engine: EngineKind::default(),
         }
@@ -280,6 +285,7 @@ impl<T> Store<T> {
             functions: Vec::new(),
             instances: Vec::new(),
             resources: Resources::new(),
+            global_types: Vec::new(),
             data,
             engine: EngineKind::default(),
         }
@@ -392,13 +398,22 @@ impl<T> Store<T> {
         self.resources.tables.get(addr.0)
     }
 
-    /// Allocate a new global in the Store
+    /// Allocate a new global in the Store, typed by its initial value.
     ///
     /// Returns the GlobalAddr that can be used to reference this global.
-    pub fn allocate_global(&mut self, value: Value) -> GlobalAddr {
+    pub fn allocate_global(&mut self, value: Value, mutable: bool) -> GlobalAddr {
         let addr = GlobalAddr(self.resources.globals.len());
         self.resources.globals.push(value);
+        self.global_types.push(GlobalType {
+            value_type: value.typ(),
+            mutable,
+        });
         addr
+    }
+
+    /// Get a global's type by its address.
+    pub fn global_type(&self, addr: GlobalAddr) -> Option<GlobalType> {
+        self.global_types.get(addr.0).copied()
     }
 
     /// Get a global value by its address.
@@ -408,14 +423,19 @@ impl<T> Store<T> {
         self.resources.globals.get(addr.0).copied()
     }
 
-    /// Set a global value by its address.
+    /// Set a mutable global's value by its address.
     ///
-    /// Returns `None` if `addr` does not correspond to an allocated global.
-    /// Does not check mutability — callers are responsible for that.
-    pub fn set_global(&mut self, addr: GlobalAddr, value: Value) -> Option<()> {
-        let slot = self.resources.globals.get_mut(addr.0)?;
-        *slot = value;
-        Some(())
+    /// The value must have the global's type.
+    pub fn set_global(&mut self, addr: GlobalAddr, value: Value) -> Result<(), RuntimeError> {
+        let global_type = self
+            .global_type(addr)
+            .ok_or(RuntimeError::GlobalIndexOutOfBounds(addr.0 as u32))?;
+        if !global_type.mutable {
+            return Err(RuntimeError::Trap("global is immutable".to_string()));
+        }
+        super::check_values(&[value], &[global_type.value_type], "value")?;
+        self.resources.globals[addr.0] = value;
+        Ok(())
     }
 
     /// Create and register a new instance in the Store
@@ -424,9 +444,10 @@ impl<T> Store<T> {
     /// the instance. Returns the instance ID.
     pub fn create_instance(
         &mut self,
-        module: Arc<crate::parser::module::Module>,
+        module: &ValidatedModule,
         imports: Option<&super::ImportObject>,
     ) -> Result<usize, RuntimeError> {
+        let module = Arc::clone(module.shared());
         let instance_id = self.instances.len();
 
         let (memory_addresses, table_addresses, global_addresses) = self.resolve_resources(&module, imports)?;
@@ -578,17 +599,16 @@ impl<T> Store<T> {
                 let import_obj = imports
                     .ok_or_else(|| RuntimeError::UnknownFunction(format!("{}.{}", import.module, import.name)))?;
                 let global_addr = import_obj.get_global_addr(&import.module, &import.name)?;
-                import_obj.validate_global(
-                    &import.module,
-                    &import.name,
-                    global_type.value_type,
-                    global_type.mutable,
-                )?;
-
-                // Verify the global exists in the store
-                if self.resources.globals.get(global_addr.0).is_none() {
-                    return Err(RuntimeError::Trap(format!(
+                // Imported globals match only exactly: same value type and mutability.
+                let actual = self.global_type(global_addr).ok_or_else(|| {
+                    RuntimeError::Trap(format!(
                         "global import {}.{} not found in store",
+                        import.module, import.name
+                    ))
+                })?;
+                if actual != *global_type {
+                    return Err(RuntimeError::IncompatibleImportType(format!(
+                        "{}.{}",
                         import.module, import.name
                     )));
                 }
@@ -599,7 +619,7 @@ impl<T> Store<T> {
 
         for global in &module.globals.globals {
             let default_value = super::imports::default_value_for_type(global.global_type.value_type);
-            let addr = self.allocate_global(default_value);
+            let addr = self.allocate_global(default_value, global.global_type.mutable);
             addresses.push(addr);
         }
 
@@ -905,12 +925,9 @@ impl<T> Store<T> {
                         imports.add_function(as_name, &export.name, addr);
                     }
                 }
-                ExportIndex::Global(global_idx) => {
+                ExportIndex::Global(_) => {
                     if let Ok(addr) = instance.get_global_addr(&export.name) {
-                        let mutable = is_global_mutable(module, global_idx).unwrap_or(false);
-                        let vtype =
-                            global_value_type(module, global_idx).unwrap_or(crate::parser::module::ValueType::I32);
-                        imports.add_global(as_name, &export.name, addr, vtype, mutable);
+                        imports.add_global(as_name, &export.name, addr);
                     }
                 }
                 ExportIndex::Memory(_) => {
@@ -941,7 +958,6 @@ mod tests {
     use crate::parser::structure_builder::StructureBuilder;
     use crate::parser::structured::StructuredFunction;
     use crate::runtime::ImportObject;
-    use std::sync::Arc;
 
     #[test]
     fn store_new_is_empty() {
@@ -978,11 +994,70 @@ mod tests {
     #[test]
     fn store_allocate_global() {
         let mut store = Store::new();
-        let addr = store.allocate_global(Value::I32(42));
+        let addr = store.allocate_global(Value::I32(42), true);
         assert_eq!(store.get_global(addr), Some(Value::I32(42)));
+        assert_eq!(
+            store.global_type(addr),
+            Some(GlobalType {
+                value_type: ValueType::I32,
+                mutable: true
+            })
+        );
 
-        store.set_global(addr, Value::I32(99));
+        store.set_global(addr, Value::I32(99)).unwrap();
         assert_eq!(store.get_global(addr), Some(Value::I32(99)));
+    }
+
+    #[test]
+    fn store_set_global_keeps_type_and_mutability() {
+        let mut store = Store::new();
+        let mutable = store.allocate_global(Value::I32(1), true);
+        let constant = store.allocate_global(Value::I32(2), false);
+
+        assert!(matches!(
+            store.set_global(mutable, Value::I64(3)),
+            Err(RuntimeError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            store.set_global(constant, Value::I32(3)),
+            Err(RuntimeError::Trap(_))
+        ));
+        assert!(matches!(
+            store.set_global(GlobalAddr(9), Value::I32(3)),
+            Err(RuntimeError::GlobalIndexOutOfBounds(9))
+        ));
+        assert_eq!(store.get_global(mutable), Some(Value::I32(1)));
+        assert_eq!(store.get_global(constant), Some(Value::I32(2)));
+    }
+
+    #[test]
+    fn global_imports_match_the_stored_type() {
+        let mut store = Store::new();
+        let f64_constant = store.allocate_global(Value::F64(1.5), false);
+        let i32_mutable = store.allocate_global(Value::I32(1), true);
+        let mut imports = ImportObject::new();
+        imports.add_global("env", "f64_constant", f64_constant);
+        imports.add_global("env", "i32_mutable", i32_mutable);
+
+        let instantiate =
+            |store: &mut Store, wat: &str| store.create_instance(&crate::wat::parse(wat).unwrap(), Some(&imports));
+        for wat in [
+            r#"(module (import "env" "f64_constant" (global i32)))"#,
+            r#"(module (import "env" "f64_constant" (global (mut f64))))"#,
+            r#"(module (import "env" "i32_mutable" (global i32)))"#,
+        ] {
+            let error = instantiate(&mut store, wat).unwrap_err();
+            assert!(
+                matches!(error, RuntimeError::IncompatibleImportType(_)),
+                "{wat}: {error:?}"
+            );
+        }
+        instantiate(&mut store, r#"(module (import "env" "f64_constant" (global f64)))"#).unwrap();
+        instantiate(
+            &mut store,
+            r#"(module (import "env" "i32_mutable" (global (mut i32))))"#,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1131,7 +1206,7 @@ mod tests {
 
         // Module imports (i32) -> i32 — should match
         let module = module_with_function_import("env", "add_one", 0, vec![ValueType::I32], vec![ValueType::I32]);
-        let result = store.create_instance(Arc::new(module), Some(&imports));
+        let result = store.create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports));
         assert!(result.is_ok(), "Expected instantiation to succeed");
     }
 
@@ -1154,7 +1229,7 @@ mod tests {
 
         // Module expects i64, but host provides i32 — parameter type mismatch
         let module = module_with_function_import("env", "my_func", 0, vec![ValueType::I64], vec![ValueType::I32]);
-        let result = store.create_instance(Arc::new(module), Some(&imports));
+        let result = store.create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports));
         assert!(result.is_err(), "Expected instantiation to fail");
 
         let err = result.unwrap_err();
@@ -1193,7 +1268,7 @@ mod tests {
 
         // Module expects i64 return, but host returns i32
         let module = module_with_function_import("env", "get_value", 0, vec![], vec![ValueType::I64]);
-        let result = store.create_instance(Arc::new(module), Some(&imports));
+        let result = store.create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports));
         assert!(result.is_err(), "Expected instantiation to fail");
 
         let err = result.unwrap_err();
@@ -1223,7 +1298,7 @@ mod tests {
 
         // Module expects (i32) -> i32 — different arity
         let module = module_with_function_import("env", "binary_op", 0, vec![ValueType::I32], vec![ValueType::I32]);
-        let result = store.create_instance(Arc::new(module), Some(&imports));
+        let result = store.create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports));
         assert!(result.is_err(), "Expected instantiation to fail");
 
         let err = result.unwrap_err();
@@ -1438,7 +1513,7 @@ mod tests {
 
         let module = module_calling_import("host", "get_value", "call_host");
         let instance_id = store
-            .create_instance(Arc::new(module), Some(&imports))
+            .create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports))
             .expect("Instance creation should succeed");
 
         let result = store
@@ -1454,7 +1529,9 @@ mod tests {
 
         // Module B: exports "get_value" returning 100
         let module_b = module_returning_constant(100, "get_value");
-        let instance_b = store.create_instance(Arc::new(module_b), None).unwrap();
+        let instance_b = store
+            .create_instance(&ValidatedModule::new(module_b).unwrap(), None)
+            .unwrap();
         let func_addr_b = store
             .get_instance(instance_b)
             .unwrap()
@@ -1465,7 +1542,9 @@ mod tests {
         let mut imports_a = ImportObject::new();
         imports_a.add_function("module_b", "get_value", func_addr_b);
         let module_a = module_calling_import("module_b", "get_value", "call_b");
-        let instance_a = store.create_instance(Arc::new(module_a), Some(&imports_a)).unwrap();
+        let instance_a = store
+            .create_instance(&ValidatedModule::new(module_a).unwrap(), Some(&imports_a))
+            .unwrap();
 
         let result = store
             .invoke_export(instance_a, "call_b", vec![], None)
@@ -1481,7 +1560,9 @@ mod tests {
 
         // Module C: returns 999
         let module_c = module_returning_constant(999, "get_value");
-        let instance_c = store.create_instance(Arc::new(module_c), None).unwrap();
+        let instance_c = store
+            .create_instance(&ValidatedModule::new(module_c).unwrap(), None)
+            .unwrap();
         let func_addr_c = store
             .get_instance(instance_c)
             .unwrap()
@@ -1492,7 +1573,9 @@ mod tests {
         let mut imports_b = ImportObject::new();
         imports_b.add_function("module_c", "get_value", func_addr_c);
         let module_b = module_calling_import("module_c", "get_value", "call_c");
-        let instance_b = store.create_instance(Arc::new(module_b), Some(&imports_b)).unwrap();
+        let instance_b = store
+            .create_instance(&ValidatedModule::new(module_b).unwrap(), Some(&imports_b))
+            .unwrap();
         let func_addr_b = store
             .get_instance(instance_b)
             .unwrap()
@@ -1503,7 +1586,9 @@ mod tests {
         let mut imports_a = ImportObject::new();
         imports_a.add_function("module_b", "call_c", func_addr_b);
         let module_a = module_calling_import("module_b", "call_c", "call_chain");
-        let instance_a = store.create_instance(Arc::new(module_a), Some(&imports_a)).unwrap();
+        let instance_a = store
+            .create_instance(&ValidatedModule::new(module_a).unwrap(), Some(&imports_a))
+            .unwrap();
 
         let result = store
             .invoke_export(instance_a, "call_chain", vec![], None)
@@ -1520,7 +1605,9 @@ mod tests {
 
         // Module C: returns 10
         let module_c = module_returning_constant(10, "get_value");
-        let instance_c = store.create_instance(Arc::new(module_c), None).unwrap();
+        let instance_c = store
+            .create_instance(&ValidatedModule::new(module_c).unwrap(), None)
+            .unwrap();
         let func_addr_c = store
             .get_instance(instance_c)
             .unwrap()
@@ -1531,7 +1618,9 @@ mod tests {
         let mut imports_b = ImportObject::new();
         imports_b.add_function("module_c", "get_value", func_addr_c);
         let module_b = module_calling_import_and_add("module_c", "get_value", 100, "call_c");
-        let instance_b = store.create_instance(Arc::new(module_b), Some(&imports_b)).unwrap();
+        let instance_b = store
+            .create_instance(&ValidatedModule::new(module_b).unwrap(), Some(&imports_b))
+            .unwrap();
         let func_addr_b = store
             .get_instance(instance_b)
             .unwrap()
@@ -1542,7 +1631,9 @@ mod tests {
         let mut imports_a = ImportObject::new();
         imports_a.add_function("module_b", "call_c", func_addr_b);
         let module_a = module_calling_import_and_add("module_b", "call_c", 1000, "call_chain");
-        let instance_a = store.create_instance(Arc::new(module_a), Some(&imports_a)).unwrap();
+        let instance_a = store
+            .create_instance(&ValidatedModule::new(module_a).unwrap(), Some(&imports_a))
+            .unwrap();
 
         // Expected: 10 + 100 + 1000 = 1110
         let result = store
@@ -1575,7 +1666,9 @@ mod tests {
         let mut imports_b = ImportObject::new();
         imports_b.add_function("host", "get_value", host_addr);
         let module_b = module_calling_import("host", "get_value", "call_host");
-        let instance_b = store.create_instance(Arc::new(module_b), Some(&imports_b)).unwrap();
+        let instance_b = store
+            .create_instance(&ValidatedModule::new(module_b).unwrap(), Some(&imports_b))
+            .unwrap();
         let func_addr_b = store
             .get_instance(instance_b)
             .unwrap()
@@ -1586,7 +1679,9 @@ mod tests {
         let mut imports_a = ImportObject::new();
         imports_a.add_function("module_b", "call_host", func_addr_b);
         let module_a = module_calling_import("module_b", "call_host", "start_chain");
-        let instance_a = store.create_instance(Arc::new(module_a), Some(&imports_a)).unwrap();
+        let instance_a = store
+            .create_instance(&ValidatedModule::new(module_a).unwrap(), Some(&imports_a))
+            .unwrap();
 
         // A -> B -> Host chain
         let result = store
@@ -1701,9 +1796,7 @@ mod tests {
         let module = crate::wat::parse(wat).expect("WAT parse failed");
         let mut store = Store::new();
         store.set_engine(EngineKind::Flat);
-        let id = store
-            .create_instance(Arc::new(module), imports)
-            .expect("instantiation failed");
+        let id = store.create_instance(&module, imports).expect("instantiation failed");
         (store, id)
     }
 
@@ -1787,7 +1880,7 @@ mod tests {
                     (call $tick) (call $tick) (i32.const 7)))",
         )
         .unwrap();
-        let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+        let id = store.create_instance(&module, Some(&imports)).unwrap();
         assert!(matches!(
             store.invoke_export(id, "run", vec![], Some(1)),
             Err(RuntimeError::InstructionBudgetExhausted)
@@ -1819,7 +1912,7 @@ mod tests {
         )
         .expect("WAT parse failed");
         let id = store
-            .create_instance(Arc::new(module), Some(&imports))
+            .create_instance(&module, Some(&imports))
             .expect("instantiation failed");
 
         let result = store.invoke_export(id, "run", vec![Value::I32(21)], None);
@@ -1835,7 +1928,7 @@ mod tests {
 
         let callee = crate::wat::parse("(module (func (export \"ten\") (result i32) (i32.const 10)))")
             .expect("WAT parse failed");
-        let callee_id = store.create_instance(Arc::new(callee), None).unwrap();
+        let callee_id = store.create_instance(&callee, None).unwrap();
         let ten_addr = store.get_instance(callee_id).unwrap().get_function_addr("ten").unwrap();
 
         store.set_engine(EngineKind::Flat);
@@ -1848,7 +1941,7 @@ mod tests {
                     (i32.add (call $ten) (i32.const 100))))",
         )
         .expect("WAT parse failed");
-        let caller_id = store.create_instance(Arc::new(caller), Some(&imports)).unwrap();
+        let caller_id = store.create_instance(&caller, Some(&imports)).unwrap();
 
         assert!(matches!(
             store.invoke_export(caller_id, "run", vec![], Some(1)),
@@ -1872,7 +1965,7 @@ mod tests {
                         (i64.add (local.get 0) (i64.const 2))))",
             )
             .unwrap();
-            let provider_id = store.create_instance(Arc::new(provider), None).unwrap();
+            let provider_id = store.create_instance(&provider, None).unwrap();
             let mut imports = ImportObject::new();
             store.register_exports(provider_id, "env", &mut imports).unwrap();
             let increment = store.wrap(|x: i32| x + 1);
@@ -1892,7 +1985,7 @@ mod tests {
                         (call_indirect (type $unary) (i32.const 30) (i32.const 0))))",
             )
             .unwrap();
-            let id = store.create_instance(Arc::new(consumer), Some(&imports)).unwrap();
+            let id = store.create_instance(&consumer, Some(&imports)).unwrap();
             assert_eq!(
                 store.invoke_export(id, "direct", vec![], None).unwrap(),
                 vec![Value::I32(11), Value::I64(22)]
@@ -1932,7 +2025,7 @@ mod tests {
                         (i32.add (call $advance (i32.const 20)) (i32.const 1))))",
             )
             .unwrap();
-            let provider_id = store.create_instance(Arc::new(provider), Some(&imports)).unwrap();
+            let provider_id = store.create_instance(&provider, Some(&imports)).unwrap();
             store.register_exports(provider_id, "provider", &mut imports).unwrap();
             store.set_engine(engine);
             let consumer = crate::wat::parse(
@@ -1954,7 +2047,7 @@ mod tests {
                         (i32.load (i32.const 0)) (i32.load (i32.const 4))))",
             )
             .unwrap();
-            let id = store.create_instance(Arc::new(consumer), Some(&imports)).unwrap();
+            let id = store.create_instance(&consumer, Some(&imports)).unwrap();
             assert_eq!(
                 store.invoke_export(id, "read", vec![], None).unwrap(),
                 vec![Value::I32(10), Value::I32(128)]
@@ -1993,7 +2086,7 @@ mod tests {
                     (start $boot))",
             )
             .unwrap();
-            let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+            let id = store.create_instance(&module, Some(&imports)).unwrap();
             let memory = store.get_instance(id).unwrap().get_memory_addr("memory").unwrap();
             assert_eq!(*store.data(), 9);
             assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 42);
@@ -2031,23 +2124,21 @@ mod tests {
                             (i32.add (i32.load (i32.const 4)) (i32.const 1)))))",
             )
             .unwrap();
-            let provider_id = store.create_instance(Arc::new(provider), Some(&imports)).unwrap();
+            let provider_id = store.create_instance(&provider, Some(&imports)).unwrap();
             store.register_exports(provider_id, "provider", &mut imports).unwrap();
             let provider = store.get_instance(provider_id).unwrap();
             let memory = provider.get_memory_addr("memory").unwrap();
             let divisor = provider.get_global_addr("divisor").unwrap();
             store.set_engine(engine);
-            let consumer = Arc::new(
-                crate::wat::parse(
-                    "(module
+            let consumer = crate::wat::parse(
+                "(module
                         (import \"provider\" \"boot\" (func $boot))
                         (memory (export \"memory\") 1)
                         (data (i32.const 0) \"\\ff\")
                         (start $boot))",
-                )
-                .unwrap(),
-            );
-            let id = store.create_instance(Arc::clone(&consumer), Some(&imports)).unwrap();
+            )
+            .unwrap();
+            let id = store.create_instance(&consumer, Some(&imports)).unwrap();
             let consumer_memory = store.get_instance(id).unwrap().get_memory_addr("memory").unwrap();
             assert_eq!(store.get_memory(consumer_memory).unwrap().read_u32(0).unwrap(), 255);
             assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 1);
@@ -2055,7 +2146,7 @@ mod tests {
 
             store.set_global(divisor, Value::I32(0)).unwrap();
             assert!(matches!(
-                store.create_instance(Arc::clone(&consumer), Some(&imports)),
+                store.create_instance(&consumer, Some(&imports)),
                 Err(RuntimeError::DivisionByZero)
             ));
             assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 2);
@@ -2064,14 +2155,14 @@ mod tests {
             store.set_global(divisor, Value::I32(1)).unwrap();
             *store.data_mut() = true;
             assert!(matches!(
-                store.create_instance(Arc::clone(&consumer), Some(&imports)),
+                store.create_instance(&consumer, Some(&imports)),
                 Err(RuntimeError::Trap(_))
             ));
             assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 3);
             assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 1);
 
             *store.data_mut() = false;
-            store.create_instance(consumer, Some(&imports)).unwrap();
+            store.create_instance(&consumer, Some(&imports)).unwrap();
             assert_eq!(store.get_memory(memory).unwrap().read_u32(0).unwrap(), 4);
             assert_eq!(store.get_memory(memory).unwrap().read_u32(4).unwrap(), 2);
         }
@@ -2079,9 +2170,8 @@ mod tests {
 
     #[test]
     fn instance_segment_state_survives_start_and_is_isolated() {
-        let module = Arc::new(
-            crate::wat::parse(
-                "(module
+        let module = crate::wat::parse(
+            "(module
                     (type $value (func (result i32)))
                     (memory 1)
                     (table 1 funcref)
@@ -2107,14 +2197,13 @@ mod tests {
                         (data.drop $later)
                         (table.init $later_elem (i32.const 0) (i32.const 0) (i32.const 1))
                         (elem.drop $later_elem)))",
-            )
-            .unwrap(),
-        );
+        )
+        .unwrap();
         for engine in [EngineKind::Structured, EngineKind::Flat] {
             let mut store = Store::new();
             store.set_engine(engine);
-            let first = store.create_instance(Arc::clone(&module), None).unwrap();
-            let second = store.create_instance(Arc::clone(&module), None).unwrap();
+            let first = store.create_instance(&module, None).unwrap();
+            let second = store.create_instance(&module, None).unwrap();
             assert_eq!(
                 store.invoke_export(first, "read", vec![], None).unwrap(),
                 vec![Value::I32(65), Value::I32(7)]

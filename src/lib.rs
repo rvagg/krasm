@@ -11,7 +11,6 @@
 //!
 //! ```
 //! use krasm::{Store, Value};
-//! use std::sync::Arc;
 //!
 //! let module = krasm::wat::parse(r#"
 //!     (module
@@ -22,10 +21,17 @@
 //! "#).unwrap();
 //!
 //! let mut store = Store::new();
-//! let id = store.create_instance(Arc::new(module), None).unwrap();
+//! let id = store.create_instance(&module, None).unwrap();
 //! let result = store.invoke_export(id, "add", vec![Value::I32(2), Value::I32(3)], None).unwrap();
 //! assert_eq!(result, vec![Value::I32(5)]);
 //! ```
+//!
+//! # Validation
+//!
+//! Both parsers validate, returning a [`ValidatedModule`]: the only form
+//! [`Store::create_instance`] accepts. Execution relies on what validation
+//! proves rather than rechecking it per instruction. A [`Module`] built or
+//! edited by hand becomes instantiable through [`ValidatedModule::new`].
 //!
 //! # Host functions
 //!
@@ -33,7 +39,6 @@
 //!
 //! ```
 //! use krasm::{Store, Value, ImportObject};
-//! use std::sync::Arc;
 //!
 //! let mut store = Store::new();
 //! let double = store.wrap(|x: i32| -> i32 { x * 2 });
@@ -50,7 +55,7 @@
 //!             call $double))
 //! "#).unwrap();
 //!
-//! let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+//! let id = store.create_instance(&module, Some(&imports)).unwrap();
 //! let result = store.invoke_export(id, "quad", vec![Value::I32(5)], None).unwrap();
 //! assert_eq!(result, vec![Value::I32(20)]);
 //! ```
@@ -95,6 +100,7 @@ pub use runtime::host::{WasmResult, WasmType};
 
 // Parser types used in public API signatures
 pub use parser::module::{FunctionType, Limits, Module, RefType, ValueType};
+pub use parser::{ValidatedModule, ValidationError};
 
 // Error types
 pub use encoder::EncodeError;
@@ -122,7 +128,7 @@ pub use wat::ParseError;
 ///     .build());
 ///
 /// let mut store = Store::new();
-/// let instance_id = create_wasi_instance(&mut store, Arc::new(module), ctx, true).unwrap();
+/// let instance_id = create_wasi_instance(&mut store, &module, ctx, true).unwrap();
 /// store.invoke_export(instance_id, "_start", vec![], None).unwrap();
 /// ```
 pub mod wasi {

@@ -1397,11 +1397,11 @@ impl FlatExecutor {
 
 /// Execute a compiled function to completion with the given arguments.
 ///
-/// Convenience wrapper over [`FlatExecutor`] for callers with no Store to
-/// dispatch external calls (benchmarks, tests): any external call — an
-/// imported function, directly or via call_indirect, or a foreign table
-/// funcref — is an error here.
-pub fn execute_flat(
+/// Test wrapper over [`FlatExecutor`] with no Store to dispatch external
+/// calls: any external call (an imported function, directly or via
+/// call_indirect, or a foreign table funcref) is an error here.
+#[cfg(test)]
+pub(crate) fn execute_flat(
     funcs: &[CompiledFunction],
     func_idx: usize,
     args: &[Value],

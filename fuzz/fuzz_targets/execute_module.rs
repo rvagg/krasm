@@ -2,9 +2,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use krasm::parser::module::{ExportIndex, Positional, ValueType};
+use krasm::ValidatedModule;
 use krasm::parser::{self, reader::Reader};
 use krasm::runtime::{EngineKind, Store, Value};
 
@@ -79,7 +79,7 @@ fuzz_target!(|data: &[u8]| {
     // Parse the module
     let mut reader = Reader::new(wasm_data.to_vec());
     let mut module = match parser::parse(&HashMap::new(), "fuzz", &mut reader) {
-        Ok(m) => m,
+        Ok(m) => m.into_inner().expect("a freshly parsed module is unshared"),
         Err(_) => return,
     };
 
@@ -100,11 +100,13 @@ fuzz_target!(|data: &[u8]| {
         }
         table.limits.max = Some(table.limits.max.unwrap_or(MAX_TABLE_ELEMENTS).min(MAX_TABLE_ELEMENTS));
     }
-    let module = Arc::new(module);
+    // Tighter limits keep the module valid; the module validator must also
+    // accept everything the binary decoder validated.
+    let module = ValidatedModule::new(module).expect("decoder and module validation agree");
     for engine in [EngineKind::Structured, EngineKind::Flat] {
         let mut store = Store::new();
         store.set_engine(engine);
-        let instance_id = match store.create_instance(Arc::clone(&module), None) {
+        let instance_id = match store.create_instance(&module, None) {
             Ok(id) => id,
             Err(_) => continue,
         };

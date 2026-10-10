@@ -21,6 +21,7 @@
 
 use super::sexpr::{ReadError, SExpr, SExprList};
 use super::token::{FloatLit, Span, TokenKind};
+use crate::parser::ValidatedModule;
 use crate::parser::encoding::{
     ELEM_ACTIVE_EXPRS, ELEM_ACTIVE_FUNCS, ELEM_ACTIVE_TABLE_EXPRS, ELEM_ACTIVE_TABLE_FUNCS, ELEM_DECLARATIVE_EXPRS,
     ELEM_DECLARATIVE_FUNCS, ELEM_PASSIVE_EXPRS, ELEM_PASSIVE_FUNCS,
@@ -493,13 +494,11 @@ impl ParseContext {
 /// assert_eq!(module.functions.len(), 1);
 /// ```
 #[must_use = "parsing result should be checked"]
-pub fn parse(source: &str) -> Result<Module, ParseError> {
+pub fn parse(source: &str) -> Result<ValidatedModule, ParseError> {
     let sexpr = super::sexpr::read(source)?;
     let mut ctx = ParseContext::new();
     parse_module(&sexpr, &mut ctx)?;
-    let module = ctx.into_module();
-    crate::parser::validate::validate_module(&module).map_err(|e| ParseError::new(e.to_string(), Span::ZERO))?;
-    Ok(module)
+    ValidatedModule::new(ctx.into_module()).map_err(|e| ParseError::new(e.to_string(), Span::ZERO))
 }
 
 /// Parses a module from its S-expression.

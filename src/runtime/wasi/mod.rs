@@ -46,7 +46,7 @@ pub use assemblyscript::add_assemblyscript_imports;
 pub use context::{DEFAULT_MAX_FDS, DEFAULT_MAX_IOVECS, FileDescriptor, WasiContext, WasiContextBuilder};
 pub use types::WasiErrno;
 
-use crate::parser::module::Module;
+use crate::parser::ValidatedModule;
 use crate::runtime::store::{Caller, Store};
 use crate::runtime::{ImportObject, Memory, RuntimeError};
 use std::sync::Arc;
@@ -61,7 +61,7 @@ use std::sync::Arc;
 /// # Arguments
 ///
 /// * `store` - The WebAssembly store
-/// * `module` - The parsed WebAssembly module
+/// * `module` - The validated WebAssembly module
 /// * `ctx` - The WASI context (wrapped in Arc for sharing)
 /// * `include_assemblyscript` - Whether to include AssemblyScript's env.abort
 ///
@@ -70,7 +70,7 @@ use std::sync::Arc;
 /// The instance ID on success, or a RuntimeError on failure.
 pub fn create_wasi_instance<T: 'static>(
     store: &mut Store<T>,
-    module: Arc<Module>,
+    module: &ValidatedModule,
     ctx: Arc<WasiContext>,
     include_assemblyscript: bool,
 ) -> Result<usize, RuntimeError> {

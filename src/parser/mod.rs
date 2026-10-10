@@ -17,6 +17,8 @@ pub(crate) mod structure_builder;
 pub mod structured;
 pub(crate) mod validate;
 
+pub use validate::{ValidatedModule, ValidationError};
+
 #[cfg(test)]
 mod utf8_tests;
 
@@ -44,7 +46,7 @@ pub fn parse(
     module_registry: &HashMap<String, module::Module>,
     name: &str,
     bytes: &mut reader::Reader,
-) -> Result<module::Module, instruction::DecodeError> {
+) -> Result<ValidatedModule, instruction::DecodeError> {
     let mut unit = module::Module::new(name);
 
     read_header(bytes, &mut unit.magic, &mut unit.version)?;
@@ -153,7 +155,8 @@ pub fn parse(
         }
     }
 
-    Ok(unit)
+    // Every section and function body was validated as it was decoded.
+    Ok(ValidatedModule::from_validated(unit))
 }
 
 /// Dispatch a single section by ID, delegating to the appropriate section reader.
@@ -991,7 +994,12 @@ impl module::Element {
             bytes.validate_item_count(count)?;
             let mut init: Vec<Vec<instruction::Instruction>> = vec![];
             for _ in 0..count {
-                init.push(instruction::decode_constant_expression(bytes, imports, return_type)?);
+                init.push(instruction::decode_constant_expression_with_ref_func(
+                    bytes,
+                    imports,
+                    return_type,
+                    function_count,
+                )?);
             }
             Ok(init)
         };

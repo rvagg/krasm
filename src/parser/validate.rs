@@ -9,6 +9,11 @@
 //!
 //! Entry point: [`validate_module()`], called automatically by
 //! [`crate::wat::parse()`].
+//!
+//! Validation is the runtime's trust boundary. [`ValidatedModule`] is the only
+//! form a module can be instantiated in, and execution relies on what validation
+//! proves (operand types, stack heights, index bounds) instead of rechecking
+//! them per instruction.
 
 use super::module::{
     DataMode, ElementMode, ExportIndex, ExternalKind, FunctionType, GlobalType, Limits, Module, Positional, RefType,
@@ -17,7 +22,54 @@ use super::module::{
 use super::structured::StructuredInstruction;
 use crate::parser::instruction::{BlockType, ByteRange, Instruction, InstructionKind, SimdOp};
 use MaybeValue::{Unknown, Val};
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
+
+/// A module that passed validation: the form [`Store::create_instance`] accepts.
+///
+/// The parsers produce it directly. A module built or edited by hand becomes
+/// one through [`ValidatedModule::new`]. It is shared and immutable, so what was
+/// validated is what runs; read it through `Deref`, and recover the `Module`
+/// with [`ValidatedModule::into_inner`] to change it and validate it again.
+///
+/// [`Store::create_instance`]: crate::Store::create_instance
+#[derive(Debug, Clone)]
+pub struct ValidatedModule(Arc<Module>);
+
+impl ValidatedModule {
+    /// Validate a module, typically one built or edited by hand.
+    pub fn new(module: Module) -> Result<Self, ValidationError> {
+        validate_module(&module)?;
+        Ok(Self(Arc::new(module)))
+    }
+
+    /// Wrap a module whose producer validated it as it was built.
+    pub(crate) fn from_validated(module: Module) -> Self {
+        Self(Arc::new(module))
+    }
+
+    /// Recover the module for editing, or return `self` while it is shared
+    /// with instances or other handles.
+    pub fn into_inner(self) -> Result<Module, Self> {
+        let mut module = Arc::try_unwrap(self.0).map_err(Self)?;
+        // Edits can invalidate the cached lookups.
+        module.validation_context = OnceLock::new();
+        Ok(module)
+    }
+
+    pub(crate) fn shared(&self) -> &Arc<Module> {
+        &self.0
+    }
+}
+
+impl Deref for ValidatedModule {
+    type Target = Module;
+
+    fn deref(&self) -> &Module {
+        &self.0
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum ValidationError {
@@ -26,6 +78,9 @@ pub enum ValidationError {
 
     #[error("type mismatch")]
     TypeMismatch,
+
+    #[error("function and code section have inconsistent lengths")]
+    FunctionCodeCountMismatch,
 
     #[error("unknown type")]
     UnknownFunctionType,
@@ -1793,6 +1848,10 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
     let total_memories = (module.imports.memory_count() + module.memory.memory.len()) as u32;
     let total_globals = (module.imports.global_count() + module.globals.globals.len()) as u32;
     let total_types = module.types.types.len() as u32;
+
+    if module.functions.len() != module.code.code.len() {
+        return Err(ValidationError::FunctionCodeCountMismatch);
+    }
 
     // Multiple memories are not allowed in WebAssembly 1.0
     if total_memories > 1 {

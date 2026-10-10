@@ -3,11 +3,10 @@
 use krasm::runtime::bytecode::Op;
 use krasm::runtime::imports::ImportObject;
 use krasm::{EngineKind, Store, Value};
-use std::sync::Arc;
 
 fn instantiate(store: &mut Store, source: &str, imports: Option<&ImportObject>) -> usize {
     store
-        .create_instance(Arc::new(krasm::wat::parse(source).unwrap()), imports)
+        .create_instance(&krasm::wat::parse(source).unwrap(), imports)
         .unwrap()
 }
 

@@ -14,8 +14,8 @@ use std::collections::HashMap;
 /// call `Store::instantiate`.
 #[derive(Debug, Clone, Default)]
 pub struct ImportObject {
-    // (module_name, field_name) -> (GlobalAddr, type, mutable)
-    globals: HashMap<(String, String), (GlobalAddr, ValueType, bool)>,
+    // (module_name, field_name) -> GlobalAddr; the Store records its type
+    globals: HashMap<(String, String), GlobalAddr>,
     // (module_name, field_name) -> FuncAddr
     functions: HashMap<(String, String), FuncAddr>,
     // (module_name, field_name) -> MemoryAddr
@@ -71,51 +71,21 @@ impl ImportObject {
             .ok_or_else(|| self.import_error(module, name))
     }
 
-    /// Add a global import with its Store address, type, and mutability
-    pub fn add_global(
-        &mut self,
-        module: impl Into<String>,
-        name: impl Into<String>,
-        addr: GlobalAddr,
-        value_type: ValueType,
-        mutable: bool,
-    ) {
-        self.globals
-            .insert((module.into(), name.into()), (addr, value_type, mutable));
+    /// Add a global import by its Store address
+    pub fn add_global(&mut self, module: impl Into<String>, name: impl Into<String>, addr: GlobalAddr) {
+        self.globals.insert((module.into(), name.into()), addr);
     }
 
     /// Get a global import's address
+    ///
+    /// # Errors
+    /// - `IncompatibleImportType` if the name exists under a different kind
+    /// - `UnknownExport` if the import doesn't exist at all
     pub fn get_global_addr(&self, module: &str, name: &str) -> Result<GlobalAddr, RuntimeError> {
         self.globals
             .get(&(module.to_string(), name.to_string()))
-            .map(|(addr, _, _)| *addr)
+            .copied()
             .ok_or_else(|| self.import_error(module, name))
-    }
-
-    /// Validate that a global import matches expected type and mutability
-    pub fn validate_global(
-        &self,
-        module: &str,
-        name: &str,
-        expected_type: ValueType,
-        expected_mutable: bool,
-    ) -> Result<(), RuntimeError> {
-        if let Some((_, vtype, mutable)) = self.globals.get(&(module.to_string(), name.to_string())) {
-            if *mutable != expected_mutable {
-                return Err(RuntimeError::IncompatibleImportType(format!("{module}.{name}")));
-            }
-            if *vtype != expected_type {
-                return Err(RuntimeError::IncompatibleImportType(format!("{module}.{name}")));
-            }
-            return Ok(());
-        }
-
-        // Import not found — check if it exists under a different kind
-        if self.has_import(module, name) {
-            return Err(RuntimeError::IncompatibleImportType(format!("{module}.{name}")));
-        }
-
-        Err(RuntimeError::UnknownExport(format!("{module}.{name}")))
     }
 
     /// Add a memory import
@@ -239,13 +209,13 @@ mod tests {
         let mut imports = ImportObject::new();
 
         // Add some globals (allocate in store first)
-        let addr1 = store.allocate_global(Value::I32(42));
-        let addr2 = store.allocate_global(Value::F64(3.14));
-        let addr3 = store.allocate_global(Value::I64(100));
+        let addr1 = store.allocate_global(Value::I32(42), false);
+        let addr2 = store.allocate_global(Value::F64(3.14), true);
+        let addr3 = store.allocate_global(Value::I64(100), false);
 
-        imports.add_global("env", "global1", addr1, ValueType::I32, false);
-        imports.add_global("env", "global2", addr2, ValueType::F64, true);
-        imports.add_global("js", "counter", addr3, ValueType::I64, false);
+        imports.add_global("env", "global1", addr1);
+        imports.add_global("env", "global2", addr2);
+        imports.add_global("js", "counter", addr3);
 
         // Retrieve addresses
         assert_eq!(imports.get_global_addr("env", "global1").unwrap(), addr1);

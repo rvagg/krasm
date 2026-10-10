@@ -97,7 +97,7 @@ impl Instance {
                 global_addresses.clone(),
             )?),
             EngineKind::Flat => {
-                let funcs = compile_module(&module);
+                let funcs = compile_module(&module)?;
                 let executor = FlatExecutor::new();
                 #[cfg(feature = "instruction-profile")]
                 let executor = {

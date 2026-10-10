@@ -48,10 +48,10 @@ fn get_export_string_display(name: &str) -> &str {
 
 /// A parsed WebAssembly module.
 ///
-/// Produced by [`parser::parse()`](crate::parser::parse) (binary format) or
-/// [`wat::parse()`](crate::wat::parse) (text format). Passed to
-/// [`Store::create_instance()`](crate::Store::create_instance) wrapped in
-/// `Arc<Module>` for instantiation.
+/// Produced, already validated, by [`parser::parse()`](crate::parser::parse)
+/// (binary format) or [`wat::parse()`](crate::wat::parse) (text format) as a
+/// [`ValidatedModule`](crate::ValidatedModule), which is what
+/// [`Store::create_instance()`](crate::Store::create_instance) accepts.
 #[derive(Debug)]
 pub struct Module {
     pub name: String,

@@ -58,14 +58,14 @@ pub fn create_spectest_module() -> Module {
 pub fn create_spectest_imports<T>(store: &mut Store<T>) -> ImportObject {
     let mut imports = ImportObject::new();
 
-    let g_i32 = store.allocate_global(Value::I32(666));
-    let g_i64 = store.allocate_global(Value::I64(666));
-    let g_f32 = store.allocate_global(Value::F32(666.6));
-    let g_f64 = store.allocate_global(Value::F64(666.6));
-    imports.add_global("spectest", "global_i32", g_i32, ValueType::I32, false);
-    imports.add_global("spectest", "global_i64", g_i64, ValueType::I64, false);
-    imports.add_global("spectest", "global_f32", g_f32, ValueType::F32, false);
-    imports.add_global("spectest", "global_f64", g_f64, ValueType::F64, false);
+    let g_i32 = store.allocate_global(Value::I32(666), false);
+    let g_i64 = store.allocate_global(Value::I64(666), false);
+    let g_f32 = store.allocate_global(Value::F32(666.6), false);
+    let g_f64 = store.allocate_global(Value::F64(666.6), false);
+    imports.add_global("spectest", "global_i32", g_i32);
+    imports.add_global("spectest", "global_i64", g_i64);
+    imports.add_global("spectest", "global_f32", g_f32);
+    imports.add_global("spectest", "global_f64", g_f64);
 
     imports.add_function("spectest", "print", store.wrap(|| {}));
     imports.add_function("spectest", "print_i32", store.wrap(|_: i32| {}));

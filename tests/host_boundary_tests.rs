@@ -6,16 +6,15 @@ use krasm::parser::module::{FunctionType, ValueType};
 use krasm::runtime::store::FunctionInstance;
 use krasm::{EngineKind, ImportObject, RuntimeError, Store, Value};
 use rstest::rstest;
-use std::sync::Arc;
 
 /// Instantiate `provider` (exporting "table"), then `caller` importing it.
 fn link(engine: EngineKind, store: &mut Store, imports: &mut ImportObject, provider: &str, caller: &str) -> usize {
     store.set_engine(engine);
     let provider = krasm::wat::parse(provider).unwrap();
-    let provider_id = store.create_instance(Arc::new(provider), Some(imports)).unwrap();
+    let provider_id = store.create_instance(&provider, Some(imports)).unwrap();
     store.register_exports(provider_id, "provider", imports).unwrap();
     let caller = krasm::wat::parse(caller).unwrap();
-    store.create_instance(Arc::new(caller), Some(imports)).unwrap()
+    store.create_instance(&caller, Some(imports)).unwrap()
 }
 
 const CALLER: &str = r#"(module
@@ -110,7 +109,7 @@ fn host_results_are_checked(#[values(EngineKind::Structured, EngineKind::Flat)] 
           (func (export "call") (result i32) (call $liar)))"#,
     )
     .unwrap();
-    let id = store.create_instance(Arc::new(module), Some(&imports)).unwrap();
+    let id = store.create_instance(&module, Some(&imports)).unwrap();
     let error = store.invoke_export(id, "call", vec![], None).unwrap_err();
     assert!(matches!(error, RuntimeError::TypeMismatch { .. }), "{error:?}");
 }

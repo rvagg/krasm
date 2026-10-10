@@ -17,7 +17,7 @@ fn ftype(params: &[ValueType], results: &[ValueType]) -> FunctionType {
 
 fn compile_wat(source: &str) -> Vec<CompiledFunction> {
     let module = wat::parse(source).expect("WAT parse failed");
-    compiler::compile_module(&module)
+    compiler::compile_module(&module).expect("compile failed")
 }
 
 fn compile_and_run(source: &str, args: &[Value]) -> Vec<Value> {
@@ -1408,7 +1408,12 @@ fn compile_with_metadata(source: &str) -> (Vec<CompiledFunction>, Vec<FunctionTy
         });
     }
 
-    (compiler::compile_module(&module), types, entries, num_imported)
+    (
+        compiler::compile_module(&module).expect("compile failed"),
+        types,
+        entries,
+        num_imported,
+    )
 }
 
 /// A funcref table populated with the given entries (None = null slot).

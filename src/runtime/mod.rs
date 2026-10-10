@@ -4,10 +4,10 @@
 //! [crate-level documentation](crate) for usage examples.
 
 pub mod bytecode;
-pub mod compiler;
+pub(crate) mod compiler;
 pub(crate) mod control;
 pub(crate) mod executor;
-pub mod flat_executor;
+pub(crate) mod flat_executor;
 pub(crate) mod frame;
 pub mod host;
 pub mod imports;
@@ -151,4 +151,7 @@ pub enum RuntimeError {
     },
     #[error("instruction budget exhausted")]
     InstructionBudgetExhausted,
+    /// Compilation met a module inconsistency that validation should reject.
+    #[error("cannot compile module: {0}")]
+    Compile(String),
 }

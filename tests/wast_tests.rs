@@ -1,11 +1,10 @@
 #[cfg(test)]
 mod tests {
     use krasm::wast::*;
-    use krasm::{EngineKind, ImportObject, Module, Store, Value};
+    use krasm::{EngineKind, ImportObject, Module, Store, ValidatedModule, Value};
     use rstest::rstest;
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     /*
      * Native .wast spec test runner.
@@ -46,7 +45,7 @@ mod tests {
         }
 
         /// Parse and validate a WastModule. Both binary and WAT paths perform type-level validation.
-        fn parse_module(&self, wast_module: &WastModule) -> Result<Module, String> {
+        fn parse_module(&self, wast_module: &WastModule) -> Result<ValidatedModule, String> {
             match wast_module {
                 WastModule::Binary(bytes) => {
                     let mut reader = krasm::parser::reader::Reader::new(bytes.clone());
@@ -65,7 +64,7 @@ mod tests {
 
             let instance_id = self
                 .store
-                .create_instance(Arc::new(module), Some(&self.spectest_imports))
+                .create_instance(&module, Some(&self.spectest_imports))
                 .map_err(|e| format!("{e}"))?;
 
             if let Some(n) = name {

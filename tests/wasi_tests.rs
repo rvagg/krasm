@@ -6,13 +6,13 @@ use common::{CapturedWriter, temp_dir};
 use krasm::parser;
 use krasm::parser::reader::Reader;
 use krasm::wasi::{WasiContext, add_assemblyscript_imports, create_wasi_imports};
-use krasm::{EngineKind, Module, Store};
+use krasm::{EngineKind, Store, ValidatedModule};
 use rstest::rstest;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-/// Helper to parse WAT source into a Module
-fn parse_wat(wat: &str) -> Module {
+/// Helper to parse WAT source into a validated module
+fn parse_wat(wat: &str) -> ValidatedModule {
     krasm::wat::parse(wat).expect("Failed to parse WAT")
 }
 
@@ -64,7 +64,7 @@ fn test_hello_wasi(#[case] engine: EngineKind) {
 
     // Create instance
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     // Execute _start
@@ -133,7 +133,7 @@ fn test_fd_read_stdin(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -201,7 +201,7 @@ fn test_args(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -240,7 +240,7 @@ fn test_assemblyscript_hello(#[case] engine: EngineKind) {
     add_assemblyscript_imports(&mut store, &mut imports, ctx.clone());
 
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -279,7 +279,7 @@ fn test_proc_exit(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     // proc_exit should trap
@@ -336,7 +336,7 @@ fn test_multiple_iovecs(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -387,7 +387,7 @@ fn test_fd_read_eof(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -498,7 +498,7 @@ fn test_environ(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -557,7 +557,7 @@ fn test_fd_prestat_returns_badf(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -640,7 +640,7 @@ fn test_preopen_enumerate(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -770,7 +770,7 @@ fn test_path_open_and_read(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -856,7 +856,7 @@ fn test_path_open_write(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -935,7 +935,7 @@ fn test_fd_close_then_read_fails(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -992,7 +992,7 @@ fn test_path_traversal_blocked(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -1045,7 +1045,7 @@ fn test_path_open_nonexistent_file(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -1148,7 +1148,7 @@ fn test_fd_seek(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -1218,7 +1218,7 @@ fn test_fd_fdstat_get(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx.clone());
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
@@ -1281,9 +1281,7 @@ fn test_return_from_nested_block_preserves_caller(#[case] engine: EngineKind) {
 
     let mut store = Store::new();
     store.set_engine(engine);
-    let instance_id = store
-        .create_instance(Arc::new(module), None)
-        .expect("Failed to create instance");
+    let instance_id = store.create_instance(&module, None).expect("Failed to create instance");
 
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "Execution failed: {:?}", result);
@@ -1334,7 +1332,7 @@ fn test_clock_time_get(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "clock_time_get failed: {:?}", result);
@@ -1389,7 +1387,7 @@ fn test_random_get(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "random_get failed: {:?}", result);
@@ -1468,7 +1466,7 @@ fn test_fd_tell(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "fd_tell test execution failed: {:?}", result);
@@ -1560,7 +1558,7 @@ fn test_fd_readdir(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "fd_readdir test failed: {:?}", result);
@@ -1666,7 +1664,7 @@ fn test_path_open_directory(#[case] engine: EngineKind) {
     store.set_engine(engine);
     let imports = create_wasi_imports(&mut store, ctx);
     let instance_id = store
-        .create_instance(Arc::new(module), Some(&imports))
+        .create_instance(&module, Some(&imports))
         .expect("Failed to create instance");
     let result = store.invoke_export(instance_id, "_start", vec![], None);
     assert!(result.is_ok(), "path_open directory test failed: {:?}", result);

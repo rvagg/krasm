@@ -2753,6 +2753,7 @@ mod tests {
     // ============================================================================
     mod function_calls {
         use super::*;
+        use crate::ValidatedModule;
         use crate::parser::module::{
             Export, ExportIndex, ExternalKind, Function, FunctionBody, Import, Locals, SectionPosition,
         };
@@ -2837,7 +2838,7 @@ mod tests {
             imports.add_function("env", "log", log_addr);
 
             let instance_id = store
-                .create_instance(Arc::new(module), Some(&imports))
+                .create_instance(&ValidatedModule::new(module).unwrap(), Some(&imports))
                 .expect("Instance creation should succeed");
             let result = store
                 .invoke_export(instance_id, "main", vec![], None)
@@ -2895,7 +2896,7 @@ mod tests {
             // Create store and instance
             let mut store = Store::new();
             let instance_id = store
-                .create_instance(Arc::new(module), None)
+                .create_instance(&ValidatedModule::new(module).unwrap(), None)
                 .expect("Instance creation should succeed");
 
             // Test factorial(5) = 120
@@ -2987,7 +2988,7 @@ mod tests {
             // Create store and instance
             let mut store = Store::new();
             let instance_id = store
-                .create_instance(Arc::new(module), None)
+                .create_instance(&ValidatedModule::new(module).unwrap(), None)
                 .expect("Instance creation should succeed");
 
             // Call main - should return 100 (caller's local 0)

@@ -9,7 +9,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use krasm::parser::module::{ExportIndex, ValueType};
 use krasm::parser::{self, reader::Reader};
@@ -400,11 +399,10 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return, // Generated module was invalid (shouldn't happen often)
     };
 
-    let module = Arc::new(module);
     for engine in [EngineKind::Structured, EngineKind::Flat] {
         let mut store = Store::new();
         store.set_engine(engine);
-        let instance_id = match store.create_instance(Arc::clone(&module), None) {
+        let instance_id = match store.create_instance(&module, None) {
             Ok(id) => id,
             Err(_) => continue,
         };

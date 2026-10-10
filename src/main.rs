@@ -8,7 +8,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use krasm::parser;
 use krasm::wasi::{WasiContext, create_wasi_instance};
-use krasm::{EngineKind, Module, Store};
+use krasm::{EngineKind, Store, ValidatedModule};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{stderr, stdin, stdout};
@@ -75,7 +75,7 @@ enum Commands {
 }
 
 /// Load and parse a WebAssembly module from a `.wasm` or `.wat` file.
-fn load_module(file: &str) -> Result<Module, String> {
+fn load_module(file: &str) -> Result<ValidatedModule, String> {
     if file.ends_with(".wat") {
         let source = fs::read_to_string(file).map_err(|e| format!("Error reading {}: {}", file, e))?;
         krasm::wat::parse(&source).map_err(|e| format!("Error parsing {}: {}", file, e))
@@ -246,8 +246,7 @@ fn run_wasi_module(
 
     let mut store = Store::new();
     store.set_engine(engine.into());
-    let module = Arc::new(module);
-    let instance_id = match create_wasi_instance(&mut store, module, ctx.clone(), true) {
+    let instance_id = match create_wasi_instance(&mut store, &module, ctx.clone(), true) {
         Ok(id) => id,
         Err(e) => {
             eprintln!("Error instantiating module: {}", e);
