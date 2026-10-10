@@ -810,9 +810,22 @@ fn a_stack_spike_is_released_when_execution_ends() {
     let result = executor.invoke(&funcs, 0, &[Value::I32(900)], None).unwrap();
     assert_eq!(expect_complete(result), vec![Value::I32(7)]);
     assert!(executor.stack.capacity() <= RETAINED_STACK_WORDS);
+    assert!(executor.call_stack.capacity() <= RETAINED_CALL_FRAMES);
     // A shallow call reuses what remains.
     let result = executor.invoke(&funcs, 0, &[Value::I32(3)], None).unwrap();
     assert_eq!(expect_complete(result), vec![Value::I32(7)]);
+}
+
+#[test]
+fn recursion_runs_deeper_than_a_thousand_calls() {
+    let funcs = compile_wat(
+        "(module (func $r (param i32) (result i32)
+           (if (result i32) (local.get 0)
+             (then (i32.add (i32.const 1) (call $r (i32.sub (local.get 0) (i32.const 1)))))
+             (else (i32.const 0)))))",
+    );
+    let result = execute_flat(&funcs, 0, &[Value::I32(50_000)], None).unwrap();
+    assert_eq!(result, vec![Value::I32(50_000)]);
 }
 
 #[test]

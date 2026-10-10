@@ -137,7 +137,12 @@ pub(crate) fn build_func_entries(module: &Module, function_addresses: &[FuncAddr
         .collect()
 }
 
-const MAX_CALL_DEPTH: usize = 1000;
+/// Most calls deep an activation may go. A saved frame is 32 bytes, so the
+/// stack limit, not this backstop, normally decides how deep recursion runs.
+const MAX_CALL_DEPTH: usize = 100_000;
+
+/// Saved frames an idle executor keeps capacity for.
+const RETAINED_CALL_FRAMES: usize = 1024;
 
 /// Most words the stack may grow to unless set otherwise (128 MiB).
 pub(crate) const DEFAULT_MAX_STACK_WORDS: usize = 1 << 24;
@@ -387,13 +392,17 @@ impl FlatExecutor {
         self.release_idle_stack();
     }
 
-    /// With nothing running or suspended, give back stack memory beyond
-    /// what an idle executor keeps.
+    /// With nothing running or suspended, give back stack and call-stack
+    /// memory beyond what an idle executor keeps.
     fn release_idle_stack(&mut self) {
-        if self.suspended.is_empty() && self.stack.len() > RETAINED_STACK_WORDS {
+        if !self.suspended.is_empty() {
+            return;
+        }
+        if self.stack.len() > RETAINED_STACK_WORDS {
             self.stack.truncate(RETAINED_STACK_WORDS);
             self.stack.shrink_to_fit();
         }
+        self.call_stack.shrink_to(RETAINED_CALL_FRAMES);
     }
 
     /// Run until the activation completes or suspends, leaving the executor
