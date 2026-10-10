@@ -5,6 +5,7 @@ use super::{BlockType, ByteRange, Instruction, InstructionKind, MemArg, SimdOp};
 use crate::parser::encoding;
 use crate::parser::module::{RefType, ValueType};
 use crate::parser::reader::Reader;
+use InstructionKind::*;
 use std::io;
 
 /// Error type for instruction decoding
@@ -92,7 +93,6 @@ impl InstructionKind {
     pub fn decode(reader: &mut Reader) -> Result<Self, DecodeError> {
         let opcode = reader.read_byte()?;
 
-        use InstructionKind::*;
         match opcode {
             // Control instructions (0x00-0x11)
             0x00 => Ok(Unreachable),
@@ -455,8 +455,6 @@ impl InstructionKind {
 
 /// Decode 0xFC prefix instructions
 fn decode_0xfc(subopcode: u32, reader: &mut Reader) -> Result<InstructionKind, DecodeError> {
-    use InstructionKind::*;
-
     match subopcode {
         // Saturating truncation instructions
         0x00 => Ok(I32TruncSatF32S),

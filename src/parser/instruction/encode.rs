@@ -2,11 +2,11 @@
 
 use super::{BlockType, InstructionKind};
 use crate::parser::encoding;
+use InstructionKind::*;
 
 impl InstructionKind {
     /// Get the primary opcode for this instruction
     pub fn opcode(&self) -> u8 {
-        use InstructionKind::*;
         match self {
             // Control instructions
             Unreachable => 0x00,
@@ -232,7 +232,6 @@ impl InstructionKind {
 
     /// Get the subopcode for 0xFC prefix instructions
     pub fn subopcode_0xfc(&self) -> Option<u32> {
-        use InstructionKind::*;
         match self {
             // Saturating truncation
             I32TruncSatF32S => Some(0x00),
@@ -272,8 +271,6 @@ impl InstructionKind {
 
     /// Encode this instruction to bytes
     pub fn encode(&self) -> Vec<u8> {
-        use InstructionKind::*;
-
         let mut bytes = vec![self.opcode()];
 
         // Prefix subopcode

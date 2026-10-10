@@ -5,6 +5,7 @@
 //!
 //! Usage: cargo run --bin superinstruct -- module.wasm [--min-count N] [--ngram N]
 
+use InstructionKind::*;
 use krasm::parser;
 use krasm::parser::instruction::InstructionKind;
 use krasm::parser::structured::StructuredInstruction;
@@ -239,7 +240,6 @@ fn analyse_with_operands(function: &parser::structured::StructuredFunction) {
 fn format_with_operand_pattern(inst: &StructuredInstruction) -> String {
     match inst {
         StructuredInstruction::Plain(i) => {
-            use InstructionKind::*;
             let mnem = i.kind.mnemonic();
             match &i.kind {
                 // Show local/global indices as patterns

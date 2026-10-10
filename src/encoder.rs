@@ -37,7 +37,11 @@ use crate::parser::encoding::{
     SECTION_GLOBAL, SECTION_IMPORT, SECTION_MEMORY, SECTION_START, SECTION_TABLE, SECTION_TYPE, TYPE_FUNC, write_vu1,
     write_vu32,
 };
-use crate::parser::module::{CustomSection, DataMode, ElementMode, ExportIndex, ExternalKind, Module, RefType};
+use crate::parser::instruction::{Instruction, InstructionKind};
+use crate::parser::module::{
+    CustomSection, DataMode, ElementMode, ExportIndex, ExternalKind, Module, Positional, RefType,
+};
+use crate::parser::structured::StructuredInstruction;
 
 // ===========================================================================
 // Error type
@@ -303,7 +307,6 @@ fn encode_export_section(buf: &mut Vec<u8>, module: &Module) {
 /// startsec ::= section_8(funcidx)
 /// ```
 fn encode_start_section(buf: &mut Vec<u8>, module: &Module) {
-    use crate::parser::module::Positional;
     if !module.start.has_position() {
         return;
     }
@@ -443,9 +446,6 @@ fn encode_data_count_section(buf: &mut Vec<u8>, module: &Module) {
 /// Returns true if any function body contains `memory.init` or `data.drop`,
 /// which require the DataCount section to be present.
 fn code_requires_data_count(module: &Module) -> bool {
-    use crate::parser::instruction::InstructionKind;
-    use crate::parser::structured::StructuredInstruction;
-
     fn scan_structured(instructions: &[StructuredInstruction]) -> bool {
         for inst in instructions {
             match inst {
@@ -645,8 +645,7 @@ fn emit_ref_type(buf: &mut Vec<u8>, rt: &RefType) {
 /// Binary-parsed expressions include a trailing End instruction; WAT-parsed
 /// expressions do not. This function handles both by encoding all non-End
 /// instructions, then unconditionally appending the end marker.
-fn emit_expression(buf: &mut Vec<u8>, instructions: &[crate::parser::instruction::Instruction]) {
-    use crate::parser::instruction::InstructionKind;
+fn emit_expression(buf: &mut Vec<u8>, instructions: &[Instruction]) {
     for inst in instructions {
         if matches!(inst.kind, InstructionKind::End) {
             continue;
@@ -660,11 +659,7 @@ fn emit_expression(buf: &mut Vec<u8>, instructions: &[crate::parser::instruction
 ///
 /// Element segments with func-index encoding store each entry as a
 /// `[ref.func $idx, end]` expression. This extracts the index directly.
-fn emit_func_index_from_expr(
-    buf: &mut Vec<u8>,
-    init: &[crate::parser::instruction::Instruction],
-) -> Result<(), EncodeError> {
-    use crate::parser::instruction::InstructionKind;
+fn emit_func_index_from_expr(buf: &mut Vec<u8>, init: &[Instruction]) -> Result<(), EncodeError> {
     for inst in init {
         if let InstructionKind::RefFunc { func_idx } = &inst.kind {
             write_vu32(buf, *func_idx);

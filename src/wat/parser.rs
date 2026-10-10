@@ -34,6 +34,7 @@ use crate::parser::module::{
     SectionPosition, StartSection, TableSection, TableType, TypeSection, ValueType,
 };
 use crate::parser::structure_builder::StructureBuilder;
+use SimdOp::*;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -2706,8 +2707,6 @@ fn parse_simd_instruction_kind(
     args: &ArgSource<'_>,
     span: Span,
 ) -> Result<Option<(InstructionKind, usize)>, ParseError> {
-    use SimdOp::*;
-
     let simd = |op: SimdOp| -> Option<(InstructionKind, usize)> { Some((InstructionKind::Simd(op), 0)) };
 
     let result = match kw {

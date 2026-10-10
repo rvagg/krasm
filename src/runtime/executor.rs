@@ -29,6 +29,7 @@ use super::{
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{BlockEnd, StructuredFunction, StructuredInstruction};
+use InstructionKind::*;
 use std::sync::Arc;
 
 /// Maximum call stack depth to prevent stack overflow
@@ -1016,8 +1017,6 @@ impl Executor {
         resources: &mut Resources,
         segments: &mut SegmentState,
     ) -> Result<BlockEnd, RuntimeError> {
-        use InstructionKind::*;
-
         macro_rules! with_memory {
             (load $op:ident($memarg:expr)) => {{
                 let memory = &resources.memories[self.resolve_memory_idx()?];

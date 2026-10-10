@@ -11,7 +11,10 @@ pub mod streaming_decode;
 pub use decode::{DecodeError, InstructionIterator, ParseType};
 pub use streaming_decode::{VecCollector, decode_function, decode_with_processor};
 
+use super::encoding;
 use super::module::ValueType;
+use InstructionKind::*;
+use SimdOp::*;
 use fhex::ToHex;
 use std::fmt;
 
@@ -620,8 +623,6 @@ pub enum SimdOp {
 impl InstructionKind {
     /// Format the instruction with module context
     pub fn format_with_context(&self, module: &crate::parser::module::Module) -> String {
-        use InstructionKind::*;
-
         let base = self.to_string();
 
         // Add function/table names for call instructions
@@ -661,7 +662,6 @@ impl InstructionKind {
 
     /// Get the mnemonic for this instruction
     pub fn mnemonic(&self) -> &'static str {
-        use InstructionKind::*;
         match self {
             // Control
             Unreachable => "unreachable",
@@ -885,7 +885,6 @@ impl InstructionKind {
 impl SimdOp {
     /// Get the mnemonic for this SIMD instruction
     pub fn mnemonic(&self) -> &'static str {
-        use SimdOp::*;
         match self {
             V128Load { .. } => "v128.load",
             V128Load8x8S { .. } => "v128.load8x8_s",
@@ -1128,7 +1127,6 @@ impl SimdOp {
 
     /// Get the SIMD sub-opcode (LEB128-encoded after the 0xFD prefix byte)
     pub fn subopcode(&self) -> u32 {
-        use SimdOp::*;
         match self {
             V128Load { .. } => 0x00,
             V128Load8x8S { .. } => 0x01,
@@ -1371,8 +1369,6 @@ impl SimdOp {
 
     /// Encode instruction-specific operands (after the prefix + subopcode)
     pub fn encode_operands(&self, bytes: &mut Vec<u8>) {
-        use crate::parser::encoding;
-        use SimdOp::*;
         match self {
             // Memory operations with memarg
             V128Load { memarg }
@@ -1439,7 +1435,6 @@ impl SimdOp {
 impl fmt::Display for SimdOp {
     /// Formats only the operands (mnemonic is written by InstructionKind::fmt)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use SimdOp::*;
         match self {
             V128Const { value } => {
                 // Display as 4 i32 lanes (little-endian), matching wabt format
@@ -1506,8 +1501,6 @@ impl fmt::Display for SimdOp {
 
 impl fmt::Display for InstructionKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use InstructionKind::*;
-
         write!(f, "{}", self.mnemonic())?;
 
         match self {

@@ -23,8 +23,7 @@
 use super::RuntimeError;
 use super::bytecode::{BrTarget, CompiledFunction, Op};
 use super::imports::default_value_for_type;
-use crate::parser::index_spaces::IndexSpaceTypes;
-use crate::parser::instruction::signature::{Signature, fixed_signature};
+use crate::parser::instruction::signature::{Signature, context_signature, fixed_signature};
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
@@ -66,6 +65,8 @@ enum LabelTarget {
     Start(u32),
 }
 
+type Result<T = ()> = std::result::Result<T, RuntimeError>;
+
 /// A module that validation should have rejected.
 fn invalid(what: impl fmt::Display) -> RuntimeError {
     RuntimeError::Compile(what.to_string())
@@ -73,7 +74,7 @@ fn invalid(what: impl fmt::Display) -> RuntimeError {
 
 /// A parameter, result or branch-arity count, which validation keeps far below
 /// `u16::MAX` for decoded modules; others are checked rather than truncated.
-fn count(len: usize) -> Result<u16, RuntimeError> {
+fn count(len: usize) -> Result<u16> {
     u16::try_from(len).map_err(|_| invalid(format!("{len} values exceed the supported count")))
 }
 
@@ -86,7 +87,7 @@ pub fn slot_width(value_type: ValueType) -> u32 {
 ///
 /// The module must be valid; compilation relies on validation and reports any
 /// inconsistency it meets as [`RuntimeError::Compile`] rather than guessing.
-pub fn compile_module(module: &Module) -> Result<Vec<CompiledFunction>, RuntimeError> {
+pub fn compile_module(module: &Module) -> Result<Vec<CompiledFunction>> {
     if module.code.code.len() != module.functions.functions.len() {
         return Err(invalid("function and code counts differ"));
     }
@@ -109,18 +110,14 @@ pub fn compile_module(module: &Module) -> Result<Vec<CompiledFunction>, RuntimeE
 ///
 /// `ftype` is the function's signature and `locals` its declared
 /// (non-parameter) locals, which also give the typed zero defaults for frame
-/// initialisation. `module` supplies block and callee signatures, and its index
-/// space types the types of functions, globals and tables by index.
+/// initialisation. `module` is where block types, callees, globals and tables
+/// are looked up.
 pub fn compile<'a>(
     func: &'a StructuredFunction,
     ftype: &'a FunctionType,
     locals: &Locals,
     module: &'a Module,
-) -> Result<CompiledFunction, RuntimeError> {
-    let mut local_types = ftype.parameters.clone();
-    for (count, value_type) in locals.iter() {
-        local_types.resize(local_types.len() + *count as usize, *value_type);
-    }
+) -> Result<CompiledFunction> {
     let mut ctx = CompileContext {
         ops: Vec::new(),
         labels: Vec::new(),
@@ -128,29 +125,19 @@ pub fn compile<'a>(
         slots: 0,
         max_slots: 0,
         reachable: true,
-        locals: local_types,
+        locals: locals.types(&ftype.parameters),
         module,
-        spaces: module.index_space_types(),
-        error: None,
     };
 
     // The function body is the outermost label. A `br` to it is a return; a
     // `br_if` or `br_table` entry jumps to the final End.
-    let result_count = count(ftype.return_types.len())?;
-    ctx.labels.push(Label {
-        target: LabelTarget::End(Vec::new()),
-        stack_depth: 0,
-        types: &ftype.return_types,
-    });
-    ctx.emit_body(&func.body);
+    ctx.open_label(LabelTarget::End(Vec::new()), 0, &ftype.return_types)?;
+    ctx.emit_body(&func.body)?;
     if ctx.reachable {
-        ctx.check_top(0, &ftype.return_types, "function end");
+        ctx.check_top(0, &ftype.return_types, "function end")?;
     }
     ctx.close_label();
     ctx.ops.push(Op::End);
-    if let Some(error) = ctx.error {
-        return Err(error);
-    }
 
     // One typed zero per declared local, so frame initialisation is a plain copy.
     let local_defaults = ctx.locals[ftype.parameters.len()..]
@@ -161,7 +148,7 @@ pub fn compile<'a>(
         ops: ctx.ops,
         local_defaults,
         param_count: count(ftype.parameters.len())?,
-        result_count,
+        result_count: count(ftype.return_types.len())?,
         max_stack_slots: ctx.max_slots,
     })
 }
@@ -182,21 +169,11 @@ struct CompileContext<'a> {
     reachable: bool,
     /// Parameter then declared local types, by local index.
     locals: Vec<ValueType>,
+    /// Block and callee signatures, and function, global and table types.
     module: &'a Module,
-    /// Function, global and table types by index, imports first.
-    spaces: &'a IndexSpaceTypes,
-    /// The first inconsistency met. Compilation continues with placeholders,
-    /// whose output is discarded, so emitters need not propagate errors.
-    error: Option<RuntimeError>,
 }
 
 impl<'a> CompileContext<'a> {
-    fn fail(&mut self, what: impl fmt::Display) {
-        if self.error.is_none() {
-            self.error = Some(invalid(what));
-        }
-    }
-
     /// Number of values on the operand stack.
     fn depth(&self) -> u32 {
         self.stack.len() as u32
@@ -208,232 +185,130 @@ impl<'a> CompileContext<'a> {
         self.max_slots = self.max_slots.max(self.slots);
     }
 
-    fn pop(&mut self) -> Option<ValueType> {
-        let popped = self.stack.pop();
-        match popped {
-            Some(value_type) => self.slots -= slot_width(value_type),
-            None => self.fail("operand stack underflow"),
-        }
-        popped
+    /// The depth the innermost label unwinds to. Operands beneath it belong
+    /// to enclosing blocks and cannot be popped.
+    fn floor(&self) -> u32 {
+        self.labels.last().map_or(0, |label| label.stack_depth)
     }
 
-    fn pop_expect(&mut self, expected: ValueType) {
-        if let Some(found) = self.pop()
-            && found != expected
-        {
-            self.fail(format_args!("expected {expected:?} operand, found {found:?}"));
+    fn pop(&mut self) -> Result<ValueType> {
+        let depth = self.depth_below(1)?;
+        let popped = self.stack[depth as usize];
+        self.truncate(depth);
+        Ok(popped)
+    }
+
+    fn pop_expect(&mut self, expected: ValueType) -> Result {
+        match self.pop()? {
+            found if found == expected => Ok(()),
+            found => Err(invalid(format!("expected {expected:?} operand, found {found:?}"))),
         }
     }
 
     /// Pop parameters, last first, and push results.
-    fn apply_signature(&mut self, signature: Signature) {
+    fn apply_signature(&mut self, signature: Signature) -> Result {
         for param in signature.params.iter().rev() {
-            self.pop_expect(*param);
+            self.pop_expect(*param)?;
         }
         for result in signature.results {
             self.push(*result);
         }
+        Ok(())
     }
 
     /// Discard operands down to `depth`.
     fn truncate(&mut self, depth: u32) {
-        while self.depth() > depth {
-            self.pop();
+        let depth = self.stack.len().min(depth as usize);
+        for value_type in self.stack.drain(depth..) {
+            self.slots -= slot_width(value_type);
         }
     }
 
     /// Check that the operands above `depth` are exactly `expected`.
-    fn check_top(&mut self, depth: u32, expected: &[ValueType], what: &str) {
+    fn check_top(&self, depth: u32, expected: &[ValueType], what: &str) -> Result {
         let above = self.stack.get(depth as usize..).unwrap_or_default();
         if above != expected {
-            let message = format!("{what} has {above:?}, expected {expected:?}");
-            self.fail(message);
+            return Err(invalid(format!("{what} has {above:?}, expected {expected:?}")));
         }
+        Ok(())
     }
 
-    /// The depth beneath the top `count` operands.
-    fn depth_below(&mut self, count: usize) -> u32 {
-        self.depth().checked_sub(count as u32).unwrap_or_else(|| {
-            self.fail("operand stack underflow");
-            0
-        })
+    /// The depth beneath the top `count` operands, which must sit above the floor.
+    fn depth_below(&self, count: usize) -> Result<u32> {
+        (self.depth().checked_sub(count as u32))
+            .filter(|depth| *depth >= self.floor())
+            .ok_or_else(|| invalid("operand stack underflow"))
     }
 
     /// Resolve a BlockType to its parameter and result types.
-    fn block_signature<'b>(&mut self, block_type: &'b BlockType) -> Signature<'b>
-    where
-        'a: 'b,
-    {
-        const EMPTY: Signature<'static> = Signature {
-            params: &[],
-            results: &[],
-        };
-        let module = self.module;
-        match block_type {
-            BlockType::Empty => EMPTY,
+    fn block_signature(&self, block_type: &'a BlockType) -> Result<Signature<'a>> {
+        Ok(match block_type {
+            BlockType::Empty => Signature {
+                params: &[],
+                results: &[],
+            },
             BlockType::Value(value_type) => Signature {
                 params: &[],
                 results: std::slice::from_ref(value_type),
             },
-            BlockType::FuncType(idx) => match module.types.get(*idx) {
-                Some(ft) => ft.signature(),
-                None => {
-                    self.fail(format_args!("unknown block type {idx}"));
-                    EMPTY
-                }
-            },
-        }
-    }
-
-    fn local_type(&mut self, index: u32) -> ValueType {
-        self.locals.get(index as usize).copied().unwrap_or_else(|| {
-            self.fail(format_args!("unknown local {index}"));
-            ValueType::I32
+            BlockType::FuncType(idx) => (self.module.types.get(*idx))
+                .ok_or_else(|| invalid(format!("unknown block type {idx}")))?
+                .signature(),
         })
     }
 
-    fn global_type(&mut self, index: u32) -> ValueType {
-        match self.spaces.global_types.get(index as usize) {
-            Some(global) => global.value_type,
-            None => {
-                self.fail(format_args!("unknown global {index}"));
-                ValueType::I32
-            }
-        }
-    }
-
-    fn table_type(&mut self, index: u32) -> ValueType {
-        match self.spaces.table_types.get(index as usize) {
-            Some(table) => table.ref_type.into(),
-            None => {
-                self.fail(format_args!("unknown table {index}"));
-                ValueType::FuncRef
-            }
-        }
-    }
-
     /// Apply a plain instruction's effect on the operand types.
-    fn apply_types(&mut self, kind: &InstructionKind) {
-        use InstructionKind::*;
+    fn apply_types(&mut self, kind: &InstructionKind) -> Result {
         if let Some(signature) = fixed_signature(kind) {
             return self.apply_signature(signature);
         }
+        let module = self.module;
+        let context = context_signature(kind, &module.types, module.index_space_types(), &self.locals);
+        if let Some(signature) = context.map_err(invalid)? {
+            return signature.steps().try_for_each(|step| self.apply_signature(step));
+        }
         match kind {
-            LocalGet { local_idx } => {
-                let local = self.local_type(*local_idx);
-                self.push(local);
-            }
-            LocalSet { local_idx } => {
-                let local = self.local_type(*local_idx);
-                self.pop_expect(local);
-            }
-            LocalTee { local_idx } => {
-                let local = self.local_type(*local_idx);
+            InstructionKind::Drop => self.pop().map(|_| ()),
+            InstructionKind::Select => {
+                self.pop_expect(ValueType::I32)?;
+                // The first operand must match the second, and the result takes their type.
+                let second = self.pop()?;
                 self.apply_signature(Signature {
-                    params: &[local],
-                    results: &[local],
-                });
+                    params: &[second],
+                    results: &[second],
+                })
             }
-            GlobalGet { global_idx } => {
-                let global = self.global_type(*global_idx);
-                self.push(global);
-            }
-            GlobalSet { global_idx } => {
-                let global = self.global_type(*global_idx);
-                self.pop_expect(global);
-            }
-            Call { func_idx } => {
-                let callee = (self.spaces.function_type_indices.get(*func_idx as usize))
-                    .and_then(|type_idx| self.module.types.get(*type_idx));
-                match callee {
-                    Some(callee) => self.apply_signature(callee.signature()),
-                    None => self.fail(format_args!("unknown function {func_idx}")),
-                }
-            }
-            CallIndirect { type_idx, .. } => {
-                self.pop_expect(ValueType::I32);
-                match self.module.types.get(*type_idx) {
-                    Some(callee) => self.apply_signature(callee.signature()),
-                    None => self.fail(format_args!("unknown type {type_idx}")),
-                }
-            }
-            Drop => {
-                self.pop();
-            }
-            Select => {
-                self.pop_expect(ValueType::I32);
-                let second = self.pop();
-                let first = self.pop();
-                match (first, second) {
-                    (Some(first), Some(second)) if first == second => self.push(first),
-                    (Some(first), Some(second)) => self.fail(format_args!("select of {first:?} and {second:?}")),
-                    _ => {}
-                }
-            }
-            SelectTyped { val_types } => match val_types.as_slice() {
-                [value_type] => {
-                    let value_type = *value_type;
-                    self.apply_signature(Signature {
-                        params: &[value_type, value_type, ValueType::I32],
-                        results: &[value_type],
-                    });
-                }
-                _ => self.fail("select must name one type"),
+            InstructionKind::SelectTyped { val_types } => match val_types.as_slice() {
+                [value_type] => self.apply_signature(Signature {
+                    params: &[*value_type, *value_type, ValueType::I32],
+                    results: std::slice::from_ref(value_type),
+                }),
+                _ => Err(invalid("select must name one type")),
             },
-            RefNull { ref_type } => self.push(*ref_type),
-            RefIsNull => {
-                if let Some(operand) = self.pop()
-                    && !matches!(operand, ValueType::FuncRef | ValueType::ExternRef)
-                {
-                    self.fail(format_args!("ref.is_null of {operand:?}"));
+            InstructionKind::RefNull { ref_type } => {
+                self.push(*ref_type);
+                Ok(())
+            }
+            InstructionKind::RefIsNull => {
+                let operand = self.pop()?;
+                if !matches!(operand, ValueType::FuncRef | ValueType::ExternRef) {
+                    return Err(invalid(format!("ref.is_null of {operand:?}")));
                 }
                 self.push(ValueType::I32);
+                Ok(())
             }
-            TableGet { table_idx } => {
-                let element = self.table_type(*table_idx);
-                self.apply_signature(Signature {
-                    params: &[ValueType::I32],
-                    results: &[element],
-                });
-            }
-            TableSet { table_idx } => {
-                let element = self.table_type(*table_idx);
-                self.apply_signature(Signature {
-                    params: &[ValueType::I32, element],
-                    results: &[],
-                });
-            }
-            TableGrow { table_idx } => {
-                let element = self.table_type(*table_idx);
-                self.apply_signature(Signature {
-                    params: &[element, ValueType::I32],
-                    results: &[ValueType::I32],
-                });
-            }
-            TableFill { table_idx } => {
-                let element = self.table_type(*table_idx);
-                self.apply_signature(Signature {
-                    params: &[ValueType::I32, element, ValueType::I32],
-                    results: &[],
-                });
-            }
-            BrIf { .. } | BrTable { .. } => self.pop_expect(ValueType::I32),
+            InstructionKind::BrIf { .. } | InstructionKind::BrTable { .. } => self.pop_expect(ValueType::I32),
             // Control leaves; what follows is unreachable and not emitted.
-            Br { .. } | Return | Unreachable => {}
-            _ => self.fail(format_args!("no operand types for {kind:?}")),
+            InstructionKind::Br { .. } | InstructionKind::Return | InstructionKind::Unreachable => Ok(()),
+            _ => Err(invalid(format!("no operand types for {kind:?}"))),
         }
     }
 
     /// Index into `labels` of the label `depth` levels out from the innermost.
-    fn label_index(&mut self, depth: u32) -> usize {
-        match self.labels.len().checked_sub(1 + depth as usize) {
-            Some(index) => index,
-            None => {
-                self.fail(format_args!("unknown label {depth}"));
-                0
-            }
-        }
+    fn label_index(&self, depth: u32) -> Result<usize> {
+        (self.labels.len().checked_sub(1 + depth as usize)).ok_or_else(|| invalid(format!("unknown label {depth}")))
     }
+
     /// Current emit position (index of the next op to be pushed).
     fn pos(&self) -> u32 {
         self.ops.len() as u32
@@ -472,15 +347,14 @@ impl<'a> CompileContext<'a> {
     }
 
     /// Push a label, checking its arity fits in a branch op.
-    fn open_label(&mut self, target: LabelTarget, stack_depth: u32, types: &'a [ValueType]) {
-        if let Err(error) = count(types.len()) {
-            self.error.get_or_insert(error);
-        }
+    fn open_label(&mut self, target: LabelTarget, stack_depth: u32, types: &'a [ValueType]) -> Result {
+        count(types.len())?;
         self.labels.push(Label {
             target,
             stack_depth,
             types,
         });
+        Ok(())
     }
 
     /// Pop the innermost label, pointing its forward branches here.
@@ -507,33 +381,31 @@ impl<'a> CompileContext<'a> {
     }
 
     /// Emit a sequence of structured instructions.
-    fn emit_body(&mut self, body: &'a [StructuredInstruction]) {
-        for inst in body {
-            self.emit_instruction(inst);
-        }
+    fn emit_body(&mut self, body: &'a [StructuredInstruction]) -> Result {
+        body.iter().try_for_each(|inst| self.emit_instruction(inst))
     }
 
     /// Emit a single structured instruction.
-    fn emit_instruction(&mut self, inst: &'a StructuredInstruction) {
+    fn emit_instruction(&mut self, inst: &'a StructuredInstruction) -> Result {
         // Dead code after an unconditional transfer is never emitted.
         // Branch targets cannot point into it, so nothing is lost.
         if !self.reachable {
-            return;
+            return Ok(());
         }
         match inst {
-            StructuredInstruction::Plain(i) => self.emit_plain(i),
+            StructuredInstruction::Plain(i) => self.emit_plain(i)?,
 
             StructuredInstruction::Block { block_type, body, .. } => {
-                let Signature { params, results } = self.block_signature(block_type);
+                let Signature { params, results } = self.block_signature(block_type)?;
                 // Params are inside the block: branches unwind to below them.
-                let sd = self.depth_below(params.len());
-                self.check_top(sd, params, "block entry");
+                let sd = self.depth_below(params.len())?;
+                self.check_top(sd, params, "block entry")?;
 
                 let label_pos = self.emit(Op::Label { end_target: 0 });
-                self.open_label(LabelTarget::End(vec![Fixup::Branch(label_pos)]), sd, results);
-                self.emit_body(body);
+                self.open_label(LabelTarget::End(vec![Fixup::Branch(label_pos)]), sd, results)?;
+                self.emit_body(body)?;
                 if self.reachable {
-                    self.check_top(sd, results, "block end");
+                    self.check_top(sd, results, "block end")?;
                 }
                 self.close_label();
                 // Reached by fall-through or by a branch to the label: either
@@ -542,16 +414,16 @@ impl<'a> CompileContext<'a> {
             }
 
             StructuredInstruction::Loop { block_type, body, .. } => {
-                let Signature { params, results } = self.block_signature(block_type);
-                let sd = self.depth_below(params.len());
-                self.check_top(sd, params, "loop entry");
+                let Signature { params, results } = self.block_signature(block_type)?;
+                let sd = self.depth_below(params.len())?;
+                self.check_top(sd, params, "loop entry")?;
 
                 // Branches restart the loop, carrying its params.
                 let loop_start = self.emit(Op::Label { end_target: 0 });
-                self.open_label(LabelTarget::Start(loop_start as u32 + 1), sd, params);
-                self.emit_body(body);
+                self.open_label(LabelTarget::Start(loop_start as u32 + 1), sd, params)?;
+                self.emit_body(body)?;
                 if self.reachable {
-                    self.check_top(sd, results, "loop end");
+                    self.check_top(sd, results, "loop end")?;
                 }
                 let end = self.pos();
                 self.apply_fixup(&Fixup::Branch(loop_start), end);
@@ -565,12 +437,12 @@ impl<'a> CompileContext<'a> {
                 else_branch,
                 ..
             } => {
-                let Signature { params, results } = self.block_signature(block_type);
+                let Signature { params, results } = self.block_signature(block_type)?;
                 // The i32.eqz + br_if below consume the condition; the block's
                 // params sit directly beneath it.
-                self.pop_expect(ValueType::I32);
-                let sd = self.depth_below(params.len());
-                self.check_top(sd, params, "if entry");
+                self.pop_expect(ValueType::I32)?;
+                let sd = self.depth_below(params.len())?;
+                self.check_top(sd, params, "if entry")?;
 
                 // Skip the then-body when the condition is 0, keeping the params.
                 self.emit(Op::I32Eqz);
@@ -579,10 +451,10 @@ impl<'a> CompileContext<'a> {
                     arity: 0,
                     stack_depth: self.depth(),
                 });
-                self.open_label(LabelTarget::End(Vec::new()), sd, results);
-                self.emit_body(then_branch);
+                self.open_label(LabelTarget::End(Vec::new()), sd, results)?;
+                self.emit_body(then_branch)?;
                 if self.reachable {
-                    self.check_top(sd, results, "if end");
+                    self.check_top(sd, results, "if end")?;
                 }
 
                 if let Some(else_body) = else_branch {
@@ -604,9 +476,9 @@ impl<'a> CompileContext<'a> {
                     let else_start = self.pos();
                     self.apply_fixup(&Fixup::Branch(skip_then), else_start);
                     self.end_block(sd, params);
-                    self.emit_body(else_body);
+                    self.emit_body(else_body)?;
                     if self.reachable {
-                        self.check_top(sd, results, "else end");
+                        self.check_top(sd, results, "else end")?;
                     }
                 } else {
                     let end = self.pos();
@@ -616,11 +488,12 @@ impl<'a> CompileContext<'a> {
                 self.end_block(sd, results);
             }
         }
+        Ok(())
     }
 
     /// Emit a plain (non-control-flow-structure) instruction.
-    fn emit_plain(&mut self, inst: &'a Instruction) {
-        self.apply_types(&inst.kind);
+    fn emit_plain(&mut self, inst: &'a Instruction) -> Result {
+        self.apply_types(&inst.kind)?;
         match &inst.kind {
             InstructionKind::I32Const { value } => self.op(Op::I32Const(*value)),
             InstructionKind::I64Const { value } => self.op(Op::I64Const(*value)),
@@ -1121,10 +994,10 @@ impl<'a> CompileContext<'a> {
                 table_idx: *table_idx,
             }),
 
-            InstructionKind::Br { label_idx } => self.emit_br(*label_idx),
-            InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx),
-            InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default),
-            InstructionKind::Return => self.emit_return(),
+            InstructionKind::Br { label_idx } => self.emit_br(*label_idx)?,
+            InstructionKind::BrIf { label_idx } => self.emit_br_if(*label_idx)?,
+            InstructionKind::BrTable { labels, default } => self.emit_br_table(labels, *default)?,
+            InstructionKind::Return => self.emit_return()?,
             InstructionKind::Nop => self.op(Op::Nop),
             InstructionKind::Unreachable => {
                 self.op(Op::Unreachable);
@@ -1159,83 +1032,81 @@ impl<'a> CompileContext<'a> {
             | InstructionKind::Else
             | InstructionKind::End => unreachable!("structured control instruction passed to emit_plain"),
         }
+        Ok(())
     }
 
     /// Resolve a branch `depth` labels out: check the operands it carries,
     /// record `fixup` if its target is still unknown, and return the target.
-    fn branch_target(&mut self, depth: u32, fixup: Fixup) -> BrTarget {
-        let index = self.label_index(depth);
-        let label = &mut self.labels[index];
-        let (stack_depth, types) = (label.stack_depth, label.types);
-        let pc = match &mut label.target {
+    fn branch_target(&mut self, depth: u32, fixup: Fixup) -> Result<BrTarget> {
+        let index = self.label_index(depth)?;
+        let (stack_depth, types) = (self.labels[index].stack_depth, self.labels[index].types);
+        self.check_branch(stack_depth, types)?;
+        let pc = match &mut self.labels[index].target {
             LabelTarget::Start(start) => *start,
             LabelTarget::End(fixups) => {
                 fixups.push(fixup);
                 0
             }
         };
-        self.check_branch(stack_depth, types);
-        BrTarget {
+        Ok(BrTarget {
             pc,
             arity: types.len() as u16,
             stack_depth,
-        }
+        })
     }
 
     /// Check that a branch's operands are on top, above the depth it unwinds to.
-    fn check_branch(&mut self, stack_depth: u32, types: &[ValueType]) {
-        let depth = self.depth() as usize;
-        match depth.checked_sub(types.len()) {
-            Some(start) if start >= stack_depth as usize => {
-                if self.stack[start..] != *types {
-                    let message = format!("branch carries {:?}, label expects {types:?}", &self.stack[start..]);
-                    self.fail(message);
-                }
-            }
-            _ => self.fail(format_args!("branch needs {types:?} above depth {stack_depth}")),
+    fn check_branch(&self, stack_depth: u32, types: &[ValueType]) -> Result {
+        match self.depth().checked_sub(types.len() as u32) {
+            Some(start) if start >= stack_depth => match &self.stack[start as usize..] {
+                carried if carried == types => Ok(()),
+                carried => Err(invalid(format!("branch carries {carried:?}, label expects {types:?}"))),
+            },
+            _ => Err(invalid(format!("branch needs {types:?} above depth {stack_depth}"))),
         }
     }
 
     /// `return`, or a `br` to the function body: leave with the results on top.
-    fn emit_return(&mut self) {
-        let results = self.labels[0].types;
-        self.check_branch(0, results);
+    fn emit_return(&mut self) -> Result {
+        self.check_branch(0, self.labels[0].types)?;
         self.emit(Op::Return);
         self.reachable = false;
+        Ok(())
     }
 
-    fn emit_br(&mut self, depth: u32) {
-        if self.label_index(depth) == 0 {
+    fn emit_br(&mut self, depth: u32) -> Result {
+        if self.label_index(depth)? == 0 {
             return self.emit_return();
         }
-        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()));
+        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
         self.emit(Op::Br {
             target: pc,
             arity,
             stack_depth,
         });
         self.reachable = false;
+        Ok(())
     }
 
-    fn emit_br_if(&mut self, depth: u32) {
-        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()));
+    fn emit_br_if(&mut self, depth: u32) -> Result {
+        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
         self.emit(Op::BrIf {
             target: pc,
             arity,
             stack_depth,
         });
+        Ok(())
     }
 
-    fn emit_br_table(&mut self, labels: &[u32], default: u32) {
+    fn emit_br_table(&mut self, labels: &[u32], default: u32) -> Result {
         let op_pos = self.ops.len();
-        let targets = labels
-            .iter()
-            .enumerate()
+        let targets = (labels.iter().enumerate())
             .map(|(i, depth)| self.branch_target(*depth, Fixup::TableEntry { op_pos, index: Some(i) }))
-            .collect();
-        let default = self.branch_target(default, Fixup::TableEntry { op_pos, index: None });
+            .collect::<Result<_>>()?;
+        let default = self.branch_target(default, Fixup::TableEntry { op_pos, index: None })?;
         self.emit(Op::BrTable { targets, default });
         self.reachable = false;
+        Ok(())
     }
 }
 
@@ -1300,6 +1171,12 @@ mod tests {
         // `i32.add` with nothing beneath it.
         let mut module = editable("(module (func (result i32) (i32.add (i32.const 1) (i32.const 2))))");
         module.code.code[0].body.body.drain(..2);
+        assert_eq!(compile_error(&module), "operand stack underflow");
+
+        // `drop` reaching beneath its block for the function's operand.
+        let mut module = editable("(module (func (i32.const 1) (drop) (block (nop))))");
+        module.code.code[0].body.body.remove(1);
+        plain_mut(block_mut(&mut module.code.code[0].body.body, 1), 0).kind = InstructionKind::Drop;
         assert_eq!(compile_error(&module), "operand stack underflow");
     }
 

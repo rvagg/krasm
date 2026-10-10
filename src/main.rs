@@ -7,6 +7,8 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use krasm::parser;
+#[cfg(feature = "instruction-profile")]
+use krasm::runtime::profile::{ProfileOutcome, RunProfile};
 use krasm::wasi::{WasiContext, create_wasi_instance};
 use krasm::{EngineKind, Store, ValidatedModule};
 use std::collections::HashMap;
@@ -269,7 +271,6 @@ fn run_wasi_module(
 
     #[cfg(feature = "instruction-profile")]
     if let Some(output) = profile_output.as_mut() {
-        use krasm::runtime::profile::{ProfileOutcome, RunProfile};
         let profile = store
             .get_instance(instance_id)
             .and_then(|instance| instance.instruction_profile())

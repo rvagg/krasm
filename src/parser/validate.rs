@@ -21,9 +21,11 @@ use super::module::{
     TableType, ValueType, ValueType::*,
 };
 use super::structured::StructuredInstruction;
-use crate::parser::instruction::signature::{Signature, fixed_signature, simd_signature};
+use crate::parser::instruction::signature::{Signature, context_signature, fixed_signature, simd_signature};
 use crate::parser::instruction::{BlockType, ByteRange, Instruction, InstructionKind, SimdOp};
+use InstructionKind::*;
 use MaybeValue::{Unknown, Val};
+use SimdOp::*;
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 use thiserror::Error;
@@ -113,6 +115,9 @@ pub enum ValidationError {
 
     #[error("unknown local {0}")]
     UnknownLocal(u32),
+
+    #[error("too many locals")]
+    TooManyLocals,
 
     #[error("unknown global {0}")]
     UnknownGlobal(u32),
@@ -250,8 +255,6 @@ impl ConstantExpressionValidator<'_> {
 impl Validator for ConstantExpressionValidator<'_> {
     fn validate(&mut self, inst: &Instruction) -> Result<(), ValidationError> {
         let kind = &inst.kind;
-        use InstructionKind::*;
-
         match kind {
             I32Const { .. }
             | I64Const { .. }
@@ -377,7 +380,8 @@ struct CtrlFrame {
 pub struct CodeValidator<'a> {
     module: &'a super::module::Module,
     spaces: &'a IndexSpaceTypes,
-    locals: &'a super::module::Locals,
+    /// Parameter then declared local types, by local index.
+    locals: Vec<ValueType>,
     function_type: &'a FunctionType,
     vals: Vec<MaybeValue>,
     ctrls: Vec<CtrlFrame>,
@@ -407,7 +411,7 @@ impl<'a> CodeValidator<'a> {
         let mut v = CodeValidator {
             module,
             spaces: module.index_space_types(),
-            locals,
+            locals: locals.types(&function_type.parameters),
             function_type,
             vals: vec![],
             ctrls: vec![],
@@ -536,26 +540,6 @@ impl<'a> CodeValidator<'a> {
         self.apply_signature(signature)
     }
 
-    fn local(&mut self, local_index: u32) -> Result<&ValueType, ValidationError> {
-        let li = local_index;
-        let param_count = self.function_type.parameters.len();
-        let local: Option<&ValueType> = if (li as usize) < param_count {
-            self.function_type.parameters.get(li as usize)
-        } else {
-            let li = li - param_count as u32;
-            self.locals.get(li)
-        };
-
-        local.ok_or(ValidationError::UnknownLocal(local_index))
-    }
-
-    fn global(&mut self, global_index: u32) -> Result<&GlobalType, ValidationError> {
-        self.spaces
-            .global_types
-            .get(global_index as usize)
-            .ok_or(ValidationError::UnknownGlobal(global_index))
-    }
-
     fn label_types_at(&mut self, li: u32) -> Result<Vec<MaybeValue>, ValidationError> {
         if self.ctrls.len() <= li as usize {
             return Err(ValidationError::UnknownLabel);
@@ -582,8 +566,6 @@ impl<'a> CodeValidator<'a> {
     /// Stack pushes/pops occur before alignment and lane checks. This is fine because
     /// any validation error rejects the entire function — partial stack state is discarded.
     fn validate_simd(&mut self, op: &SimdOp) -> Result<(), ValidationError> {
-        use SimdOp::*;
-
         match op {
             // [i32] → [v128] : loads (pop address, push result)
             V128Load { memarg } => {
@@ -765,45 +747,10 @@ impl<'a> CodeValidator<'a> {
 impl Validator for CodeValidator<'_> {
     fn validate(&mut self, inst: &Instruction) -> Result<(), ValidationError> {
         let kind = &inst.kind;
-        use InstructionKind::*;
-
+        if let Some(signature) = context_signature(kind, &self.module.types, self.spaces, &self.locals)? {
+            return signature.steps().try_for_each(|step| self.apply_signature(step));
+        }
         match kind {
-            LocalGet { local_idx } => {
-                let local = *self.local(*local_idx)?;
-                self.push_val(Val(local)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            LocalSet { local_idx } => {
-                let local = *self.local(*local_idx)?;
-                self.pop_expected(Val(local)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            LocalTee { local_idx } => {
-                let local = *self.local(*local_idx)?;
-                self.pop_expected(Val(local)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(local)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            GlobalGet { global_idx } => {
-                let global = *self.global(*global_idx)?;
-                self.push_val(Val(global.value_type))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            GlobalSet { global_idx } => {
-                let global = *self.global(*global_idx)?;
-                if !global.mutable {
-                    return Err(ValidationError::GlobalIsImmutable);
-                }
-                self.pop_expected(Val(global.value_type))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
             I32Load { memarg }
             | I32Load8S { memarg }
             | I32Load8U { memarg }
@@ -963,22 +910,6 @@ impl Validator for CodeValidator<'_> {
                 if src_table_type.ref_type != dst_table_type.ref_type {
                     return Err(ValidationError::TypeMismatch);
                 }
-                Ok(())
-            }
-
-            TableGet { table_idx } => {
-                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(table.ref_type.into()))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            TableSet { table_idx } => {
-                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-                self.pop_expected(Val(table.ref_type.into()))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
                 Ok(())
             }
 
@@ -1209,41 +1140,6 @@ impl Validator for CodeValidator<'_> {
                 Ok(())
             }
 
-            Call { func_idx } => {
-                // Get type index directly from pre-computed data
-                let type_idx = self
-                    .spaces
-                    .function_type_indices
-                    .get(*func_idx as usize)
-                    .ok_or(ValidationError::UnknownFunction(*func_idx))?;
-
-                let ftype = self
-                    .module
-                    .types
-                    .get(*type_idx)
-                    .ok_or(ValidationError::UnknownFunctionType)?;
-                self.apply_signature(ftype.signature())
-            }
-
-            CallIndirect { type_idx, table_idx } => {
-                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-
-                if ValueType::from(table.ref_type) != FuncRef {
-                    return Err(ValidationError::TypeMismatch);
-                }
-
-                // operand that directs us to the table entry
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-
-                // table entry must have this function signature
-                let ftype = self
-                    .module
-                    .types
-                    .get(*type_idx)
-                    .ok_or(ValidationError::UnknownFunctionType)?;
-                self.apply_signature(ftype.signature())
-            }
-
             Select => {
                 // Select pops: [t t i32] and pushes: [t]
                 // Note: We report TypeMismatch for insufficient operands rather than InvalidResultArity.
@@ -1358,26 +1254,6 @@ impl Validator for CodeValidator<'_> {
                 // Verify table exists
                 self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
                 self.apply_fixed(kind)
-            }
-
-            TableGrow { table_idx } => {
-                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-                // table.grow pops: [n:i32, init:reftype] and pushes: [prev_size:i32]
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(table.ref_type.into()))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                self.push_val(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
-            }
-
-            TableFill { table_idx } => {
-                let table = self.table(*table_idx).ok_or(ValidationError::UnknownTable)?;
-                // table.fill pops: [i:i32, val:reftype, n:i32]
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(table.ref_type.into()))
-                    .ok_or(ValidationError::TypeMismatch)?;
-                self.pop_expected(Val(I32)).ok_or(ValidationError::TypeMismatch)?;
-                Ok(())
             }
 
             Simd(op) => self.validate_simd(op),
@@ -1606,6 +1482,10 @@ pub(crate) fn validate_module(module: &Module) -> Result<(), ValidationError> {
         let ftype = module
             .get_function_type(i)
             .ok_or(ValidationError::UnknownFunctionType)?;
+        // The binary decoder applies the same limit before validating.
+        if body.locals.len() > u64::from(super::limits::MAX_FUNCTION_LOCALS) {
+            return Err(ValidationError::TooManyLocals);
+        }
 
         let mut v = CodeValidator::new(module, &body.locals, ftype, func_index);
         validate_structured(&body.body.body, &mut v)?;

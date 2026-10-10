@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 
 use fhex::ToHex;
 
+use crate::parser::encoding::{DESC_FUNC, DESC_GLOBAL, DESC_MEMORY, DESC_TABLE};
 use crate::parser::index_spaces::IndexSpaceTypes;
 use crate::parser::instruction::{self, InstructionKind};
 
@@ -1310,7 +1311,6 @@ impl CodeSection {
                 let inst_kind = &instruction.kind;
 
                 // Update indent before instruction (for else/end)
-                use crate::parser::instruction::InstructionKind;
                 match inst_kind {
                     InstructionKind::Else | InstructionKind::End => indent = indent.saturating_sub(1),
                     _ => {}
@@ -1709,6 +1709,15 @@ impl Locals {
 
     pub fn iter(&self) -> std::slice::Iter<'_, (u32, ValueType)> {
         self.entries.iter()
+    }
+
+    /// Every local's type by index: `params`, then each declared local.
+    pub fn types(&self, params: &[ValueType]) -> Vec<ValueType> {
+        let mut types = params.to_vec();
+        for (count, value_type) in &self.entries {
+            types.resize(types.len() + *count as usize, *value_type);
+        }
+        types
     }
 
     pub fn get(&self, index: u32) -> Option<&ValueType> {
@@ -2204,7 +2213,6 @@ impl fmt::Display for FunctionBody {
 
 impl ExportIndex {
     pub fn decode(byte: u8, idx: u32) -> Result<ExportIndex, io::Error> {
-        use super::encoding::{DESC_FUNC, DESC_GLOBAL, DESC_MEMORY, DESC_TABLE};
         match byte {
             DESC_FUNC => Ok(ExportIndex::Function(idx)),
             DESC_TABLE => Ok(ExportIndex::Table(idx)),

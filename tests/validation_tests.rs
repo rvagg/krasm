@@ -42,3 +42,16 @@ fn module_validation_accepts_every_decoded_spec_module() {
     );
     assert!(accepted > 1000, "only {accepted} modules decoded");
 }
+
+#[test]
+fn module_validation_limits_declared_locals() {
+    use krasm::ValidationError;
+    use krasm::parser::module::{Locals, ValueType};
+
+    let mut module = krasm::wat::parse("(module (func))").unwrap().into_inner().unwrap();
+    module.code.code[0].locals = Locals::new(vec![(u32::MAX, ValueType::I32)]);
+    assert!(matches!(
+        ValidatedModule::new(module),
+        Err(ValidationError::TooManyLocals)
+    ));
+}

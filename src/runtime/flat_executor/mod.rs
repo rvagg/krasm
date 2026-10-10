@@ -49,7 +49,7 @@ use super::stack::Stack;
 use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
 use super::value::Value;
 use super::{ExecutionOutcome, ExternalCallRequest, RuntimeError};
-use crate::parser::module::{Data, FunctionType, ValueType};
+use crate::parser::module::{Data, ExternalKind, FunctionType, Module, ValueType};
 
 /// Perform stack cleanup for a branch: keep `arity` values from the top and
 /// discard everything beneath them down to `abs_depth`.
@@ -97,12 +97,7 @@ pub struct FuncEntry {
 
 /// Build a `FuncEntry` per module-level function (imports first), pairing
 /// each function's Store address with its type index.
-pub(crate) fn build_func_entries(
-    module: &crate::parser::module::Module,
-    function_addresses: &[FuncAddr],
-) -> Vec<FuncEntry> {
-    use crate::parser::module::ExternalKind;
-
+pub(crate) fn build_func_entries(module: &Module, function_addresses: &[FuncAddr]) -> Vec<FuncEntry> {
     let mut type_indices = Vec::with_capacity(function_addresses.len());
     for imp in &module.imports.imports {
         if let ExternalKind::Function(type_idx) = imp.external_kind {

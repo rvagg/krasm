@@ -1,16 +1,26 @@
-//! Operand and result types fixed by an instruction's opcode.
+//! The operand and result types of each instruction.
 //!
 //! Most instructions have one type signature, whatever the module or stack:
-//! `i32.add` is `[i32 i32] -> [i32]`, `v128.load` is `[i32] -> [v128]`. Others
-//! take their types from context: a local's declaration, a callee's signature,
-//! a table's element type, or the operand stack itself (`drop`, `select`).
-//! [`fixed_signature`] answers for the first kind and returns `None` for the
-//! second. Validation and compilation both read it, so they cannot disagree
-//! about what an instruction consumes and produces.
+//! `i32.add` is `[i32 i32] -> [i32]`, `v128.load` is `[i32] -> [v128]`.
+//! [`fixed_signature`] gives these.
+//!
+//! Others depend on what their immediate names. `local.get 2` pushes whatever
+//! type local 2 was declared with, `call 5` takes function 5's parameters and
+//! returns its results, and `table.get 0` returns table 0's element type.
+//! [`context_signature`] looks these up.
+//!
+//! That leaves `drop`, `select` and `ref.is_null`, whose types come from the
+//! operands on the stack, for each consumer to handle. Validation and
+//! compilation both read these signatures, so they cannot disagree about what
+//! an instruction consumes and produces.
 
 use super::{InstructionKind, SimdOp};
-use crate::parser::module::FunctionType;
+use crate::parser::index_spaces::IndexSpaceTypes;
 use crate::parser::module::ValueType::{self, *};
+use crate::parser::module::{FunctionType, RefType, TypeSection};
+use crate::parser::validate::ValidationError;
+use InstructionKind::*;
+use SimdOp::*;
 
 /// Parameter and result types, parameters in stack order: the last is on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +45,6 @@ const fn sig(params: &'static [ValueType], results: &'static [ValueType]) -> Opt
 /// The signature of an instruction whose types depend only on its opcode,
 /// or `None` when they depend on the module or the operand stack.
 pub fn fixed_signature(kind: &InstructionKind) -> Option<Signature<'static>> {
-    use InstructionKind::*;
     match kind {
         // Types come from labels, blocks, callees, locals, globals, tables or the stack.
         Unreachable
@@ -130,9 +139,136 @@ pub fn fixed_signature(kind: &InstructionKind) -> Option<Signature<'static>> {
     }
 }
 
+/// The signature of a local, global, table or call instruction, found by
+/// looking up the local, global, table or function its immediate names.
+/// `None` for any other instruction. `locals` holds the function's parameter
+/// then declared local types, by local index.
+pub fn context_signature<'a>(
+    kind: &InstructionKind,
+    types: &'a TypeSection,
+    spaces: &IndexSpaceTypes,
+    locals: &[ValueType],
+) -> Result<Option<ContextSignature<'a>>, ValidationError> {
+    let local = |index: u32| {
+        (locals.get(index as usize).copied())
+            .map(one)
+            .ok_or(ValidationError::UnknownLocal(index))
+    };
+    let global = |index: u32| (spaces.global_types.get(index as usize)).ok_or(ValidationError::UnknownGlobal(index));
+    let table = |index: u32| {
+        (spaces.table_types.get(index as usize).map(|table| table.ref_type)).ok_or(ValidationError::UnknownTable)
+    };
+    let callee = |type_idx: u32| types.get(type_idx).ok_or(ValidationError::UnknownFunctionType);
+    let signature = match kind {
+        LocalGet { local_idx } => Signature {
+            params: &[],
+            results: local(*local_idx)?,
+        },
+        LocalSet { local_idx } => Signature {
+            params: local(*local_idx)?,
+            results: &[],
+        },
+        LocalTee { local_idx } => {
+            let local = local(*local_idx)?;
+            Signature {
+                params: local,
+                results: local,
+            }
+        }
+        GlobalGet { global_idx } => Signature {
+            params: &[],
+            results: one(global(*global_idx)?.value_type),
+        },
+        GlobalSet { global_idx } => {
+            let global = global(*global_idx)?;
+            if !global.mutable {
+                return Err(ValidationError::GlobalIsImmutable);
+            }
+            Signature {
+                params: one(global.value_type),
+                results: &[],
+            }
+        }
+        TableGet { table_idx } => Signature {
+            params: &[I32],
+            results: one(table(*table_idx)?.into()),
+        },
+        TableSet { table_idx } => Signature {
+            params: match table(*table_idx)? {
+                RefType::FuncRef => &[I32, FuncRef],
+                RefType::ExternRef => &[I32, ExternRef],
+            },
+            results: &[],
+        },
+        TableGrow { table_idx } => Signature {
+            params: match table(*table_idx)? {
+                RefType::FuncRef => &[FuncRef, I32],
+                RefType::ExternRef => &[ExternRef, I32],
+            },
+            results: &[I32],
+        },
+        TableFill { table_idx } => Signature {
+            params: match table(*table_idx)? {
+                RefType::FuncRef => &[I32, FuncRef, I32],
+                RefType::ExternRef => &[I32, ExternRef, I32],
+            },
+            results: &[],
+        },
+        Call { func_idx } => {
+            let type_idx = (spaces.function_type_indices.get(*func_idx as usize))
+                .ok_or(ValidationError::UnknownFunction(*func_idx))?;
+            callee(*type_idx)?.signature()
+        }
+        CallIndirect { type_idx, table_idx } => {
+            let element = table(*table_idx)?;
+            let signature = callee(*type_idx)?.signature();
+            if element != RefType::FuncRef {
+                return Err(ValidationError::TypeMismatch);
+            }
+            return Ok(Some(ContextSignature::Indirect(signature)));
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(ContextSignature::Direct(signature)))
+}
+
+/// The signature [`context_signature`] finds for an instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextSignature<'a> {
+    Direct(Signature<'a>),
+    /// `call_indirect`: the callee's signature. The instruction also pops an
+    /// i32 table index, which sits above the callee's arguments.
+    Indirect(Signature<'a>),
+}
+
+impl<'a> ContextSignature<'a> {
+    /// The signatures to apply in order: `call_indirect` first pops its table
+    /// index, then the callee's arguments.
+    pub fn steps(self) -> impl Iterator<Item = Signature<'a>> {
+        let (table_index, signature) = match self {
+            ContextSignature::Direct(signature) => (None, signature),
+            ContextSignature::Indirect(signature) => (sig(&[I32], &[]), signature),
+        };
+        table_index.into_iter().chain([signature])
+    }
+}
+
+/// A one-type slice with a static lifetime, so a signature built from a
+/// local, global or table type borrows nothing.
+fn one(value_type: ValueType) -> &'static [ValueType] {
+    match value_type {
+        I32 => &[I32],
+        I64 => &[I64],
+        F32 => &[F32],
+        F64 => &[F64],
+        V128 => &[V128],
+        FuncRef => &[FuncRef],
+        ExternRef => &[ExternRef],
+    }
+}
+
 /// Every SIMD instruction has a fixed signature.
 pub(crate) fn simd_signature(op: &SimdOp) -> Signature<'static> {
-    use SimdOp::*;
     let (params, results): (&'static [ValueType], &'static [ValueType]) = match op {
         V128Load { .. }
         | V128Load8x8S { .. }
@@ -383,6 +519,69 @@ mod tests {
             (&[V128, F64][..], &[V128][..])
         );
         assert_eq!(fixed(InstructionKind::I64Eqz), (&[I64][..], &[I32][..]));
+    }
+
+    /// The params and results of each step of `kind`'s context signature in
+    /// the first function of `source`.
+    type Steps = Vec<(Vec<ValueType>, Vec<ValueType>)>;
+    fn context(source: &str, kind: InstructionKind) -> Result<Steps, ValidationError> {
+        let module = crate::wat::parse(source).expect("WAT parse failed");
+        let ftype = module.get_function_type(0).expect("a function");
+        let locals = module.code.code[0].locals.types(&ftype.parameters);
+        let signature = context_signature(&kind, &module.types, module.index_space_types(), &locals)?;
+        let steps = signature.expect("a context signature").steps();
+        Ok(steps
+            .map(|step| (step.params.to_vec(), step.results.to_vec()))
+            .collect())
+    }
+
+    #[test]
+    fn context_signatures_read_locals_globals_tables_and_callees() {
+        let source = "(module
+            (type $t (func (param i64) (result f32)))
+            (table 1 externref)
+            (global i32 (i32.const 0))
+            (func (param i32) (local f64)))";
+        let steps = |kind| context(source, kind).unwrap();
+        let one = |params: &[ValueType], results: &[ValueType]| vec![(params.to_vec(), results.to_vec())];
+
+        assert_eq!(steps(InstructionKind::LocalTee { local_idx: 1 }), one(&[F64], &[F64]));
+        assert_eq!(steps(InstructionKind::GlobalGet { global_idx: 0 }), one(&[], &[I32]));
+        assert_eq!(
+            steps(InstructionKind::TableFill { table_idx: 0 }),
+            one(&[I32, ExternRef, I32], &[])
+        );
+        assert_eq!(steps(InstructionKind::Call { func_idx: 0 }), one(&[I32], &[]));
+    }
+
+    #[test]
+    fn call_indirect_pops_its_table_index_before_the_arguments() {
+        let source = "(module (type (func (param i64) (result f32))) (table 1 funcref) (func))";
+        let kind = InstructionKind::CallIndirect {
+            type_idx: 0,
+            table_idx: 0,
+        };
+        assert_eq!(
+            context(source, kind).unwrap(),
+            vec![(vec![I32], vec![]), (vec![I64], vec![F32])]
+        );
+    }
+
+    #[test]
+    fn context_signatures_reject_what_the_context_forbids() {
+        let source = "(module (table 1 externref) (global i32 (i32.const 0)) (func (local i32)))";
+        let error = |kind| context(source, kind).unwrap_err().to_string();
+        assert_eq!(error(InstructionKind::LocalGet { local_idx: 1 }), "unknown local 1");
+        assert_eq!(
+            error(InstructionKind::GlobalSet { global_idx: 0 }),
+            "global is immutable"
+        );
+        assert_eq!(error(InstructionKind::TableGet { table_idx: 1 }), "unknown table");
+        let call_indirect = InstructionKind::CallIndirect {
+            type_idx: 0,
+            table_idx: 0,
+        };
+        assert_eq!(error(call_indirect), "type mismatch");
     }
 
     #[test]
