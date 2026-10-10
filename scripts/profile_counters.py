@@ -9,6 +9,12 @@ Instructions per op divides instructions retired by a fixed work unit: the
 total flat dispatches in an existing unfused instruction capture of the same
 module and input. The denominator does not change when the IR does, so the
 ratio stays comparable across builds that dispatch differently.
+
+An arm is a group of variants: one binary, or several code layouts of one source
+(see `profile_layouts`). Every variant of every arm is interleaved in one run.
+A group reports the median of its variants' medians and their range; the range
+is the arm's layout sensitivity. Against the reference arm, "faster" counts the
+layout pairs in which the arm takes fewer cycles.
 """
 
 from datetime import datetime, timezone
@@ -54,13 +60,14 @@ def dispatch_total(capture, workload):
 
 
 def freeze(arms, output, digest):
-    """Copy each labelled binary into the capture so later rebuilds cannot alter it."""
+    """Copy each variant's binary into the capture so later rebuilds cannot alter it."""
     frozen = {}
-    for label, path in arms.items():
-        destination = output / "bin" / label
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-        frozen[label] = {"path": destination, "origin": str(path.resolve()), "sha256": digest(destination)}
+    for variants in arms.values():
+        for label, path in variants:
+            destination = output / "bin" / label
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+            frozen[label] = {"path": destination, "origin": str(Path(path).resolve()), "sha256": digest(destination)}
     return frozen
 
 
@@ -105,10 +112,29 @@ def summarise(samples, dispatches):
     return stats
 
 
-def compare(arms, workloads, runs, output, cpu, dispatch_capture, events, digest, validate_output, save_json):
+def summarise_group(variant_stats, metrics):
+    """Median of the variants' medians, and their range, for each metric."""
+    group = {}
+    for metric in metrics:
+        medians = [stats[metric]["median"] for stats in variant_stats]
+        middle = statistics.median(medians)
+        group[metric] = {"median": middle, "min": min(medians), "max": max(medians),
+                         "spread": (max(medians) - min(medians)) / middle, "variants": medians}
+    return group
+
+
+def faster_pairs(reference, candidate):
+    """Layout pairs in which the candidate has fewer cycles, out of all pairs."""
+    pairs = [(r, c) for r in reference for c in candidate]
+    return sum(c < r for r, c in pairs), len(pairs)
+
+
+def compare(arms, workloads, runs, output, cpu, dispatch_capture, events, digest, validate_output, save_json,
+            layouts=None):
     output.mkdir(parents=True, exist_ok=False)
     frozen = freeze(arms, output, digest)
     labels = list(frozen)
+    groups = {arm: [label for label, _ in variants] for arm, variants in arms.items()}
     governor = Path(f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor")
     report = {
         "method": "perf stat user-mode counters and whole-process wall time per invocation",
@@ -118,7 +144,10 @@ def compare(arms, workloads, runs, output, cpu, dispatch_capture, events, digest
         "governor": governor.read_text().strip() if governor.exists() else None,
         "perf": subprocess.check_output(["perf", "--version"], text=True).strip(),
         "events": list(events),
-        "arms": {label: {key: str(value) for key, value in arm.items()} for label, arm in frozen.items()},
+        "arms": {arm: {"layouts": (layouts or {}).get(arm),
+                       "variants": {label: {key: str(value) for key, value in frozen[label].items()}
+                                    for label in members}}
+                 for arm, members in groups.items()},
         "warmups_per_arm": 1,
         "runs": runs,
         "dispatch_capture": str(dispatch_capture) if dispatch_capture else None,
@@ -136,27 +165,41 @@ def compare(arms, workloads, runs, output, cpu, dispatch_capture, events, digest
             for label in order:
                 entry["samples"][label].append(measure(frozen[label]["path"], workload, scratch, events, validate_output))
         entry["stats"] = {label: summarise(entry["samples"][label], dispatches) for label in labels}
+        metrics = ["wall_ms", *events]
+        entry["groups"] = {arm: summarise_group([entry["stats"][label] for label in members], metrics)
+                           for arm, members in groups.items()}
+        reference = next(iter(groups))
+        for arm, group in entry["groups"].items():
+            if dispatches:
+                group["instructions_per_op"] = group["instructions:u"]["median"] / dispatches
+            if arm != reference:
+                faster, pairs = faster_pairs(entry["groups"][reference]["cycles:u"]["variants"],
+                                             group["cycles:u"]["variants"])
+                group["faster_layout_pairs"] = {"faster": faster, "pairs": pairs}
         report["workloads"][workload["name"]] = entry
-        print_workload(workload["name"], entry, labels)
+        print_workload(workload["name"], entry)
         save_json(output / "counters.json", report)
     shutil.rmtree(scratch)
     return report
 
 
-def print_workload(name, entry, labels):
-    base = entry["stats"][labels[0]]
+def print_workload(name, entry):
+    groups = entry["groups"]
+    reference_name = next(iter(groups))
+    reference = groups[reference_name]
     print(f"\n{name}" + (f" ({entry['dispatches']:,} ops)" if entry["dispatches"] else ""))
-    print(f"  {'arm':14} {'instructions':>16} {'insn/op':>8} {'cycles':>16} {'IPC':>5} {'br-miss':>12} {'wall ms':>9}  vs {labels[0]}")
-    for label in labels:
-        stats = entry["stats"][label]
-        insns, cycles = stats["instructions:u"]["median"], stats["cycles:u"]["median"]
-        per_op = f"{stats['instructions_per_op']:.1f}" if "instructions_per_op" in stats else "-"
+    print(f"  {'arm':12} {'instructions':>15} {'insn/op':>7} {'cycles (median, min-max, spread)':>40} "
+          f"{'IPC':>5} {'wall ms':>8}  vs {reference_name}")
+    for arm, group in groups.items():
+        insns, cycles = group["instructions:u"], group["cycles:u"]
+        per_op = f"{group['instructions_per_op']:.1f}" if "instructions_per_op" in group else "-"
+        span = (f"{cycles['median'] / 1e6:,.0f}M ({cycles['min'] / 1e6:,.0f}-{cycles['max'] / 1e6:,.0f}, "
+                f"{100 * cycles['spread']:.1f}%)")
         delta = ""
-        if label != labels[0]:
-            delta = (f"insn {100 * (insns / base['instructions:u']['median'] - 1):+.1f}%  "
-                     f"cyc {100 * (cycles / base['cycles:u']['median'] - 1):+.1f}%  "
-                     f"wall {100 * (stats['wall_ms']['median'] / base['wall_ms']['median'] - 1):+.1f}%")
-        misses = stats.get("branch-misses:u", {}).get("median")
-        misses = f"{misses:12,.0f}" if misses is not None else f"{'-':>12}"
-        print(f"  {label:14} {insns:16,.0f} {per_op:>8} {cycles:16,.0f} {insns / cycles:5.2f} "
-              f"{misses} {stats['wall_ms']['median']:9.1f}  {delta}")
+        if arm != reference_name:
+            pairs = group["faster_layout_pairs"]
+            delta = (f"insn {100 * (insns['median'] / reference['instructions:u']['median'] - 1):+.1f}%  "
+                     f"cyc {100 * (cycles['median'] / reference['cycles:u']['median'] - 1):+.1f}%  "
+                     f"faster in {pairs['faster']}/{pairs['pairs']}")
+        print(f"  {arm:12} {insns['median']:15,.0f} {per_op:>7} {span:>40} "
+              f"{insns['median'] / cycles['median']:5.2f} {group['wall_ms']['median']:8.1f}  {delta}")

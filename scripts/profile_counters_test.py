@@ -1,6 +1,6 @@
 import unittest
 
-from profile_counters import orders, parse_perf_csv
+from profile_counters import faster_pairs, orders, parse_perf_csv, summarise_group
 
 
 class CounterTests(unittest.TestCase):
@@ -31,6 +31,17 @@ class CounterTests(unittest.TestCase):
 
     def test_two_arms_alternate(self):
         self.assertEqual(orders(["a", "b"], 4), [["a", "b"], ["b", "a"], ["b", "a"], ["a", "b"]])
+
+    def test_group_takes_the_median_of_variant_medians(self):
+        variants = [{"cycles:u": {"median": value}} for value in (120, 100, 110)]
+        group = summarise_group(variants, ["cycles:u"])["cycles:u"]
+        self.assertEqual((group["median"], group["min"], group["max"]), (110, 100, 120))
+        self.assertAlmostEqual(group["spread"], 20 / 110)
+        self.assertEqual(group["variants"], [120, 100, 110])
+
+    def test_faster_pairs_compare_every_layout_pair(self):
+        self.assertEqual(faster_pairs([100, 120], [90, 110, 130]), (3, 6))
+        self.assertEqual(faster_pairs([100], [100]), (0, 1))
 
 
 if __name__ == "__main__":

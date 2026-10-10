@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible timing, GDB sampling, flat-instruction capture and counter comparison (Python 3.9+)."""
+"""Reproducible timing, GDB sampling, flat-instruction capture, layout builds and counter comparison (Python 3.9+)."""
 
 import argparse
 from collections import Counter
@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from profile_counters import EVENTS, compare
+from profile_layouts import build_layouts, expand_arm
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKLOADS = ROOT / "scripts/profile_workloads.json"
@@ -459,14 +460,12 @@ def collect(args, output, binary, manifest, workload):
 
 
 def run_compare(args, output):
-    arms = {}
+    arms, layouts = {}, {}
     for arm in args.arm:
         label, separator, path = arm.partition("=")
-        if not separator or not label or label in arms:
-            raise RuntimeError(f"arms need distinct LABEL=BINARY values: {arm!r}")
-        if not Path(path).is_file():
-            raise RuntimeError(f"arm binary is missing: {path}")
-        arms[label] = Path(path)
+        if not separator or not label or "#" in label or label in arms:
+            raise RuntimeError(f"arms need distinct LABEL=PATH values without '#': {arm!r}")
+        arms[label], layouts[label] = expand_arm(label, path)
     if args.cpu not in os.sched_getaffinity(0):
         raise RuntimeError(f"CPU {args.cpu} is not in the allowed affinity set")
     events = tuple(event for event in args.events.split(",") if event)
@@ -486,10 +485,16 @@ def run_compare(args, output):
     os.sched_setaffinity(0, {args.cpu})
     try:
         compare(arms, workloads, args.runs, output, args.cpu, dispatch_capture, events,
-                digest, validate_output, save_json)
+                digest, validate_output, save_json, layouts)
     finally:
         os.sched_setaffinity(0, affinity)
     print(f"\nResults: {output}")
+
+
+def run_build(args, output):
+    manifest = build_layouts(ROOT, output, args.seeds, args.rev, args.features, digest, save_json)
+    print(f"{len(manifest['layouts'])} layouts, linked by {manifest['linker']}")
+    print(f"Results: {output}")
 
 
 def positive_int(value):
@@ -521,9 +526,16 @@ def main():
             mode.add_argument("--baseline", type=Path, help="frozen krasm binary for alternating paired measurements")
         elif name == "sample":
             mode.add_argument("--interval-ms", type=positive_int, default=6)
+    layout_build = modes.add_parser("build", help="build one source in several code layouts for compare")
+    layout_build.add_argument("--seeds", type=positive_int, default=5,
+                              help="layouts to build; seed 0 keeps the natural function order")
+    layout_build.add_argument("--rev", help="git revision to build (default: the working tree)")
+    layout_build.add_argument("--features", help="comma-separated Cargo features")
+    layout_build.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-build)")
     comparison = modes.add_parser("compare", help="hardware counters for frozen binaries across workloads")
-    comparison.add_argument("--arm", action="append", required=True, metavar="LABEL=BINARY",
-                            help="labelled krasm binary; repeat for each arm, the first is the reference")
+    comparison.add_argument("--arm", action="append", required=True, metavar="LABEL=PATH",
+                            help="a krasm binary, or a `build` directory of layouts; repeat for each arm, "
+                                 "the first is the reference")
     comparison.add_argument("--cpu", type=int, required=True, help="allowed logical CPU to pin execution to")
     comparison.add_argument("--registry", type=Path, default=WORKLOADS,
                             help="workload registry JSON; artifact paths are relative to the repository root")
@@ -552,6 +564,9 @@ def main():
             return
         if args.mode == "compare":
             run_compare(args, output)
+            return
+        if args.mode == "build":
+            run_build(args, output)
             return
         if args.superinstructions and (args.mode == "collect" or args.engine != "flat"):
             parser.error("--superinstructions requires bench/sample with the flat engine; collect stays unfused")

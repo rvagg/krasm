@@ -126,10 +126,18 @@ Modules: `noop_loop`, `fib_iterative`, `fib_recursive`, `memcpy`, `primes`.
 CommP benchmark input is `benches/commp_bench_500k.bin`; expected hash:
 `c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523`.
 
+## Performance Measurement
+- Instructions retired decide mechanical changes; cycles and wall time vary 10-25% with
+  code placement, so compare them only across layout groups, never single builds.
+- `python3 scripts/profile.py compare --cpu 4 --arm a=BIN_OR_DIR --arm b=...` (perf counters).
+- `python3 scripts/profile.py build --seeds 5 [--rev REV]` builds seeded layouts for `compare`.
+- Corpus workloads: `--registry target/corpus/registry.json --corpus qualified`.
+
 ## Public API Pointers
-- `krasm::wat::parse()` parses WAT to `Module`.
+- `krasm::wat::parse()` and `krasm::parser::parse()` return a `ValidatedModule`.
+- `ValidatedModule::new()` validates a hand-built `Module`; `into_inner()` recovers one to edit.
 - `krasm::encoder::encode()` encodes `Module` to `.wasm`.
-- `Store::create_instance()` instantiates modules.
+- `Store::create_instance()` instantiates a `&ValidatedModule`; validation is the trust boundary.
 - `Store::invoke_export()` calls exported functions.
 - `Store::wrap()` and `Store::wrap_with_caller()` expose Rust host functions.
 - `krasm::wasi::{WasiContext, create_wasi_instance}` builds WASI instances.
@@ -138,5 +146,6 @@ CommP benchmark input is `benches/commp_bench_500k.bin`; expected hash:
 - `DecodeError`: binary parser errors with byte positions.
 - `ValidationError`: module validation errors.
 - `LexError` / `ParseError`: WAT errors with source spans.
-- `RuntimeError`: traps, import/export failures, type/resource errors.
+- `RuntimeError`: traps, import/export failures, type/resource errors; `Compile` for
+  inconsistencies validation should have rejected.
 - `EncodeError`: binary encoder errors.
