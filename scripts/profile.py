@@ -208,8 +208,6 @@ def prepare(args, output, workload):
     features = []
     if args.mode == "collect":
         features.append("instruction-profile")
-    if args.superinstructions:
-        features.append("superinstructions")
     if features:
         command += ["--features", ",".join(features)]
     print(f"Building {args.mode} binary; artifacts: {output}", flush=True)
@@ -243,7 +241,6 @@ def prepare(args, output, workload):
         "registry_sha256": workload["registry_sha256"],
         "guest_build_provenance": workload["build_provenance"],
         "engine": args.engine,
-        "superinstructions": args.superinstructions,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "host": platform.uname()._asdict(),
         "cpu": args.cpu,
@@ -511,7 +508,6 @@ def main():
         mode = modes.add_parser(name)
         mode.add_argument("--cpu", type=int, required=name != "collect", help="allowed logical CPU to pin execution to")
         mode.add_argument("--engine", choices=("flat",) if name == "collect" else ("flat", "structured"), default="flat")
-        mode.add_argument("--superinstructions", action="store_true", help="enable experimental scalar fusion (bench/sample only)")
         mode.add_argument("--registry", type=Path, default=WORKLOADS,
                           help="workload registry JSON; artifact paths are relative to the repository root")
         selector = mode.add_mutually_exclusive_group()
@@ -544,7 +540,7 @@ def main():
     selection.add_argument("--corpus", help="named corpus in the selected registry")
     comparison.add_argument("--runs", type=positive_int, default=6)
     comparison.add_argument("--dispatch-capture", type=Path, default=ROOT / "target/profiles/corpus-instructions",
-                            help="directory of per-workload unfused instruction captures for instructions per op")
+                            help="directory of per-workload instruction captures for instructions per op")
     comparison.add_argument("--events", default=",".join(EVENTS), help="comma-separated perf events (at most five)")
     comparison.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-compare)")
     analysis = modes.add_parser("analyse", help="rank instruction sequences in one or more captures")
@@ -568,8 +564,6 @@ def main():
         if args.mode == "build":
             run_build(args, output)
             return
-        if args.superinstructions and (args.mode == "collect" or args.engine != "flat"):
-            parser.error("--superinstructions requires bench/sample with the flat engine; collect stays unfused")
         if args.cpu is not None:
             if not hasattr(os, "sched_getaffinity"):
                 parser.error("Linux CPU affinity is required")

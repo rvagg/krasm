@@ -6,7 +6,7 @@ Instructions retired is the primary metric for interpreter mechanics; cycles and
 wall time are secondary because code layout and frequency move them more.
 
 Instructions per op divides instructions retired by a fixed work unit: the
-total flat dispatches in an existing unfused instruction capture of the same
+total flat dispatches in an existing instruction capture of the same
 module and input. The denominator does not change when the IR does, so the
 ratio stays comparable across builds that dispatch differently.
 

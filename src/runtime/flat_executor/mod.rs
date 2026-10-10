@@ -1376,11 +1376,6 @@ impl FlatExecutor {
                 Op::Unreachable => {
                     return Err(RuntimeError::Trap("unreachable".to_string()));
                 }
-                #[cfg(feature = "superinstructions")]
-                Op::Super(instruction) => {
-                    instruction.execute(&locals, stack, instruction_budget)?;
-                    pc += 1;
-                }
             }
         }
 

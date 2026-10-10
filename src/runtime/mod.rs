@@ -18,8 +18,6 @@ pub(crate) mod ops;
 pub mod profile;
 pub(crate) mod stack;
 pub mod store;
-#[cfg(feature = "superinstructions")]
-pub mod superinstructions;
 pub mod table;
 pub(crate) mod test_utils;
 pub mod value;

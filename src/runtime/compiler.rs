@@ -179,9 +179,6 @@ pub fn compile(
         return Err(error);
     }
 
-    #[cfg(feature = "superinstructions")]
-    super::superinstructions::fuse(&mut ctx.ops);
-
     // Expand run-length locals declarations into one typed zero per local,
     // so frame initialisation is a plain copy.
     let mut local_defaults = Vec::with_capacity(locals.len() as usize);

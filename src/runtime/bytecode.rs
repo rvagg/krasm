@@ -634,10 +634,6 @@ pub enum Op {
     DataDrop {
         data_idx: u32,
     },
-
-    /// Optional fused operations, kept last to avoid renumbering ordinary ops.
-    #[cfg(feature = "superinstructions")]
-    Super(super::superinstructions::SuperInstruction),
 }
 
 impl Op {
@@ -645,8 +641,6 @@ impl Op {
     /// Used by the compiler to track stack depth during emission.
     pub fn stack_delta(&self) -> i32 {
         match self {
-            #[cfg(feature = "superinstructions")]
-            Op::Super(_) => 1,
             Op::I32Const(_) | Op::I64Const(_) | Op::F32Const(_) | Op::F64Const(_) | Op::V128Const(_) => 1,
             Op::I32Add | Op::I32Sub | Op::I32Mul => -1,
             Op::I32DivS | Op::I32DivU | Op::I32RemS | Op::I32RemU => -1,
@@ -993,8 +987,6 @@ impl fmt::Display for CompiledFunction {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            #[cfg(feature = "superinstructions")]
-            Op::Super(instruction) => instruction.fmt(f),
             Op::I32Const(v) => write!(f, "i32.const {v}"),
             Op::I64Const(v) => write!(f, "i64.const {v}"),
             Op::F32Const(v) => write!(f, "f32.const {v}"),
