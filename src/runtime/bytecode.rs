@@ -13,6 +13,11 @@ use crate::parser::instruction::MemArg;
 use crate::parser::module::ValueType;
 use std::fmt;
 
+/// Words a value occupies: a `v128` takes two, everything else one.
+pub fn value_words(value_type: ValueType) -> u32 {
+    if value_type == ValueType::V128 { 2 } else { 1 }
+}
+
 /// Branch target with stack cleanup metadata.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]

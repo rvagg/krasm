@@ -70,7 +70,7 @@
 
 mod words;
 
-use super::bytecode::{CompiledFunction, Op};
+use super::bytecode::{CompiledFunction, Op, value_words};
 use super::instance::SegmentState;
 use super::ops;
 use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
@@ -403,8 +403,8 @@ impl FlatExecutor {
             entry_func_idx: func_idx,
             call_base: self.call_stack.len(),
         };
-        let arg_words: usize = args.iter().map(|arg| words::width(arg.typ())).sum();
-        if arg_words != func.param_words as usize {
+        let arg_words: u32 = args.iter().map(|arg| value_words(arg.typ())).sum();
+        if arg_words != func.param_words {
             return Err(RuntimeError::Trap(format!(
                 "entry function takes {} parameter words, given {arg_words}",
                 func.param_words

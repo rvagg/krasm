@@ -22,7 +22,7 @@
 //! bytecode that relies on a false assumption.
 
 use super::RuntimeError;
-use super::bytecode::{BrTarget, CompiledFunction, Op};
+use super::bytecode::{BrTarget, CompiledFunction, Op, value_words};
 use crate::parser::instruction::signature::{Signature, context_signature, fixed_signature};
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind, SimdOp};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
@@ -78,11 +78,6 @@ fn invalid(what: impl fmt::Display) -> RuntimeError {
 /// `u16::MAX` for decoded modules; others are checked rather than truncated.
 fn count(len: usize) -> Result<u16> {
     u16::try_from(len).map_err(|_| invalid(format!("{len} values exceed the supported count")))
-}
-
-/// Operand-stack words a value occupies: a `v128` takes two, everything else one.
-pub fn value_words(value_type: ValueType) -> u32 {
-    if value_type == ValueType::V128 { 2 } else { 1 }
 }
 
 /// Words a sequence of values occupies.

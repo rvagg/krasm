@@ -114,11 +114,6 @@ pub(super) unsafe fn push<R: WordResults>(sp: &mut *mut Word, result: R) {
     unsafe { result.push_to(sp) }
 }
 
-/// Words a value of `value_type` occupies.
-pub(super) fn width(value_type: ValueType) -> usize {
-    if value_type == ValueType::V128 { 2 } else { 1 }
-}
-
 /// Push a tagged value.
 ///
 /// # Safety
@@ -163,6 +158,7 @@ fn reference(word: i64) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::bytecode::value_words;
 
     #[test]
     fn values_round_trip_through_words() {
@@ -193,7 +189,7 @@ mod tests {
     fn zero_words_are_every_type_zero() {
         for value_type in [ValueType::I32, ValueType::F64, ValueType::V128, ValueType::FuncRef] {
             let mut words = [0; 2];
-            let mut sp = unsafe { words.as_mut_ptr().add(width(value_type)) };
+            let mut sp = unsafe { words.as_mut_ptr().add(value_words(value_type) as usize) };
             let value = unsafe { pop_value(&mut sp, value_type) };
             assert_eq!(value, crate::runtime::imports::default_value_for_type(value_type));
         }
