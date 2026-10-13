@@ -289,8 +289,8 @@ impl Instance {
 
     /// Snapshot cumulative flat-bytecode dispatch counts, including start functions.
     ///
-    /// Counts include the operation that traps, but not an operation stopped by
-    /// an exhausted instruction budget. Host work is excluded. Structured
+    /// Counts include the operation that traps, but no operation of a run the
+    /// instruction budget could not pay for. Host work is excluded. Structured
     /// instances return `None`; counts survive completed and failed invocations.
     #[cfg(feature = "instruction-profile")]
     pub fn instruction_profile(&self) -> Option<super::profile::InstructionProfile<'_>> {
@@ -392,10 +392,13 @@ impl Instance {
 
     /// Set an instruction budget limit for execution
     ///
-    /// Each interpreter operation consumes one unit; exhaustion traps before
-    /// the next operation. Counts depend on the engine's representation.
-    /// The limit covers this instance only, persists across calls and
-    /// suspension, and excludes host work. Pass `None` to remove it.
+    /// Each interpreter operation consumes one unit. Counts depend on the
+    /// engine's representation: the structured engine traps before the
+    /// operation that would exceed the budget, the flat engine before the
+    /// straight-line run of operations that would, having charged each
+    /// waiting caller's run in full (see `invoke_export`). The limit covers
+    /// this instance only, persists across calls and suspension, and excludes
+    /// host work. Pass `None` to remove it.
     pub fn set_instruction_budget(&mut self, budget: Option<u64>) {
         match &mut self.engine {
             Engine::Flat(flat) => flat.executor.set_instruction_budget(budget),

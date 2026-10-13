@@ -9,6 +9,10 @@
 //!
 //! Values convert to and from [`Value`] only where they cross into tagged
 //! storage: arguments and results, globals, tables and host calls.
+//!
+//! Functions that take the stack pointer as `&mut` are `#[inline(always)]`:
+//! if its address escaped into a call, the executor's `sp` could be kept in
+//! memory, loaded and stored by every op, rather than in a register.
 
 use crate::parser::module::ValueType;
 use crate::runtime::Value;
@@ -118,6 +122,7 @@ pub(super) unsafe fn push<R: WordResults>(sp: &mut *mut Word, result: R) {
 ///
 /// # Safety
 /// The stack must have room for the value.
+#[inline(always)]
 pub(super) unsafe fn push_value(sp: &mut *mut Word, value: Value) {
     unsafe {
         match value {
@@ -136,6 +141,7 @@ pub(super) unsafe fn push_value(sp: &mut *mut Word, value: Value) {
 ///
 /// # Safety
 /// The top words must hold a value of `value_type`.
+#[inline(always)]
 pub(super) unsafe fn pop_value(sp: &mut *mut Word, value_type: ValueType) -> Value {
     unsafe {
         match value_type {

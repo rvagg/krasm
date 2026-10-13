@@ -8,6 +8,12 @@
 //! Operands live in 64-bit words: a `v128` takes two, every other value one.
 //! Stack depths, branch arities and local indices all count words, and ops
 //! whose operand width depends on its type come in a `V128` variant.
+//!
+//! The instruction budget is charged per run: the ops from where control
+//! lands (a function's first op, a branch target, or the op after a `br_if`
+//! that falls through) to the next `br`, `br_if`, `br_table`, `return`, `end`
+//! or `unreachable`, inclusive. Calls do not end a run. Each run's cost is
+//! its op count, carried by the op or function that enters it.
 
 use crate::parser::instruction::MemArg;
 use crate::parser::module::ValueType;
@@ -29,6 +35,9 @@ pub struct BrTarget {
     /// Word depth, above the frame's operand base, to restore to below the
     /// kept words.
     pub stack_depth: u32,
+    /// Instruction budget charged on landing at `pc`.
+    #[cfg_attr(feature = "instruction-profile", serde(skip))]
+    pub cost: u32,
 }
 
 /// A single operation in the flat bytecode.
@@ -553,22 +562,30 @@ pub enum Op {
     // word depth to restore to before pushing kept words back.
     // For branches that don't cross block boundaries (e.g. compiler-internal
     // skip-then jumps), arity=0 and the cleanup is a no-op.
-    /// Unconditional jump to `target` (absolute index in bytecode).
+    /// Unconditional jump to `target` (absolute index in bytecode), charging
+    /// `cost` for the run that starts there.
     Br {
         target: u32,
         arity: u16,
         stack_depth: u32,
+        #[cfg_attr(feature = "instruction-profile", serde(skip))]
+        cost: u32,
     },
-    /// Pop i32; if non-zero, jump to `target`.
+    /// Pop i32; if non-zero, jump to `target` and charge `cost`, otherwise
+    /// continue and charge `fallthrough_cost`.
     BrIf {
         target: u32,
         arity: u16,
         stack_depth: u32,
+        #[cfg_attr(feature = "instruction-profile", serde(skip))]
+        cost: u32,
+        #[cfg_attr(feature = "instruction-profile", serde(skip))]
+        fallthrough_cost: u32,
     },
     /// Pop i32 index; jump to `targets[index]` or `default` if out of bounds.
     /// All targets share the same arity (spec validation ensures this).
     BrTable {
-        targets: Vec<BrTarget>,
+        targets: Box<[BrTarget]>,
         default: BrTarget,
     },
     /// Call function at module-level `func_idx`. The flat executor adjusts
@@ -675,20 +692,30 @@ pub struct CompiledFunction {
     pub result_words: u32,
     /// Most operand-stack words the function's own operands occupy at once.
     pub max_stack_words: u32,
+    /// Instruction budget charged on entry: the cost of the run at op 0.
+    pub entry_cost: u32,
 }
 
 impl fmt::Display for CompiledFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "CompiledFunction(param_words={}, local_words={}, result_words={}, max_stack_words={})",
-            self.param_words, self.local_words, self.result_words, self.max_stack_words,
+            "CompiledFunction(param_words={}, local_words={}, result_words={}, max_stack_words={}, entry_cost={})",
+            self.param_words, self.local_words, self.result_words, self.max_stack_words, self.entry_cost,
         )?;
         for (i, op) in self.ops.iter().enumerate() {
             writeln!(f, "  {i:4}: {op}")?;
         }
         Ok(())
     }
+}
+
+/// A branch's stack cleanup, when it keeps any words.
+fn write_keep(f: &mut fmt::Formatter<'_>, arity: u16, stack_depth: u32) -> fmt::Result {
+    if arity == 0 {
+        return Ok(());
+    }
+    write!(f, " (stack {stack_depth}, keep {arity} values)")
 }
 
 impl fmt::Display for Op {
@@ -1154,23 +1181,20 @@ impl fmt::Display for Op {
                 target,
                 arity,
                 stack_depth,
+                cost,
             } => {
-                if *arity == 0 {
-                    write!(f, "br -> {target}")
-                } else {
-                    write!(f, "br -> {target} (stack {stack_depth}, keep {arity} values)")
-                }
+                write!(f, "br -> {target} [{cost}]")?;
+                write_keep(f, *arity, *stack_depth)
             }
             Op::BrIf {
                 target,
                 arity,
                 stack_depth,
+                cost,
+                fallthrough_cost,
             } => {
-                if *arity == 0 {
-                    write!(f, "br_if -> {target}")
-                } else {
-                    write!(f, "br_if -> {target} (stack {stack_depth}, keep {arity} values)")
-                }
+                write!(f, "br_if -> {target} [{cost}, else {fallthrough_cost}]")?;
+                write_keep(f, *arity, *stack_depth)
             }
             Op::BrTable { targets, default } => {
                 write!(f, "br_table [")?;
@@ -1178,9 +1202,10 @@ impl fmt::Display for Op {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", t.pc)?;
+                    write!(f, "{} [{}]", t.pc, t.cost)?;
                 }
-                write!(f, "] default -> {}", default.pc)
+                write!(f, "] default -> {} [{}]", default.pc, default.cost)?;
+                write_keep(f, default.arity, default.stack_depth)
             }
             Op::Call { func_idx } => write!(f, "call {func_idx}"),
             Op::CallIndirect { type_idx, table_idx } => {
@@ -1194,5 +1219,17 @@ impl fmt::Display for Op {
             Op::Drop => write!(f, "drop"),
             Op::DropV128 => write!(f, "drop.v128"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_costs_fit_without_growing_ops() {
+        // BrTable sets the size: a boxed slice and a default target, after the tag.
+        assert_eq!(size_of::<Op>(), 40);
+        assert_eq!(size_of::<BrTarget>(), 16);
     }
 }

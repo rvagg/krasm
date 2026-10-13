@@ -5,8 +5,8 @@ mod differential;
 use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
 
-use krasm::parser::module::{Positional, ValueType};
 use krasm::ValidatedModule;
+use krasm::parser::module::{Positional, ValueType};
 use krasm::parser::{self, reader::Reader};
 use krasm::runtime::Value;
 

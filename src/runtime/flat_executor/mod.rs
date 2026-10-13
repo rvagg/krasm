@@ -31,6 +31,13 @@
 //! just above them. `call_stack` holds each waiting caller's `pc`, `fp` and
 //! `base`, as word indices, so the stack can grow and move.
 //!
+//! # Instruction budget
+//!
+//! The budget is charged per run, not per op (see [`super::bytecode`]): the
+//! entry function and every local call charge their first run, and each
+//! branch op charges the run it lands in. Returns and resumes charge nothing,
+//! since the caller's run already covered the ops after its call.
+//!
 //! External calls — imported functions (directly or via call_indirect) and
 //! foreign table funcrefs — suspend execution rather than dispatching
 //! internally. The caller (ultimately the Store) drives this loop:
@@ -335,7 +342,9 @@ pub struct FlatExecutor {
     suspended: Vec<SuspendedState>,
     /// Most words `stack` may grow to.
     max_stack_words: usize,
-    instruction_budget: Option<u64>,
+    /// Budget remaining, charged per run (see [`Self::set_instruction_budget`]);
+    /// `u64::MAX` when unlimited.
+    instruction_budget: u64,
     #[cfg(feature = "instruction-profile")]
     instruction_counts: Option<Vec<Vec<u64>>>,
 }
@@ -354,7 +363,7 @@ impl FlatExecutor {
             call_stack: Vec::new(),
             suspended: Vec::new(),
             max_stack_words: DEFAULT_MAX_STACK_WORDS,
-            instruction_budget: None,
+            instruction_budget: u64::MAX,
             #[cfg(feature = "instruction-profile")]
             instruction_counts: None,
         }
@@ -372,10 +381,16 @@ impl FlatExecutor {
 
     /// Limit unfused bytecode operations, including labels and function ends.
     ///
-    /// The remaining budget survives calls and suspension. `None` disables
-    /// the limit; exhaustion traps before the next operation executes.
+    /// Each straight-line run of ops is charged in full where control enters
+    /// it, and traps as exhausted instead of starting when the budget cannot
+    /// cover it. Calls do not end a run, so every waiting caller has paid for
+    /// the rest of its run too. A call therefore completes exactly when the
+    /// ops it executes fit the budget, but exhaustion comes early by the
+    /// unexecuted ops those runs paid for, before any trap or side effect
+    /// among them; they are also lost when a call traps. The remaining budget
+    /// survives calls and suspension. `None` disables the limit.
     pub(crate) fn set_instruction_budget(&mut self, budget: Option<u64>) {
-        self.instruction_budget = budget;
+        self.instruction_budget = budget.unwrap_or(u64::MAX);
     }
 
     /// Limit the stack to `words`; a call that needs more traps as call
@@ -552,24 +567,49 @@ impl FlatExecutor {
         } = self;
 
         // The registers (see the module docs): `pc` indexes the current
-        // function's ops; `fp`, `base` and `sp`, below, point into `stack`.
+        // function's `ops`; `fp`, `base` and `sp`, below, point into `stack`.
+        // Few values live across the loop, so each can stay in a register.
+        //
+        // SAFETY: `pc` stays inside `ops`: every function ends in an `End`,
+        // the compiler checks each branch target, and a call resumes at the
+        // op after it, which is never the last.
         let mut current_func_idx = frame.func_idx;
         let mut pc = frame.pc;
-        let mut ops_slice = funcs[current_func_idx].ops.as_slice();
+        let mut ops = funcs[current_func_idx].ops.as_ptr();
 
         // SAFETY: every frame on the stack was reserved when its function
         // was entered: its locals, and the most operand words the typed
         // compiler found it can use, lie inside `stack`. Validation and the
         // compiler guarantee each op finds the operands it pops, so `sp`
         // stays within the current frame. The pointers are re-derived from
-        // `stack` whenever it grows.
-        let mut start = stack.as_mut_ptr();
-        let (mut fp, mut base, mut sp) = unsafe { (start.add(frame.fp), start.add(frame.base), start.add(*saved_sp)) };
+        // `stack` after it grows.
+        let (mut fp, mut base, mut sp) = unsafe {
+            let start = stack.as_mut_ptr();
+            (start.add(frame.fp), start.add(frame.base), start.add(*saved_sp))
+        };
+
+        // Pay for the run about to start, or trap without starting it.
+        macro_rules! charge {
+            ($cost:expr) => {{
+                let cost = u64::from($cost);
+                debug_assert!(cost > 0, "a run holds at least its exit");
+                if *instruction_budget < cost {
+                    return Err(RuntimeError::InstructionBudgetExhausted);
+                }
+                *instruction_budget -= cost;
+            }};
+        }
+
+        // A fresh activation starts its entry function's first run; a resumed
+        // one continues inside a run already paid for, past the call.
+        if frame.pc == 0 {
+            charge!(funcs[current_func_idx].entry_cost);
+        }
 
         // Word index of a stack pointer.
         macro_rules! index {
             ($p:expr) => {
-                $p.offset_from(start) as usize
+                $p.offset_from(stack.as_ptr()) as usize
             };
         }
 
@@ -689,15 +729,16 @@ impl FlatExecutor {
                         callee_base + callee.max_stack_words as usize,
                         *max_stack_words,
                     )?;
-                    start = stack.as_mut_ptr();
                 }
+                charge!(callee.entry_cost);
+                let start = stack.as_mut_ptr();
                 fp = start.add(callee_fp);
                 base = start.add(callee_base);
                 fp.add(callee.param_words as usize)
                     .write_bytes(0, (callee.local_words - callee.param_words) as usize);
                 sp = base;
                 current_func_idx = local_idx;
-                ops_slice = callee.ops.as_slice();
+                ops = callee.ops.as_ptr();
                 pc = 0;
             }};
         }
@@ -711,8 +752,11 @@ impl FlatExecutor {
                     fp: index!(fp),
                     base: index!(base),
                 };
-                let outcome = suspend_external_call(&mut sp, suspended, frame, activation, $addr, $ftype, $expected);
-                *saved_sp = index!(sp);
+                // A copy keeps `sp` from escaping into the call, so it can
+                // stay in a register throughout the loop.
+                let mut top = sp;
+                let outcome = suspend_external_call(&mut top, suspended, frame, activation, $addr, $ftype, $expected);
+                *saved_sp = index!(top);
                 return Ok(outcome);
             }};
         }
@@ -731,8 +775,9 @@ impl FlatExecutor {
                     break;
                 };
                 current_func_idx = frame.func_idx;
-                ops_slice = funcs[current_func_idx].ops.as_slice();
+                ops = funcs[current_func_idx].ops.as_ptr();
                 pc = frame.pc;
+                let start = stack.as_mut_ptr();
                 fp = start.add(frame.fp);
                 base = start.add(frame.base);
             }};
@@ -744,21 +789,16 @@ impl FlatExecutor {
                 "operand stack outside its frame"
             );
 
-            if let Some(remaining) = instruction_budget {
-                if *remaining == 0 {
-                    return Err(RuntimeError::InstructionBudgetExhausted);
-                }
-                *remaining -= 1;
-            }
+            debug_assert!(pc < funcs[current_func_idx].ops.len(), "pc outside its function");
 
             #[cfg(feature = "instruction-profile")]
             if let Some(counts) = instruction_counts {
                 counts[current_func_idx][pc] += 1;
             }
 
-            // SAFETY: see the frame invariant above.
+            // SAFETY: see the `pc` and frame invariants above.
             unsafe {
-                match &ops_slice[pc] {
+                match &*ops.add(pc) {
                     // -- SIMD bitwise --
                     Op::V128Not => pure_op!(unary, ops::simd::v128_not),
                     Op::V128And => pure_op!(binary, ops::simd::v128_and),
@@ -1291,22 +1331,31 @@ impl FlatExecutor {
                         target,
                         arity,
                         stack_depth,
-                    } => branch!(*target, *arity, *stack_depth),
+                        cost,
+                    } => {
+                        charge!(*cost);
+                        branch!(*target, *arity, *stack_depth);
+                    }
                     Op::BrIf {
                         target,
                         arity,
                         stack_depth,
+                        cost,
+                        fallthrough_cost,
                     } => {
                         let condition: i32 = pop(&mut sp);
                         if condition != 0 {
+                            charge!(*cost);
                             branch!(*target, *arity, *stack_depth);
                         } else {
+                            charge!(*fallthrough_cost);
                             pc += 1;
                         }
                     }
                     Op::BrTable { targets, default } => {
                         let index: i32 = pop(&mut sp);
                         let target = targets.get(index as u32 as usize).unwrap_or(default);
+                        charge!(target.cost);
                         branch!(target.pc, target.arity, target.stack_depth);
                     }
                     Op::Call { func_idx } => {

@@ -152,6 +152,7 @@ pub fn compile<'a>(
     }
     ctx.close_label();
     ctx.ops.push(Op::End);
+    let entry_cost = meter(&mut ctx.ops)?;
 
     Ok(CompiledFunction {
         ops: ctx.ops,
@@ -160,7 +161,75 @@ pub fn compile<'a>(
         local_words: words_of(&ctx.locals),
         result_words: words_of(&ftype.return_types),
         max_stack_words: ctx.max_words,
+        entry_cost,
     })
+}
+
+/// Fill in each branch's run costs (see [`super::bytecode`]) and return the
+/// cost of the run at op 0.
+///
+/// Every op that follows an exit is either a branch target or never runs, and
+/// the ops after a call belong to the caller's run, so charging runs where
+/// control lands pays for each op executed exactly once.
+fn meter(ops: &mut [Op]) -> Result<u32> {
+    if u32::try_from(ops.len()).is_err() {
+        return Err(invalid(format!("{} ops exceed the supported function size", ops.len())));
+    }
+    // Ops from each position to the next exit, inclusive, and zero until
+    // known. The final `End` is an exit. Filling backwards knows every run
+    // ahead of a branch, so only loop back edges wait for a second look.
+    let mut run_costs = vec![0u32; ops.len()];
+    let mut back_edges = Vec::new();
+    let mut next = 0;
+    for (pc, op) in ops.iter_mut().enumerate().rev() {
+        let exit = matches!(
+            op,
+            Op::Br { .. } | Op::BrIf { .. } | Op::BrTable { .. } | Op::Return | Op::End | Op::Unreachable
+        );
+        next = if exit { 1 } else { next + 1 };
+        run_costs[pc] = next;
+        if !fill_landing_costs(op, pc, &run_costs)? {
+            back_edges.push(pc);
+        }
+    }
+    for pc in back_edges {
+        if !fill_landing_costs(&mut ops[pc], pc, &run_costs)? {
+            return Err(invalid(format!("branch at {pc} lands in a run of no ops")));
+        }
+    }
+    (run_costs.first().copied()).ok_or_else(|| invalid("function has no ops"))
+}
+
+/// Copy into the branch op at `pc` the cost of each run it can land in, and
+/// report whether `run_costs` knew them all.
+fn fill_landing_costs(op: &mut Op, pc: usize, run_costs: &[u32]) -> Result<bool> {
+    let mut known = true;
+    let mut fill = |slot: &mut u32, target: u32| -> Result<()> {
+        let cost = (run_costs.get(target as usize).copied())
+            .ok_or_else(|| invalid(format!("branch target {target} is outside the function")))?;
+        known &= cost != 0;
+        *slot = cost;
+        Ok(())
+    };
+    match op {
+        Op::Br { target, cost, .. } => fill(cost, *target)?,
+        Op::BrIf {
+            target,
+            cost,
+            fallthrough_cost,
+            ..
+        } => {
+            fill(cost, *target)?;
+            fill(fallthrough_cost, pc as u32 + 1)?;
+        }
+        Op::BrTable { targets, default } => {
+            for target in targets.iter_mut().chain([default]) {
+                fill(&mut target.cost, target.pc)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(known)
 }
 
 struct CompileContext<'a> {
@@ -469,6 +538,8 @@ impl<'a> CompileContext<'a> {
                     target: 0,
                     arity: 0,
                     stack_depth: self.words,
+                    cost: 0,
+                    fallthrough_cost: 0,
                 });
                 self.open_label(LabelTarget::End(Vec::new()), sd, results)?;
                 self.emit_body(then_branch)?;
@@ -483,6 +554,7 @@ impl<'a> CompileContext<'a> {
                         target: 0,
                         arity: label.word_arity,
                         stack_depth: label.word_depth,
+                        cost: 0,
                     });
                     if let Some(Label {
                         target: LabelTarget::End(fixups),
@@ -589,6 +661,7 @@ impl<'a> CompileContext<'a> {
             pc,
             arity: word_arity,
             stack_depth: word_depth,
+            cost: 0,
         })
     }
 
@@ -615,22 +688,29 @@ impl<'a> CompileContext<'a> {
         if self.label_index(depth)? == 0 {
             return self.emit_return();
         }
-        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
+        let BrTarget {
+            pc, arity, stack_depth, ..
+        } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
         self.emit(Op::Br {
             target: pc,
             arity,
             stack_depth,
+            cost: 0,
         });
         self.reachable = false;
         Ok(())
     }
 
     fn emit_br_if(&mut self, depth: u32) -> Result {
-        let BrTarget { pc, arity, stack_depth } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
+        let BrTarget {
+            pc, arity, stack_depth, ..
+        } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
         self.emit(Op::BrIf {
             target: pc,
             arity,
             stack_depth,
+            cost: 0,
+            fallthrough_cost: 0,
         });
         Ok(())
     }
@@ -819,13 +899,13 @@ mod tests {
         assert_eq!((cf.param_words, cf.result_words, cf.local_words), (1, 1, 5));
         assert_eq!(
             listing(source),
-            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6\n4: i32.const 0\n5: return\n\
+            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6 [12, else 2]\n4: i32.const 0\n5: return\n\
              6: i32.const 0\n7: local.set 1\n8: i32.const 1\n9: local.set 2\n10: i32.const 1\n\
              11: local.set 4\n12: label (end -> 31)\n13: label (end -> 31)\n14: local.get 4\n\
-             15: local.get 0\n16: i32.ge_u\n17: br_if -> 31\n18: local.get 1\n19: local.get 2\n\
+             15: local.get 0\n16: i32.ge_u\n17: br_if -> 31 [2, else 13]\n18: local.get 1\n19: local.get 2\n\
              20: i32.add\n21: local.set 3\n22: local.get 2\n23: local.set 1\n24: local.get 3\n\
              25: local.set 2\n26: local.get 4\n27: i32.const 1\n28: i32.add\n29: local.set 4\n\
-             30: br -> 14\n31: local.get 2\n32: end\n"
+             30: br -> 14 [4]\n31: local.get 2\n32: end\n"
         );
     }
 
@@ -834,8 +914,8 @@ mod tests {
         assert_eq!(
             listing(include_str!("../../benches/modules/noop_loop.wat")),
             "0: label (end -> 11)\n1: label (end -> 11)\n2: local.get 1\n3: local.get 0\n\
-             4: i32.ge_u\n5: br_if -> 11\n6: local.get 1\n7: i32.const 1\n8: i32.add\n\
-             9: local.set 1\n10: br -> 2\n11: local.get 1\n12: end\n"
+             4: i32.ge_u\n5: br_if -> 11 [2, else 5]\n6: local.get 1\n7: i32.const 1\n8: i32.add\n\
+             9: local.set 1\n10: br -> 2 [4]\n11: local.get 1\n12: end\n"
         );
     }
 
@@ -843,11 +923,11 @@ mod tests {
     fn block_branches_forward_and_loop_branches_back() {
         assert_eq!(
             listing("(module (func (block (br 0))))"),
-            "0: label (end -> 2)\n1: br -> 2\n2: end\n"
+            "0: label (end -> 2)\n1: br -> 2 [1]\n2: end\n"
         );
         assert_eq!(
             listing("(module (func (loop (br 0))))"),
-            "0: label (end -> 2)\n1: br -> 1\n2: end\n"
+            "0: label (end -> 2)\n1: br -> 1 [1]\n2: end\n"
         );
     }
 
@@ -855,7 +935,7 @@ mod tests {
     fn branch_to_a_block_with_a_result_keeps_it() {
         assert_eq!(
             listing("(module (func (result i32) (block (result i32) (i32.const 42) (br 0))))"),
-            "0: label (end -> 3)\n1: i32.const 42\n2: br -> 3 (stack 0, keep 1 values)\n3: end\n"
+            "0: label (end -> 3)\n1: i32.const 42\n2: br -> 3 [1] (stack 0, keep 1 values)\n3: end\n"
         );
     }
 
@@ -863,7 +943,7 @@ mod tests {
     fn if_skips_its_then_body_on_zero() {
         assert_eq!(
             listing("(module (func (param i32) (if (local.get 0) (then (nop)))))"),
-            "0: local.get 0\n1: i32.eqz\n2: br_if -> 4\n3: nop\n4: end\n"
+            "0: local.get 0\n1: i32.eqz\n2: br_if -> 4 [1, else 2]\n3: nop\n4: end\n"
         );
         // With an else, the then-body jumps past it carrying the result.
         assert_eq!(
@@ -871,8 +951,8 @@ mod tests {
                 "(module (func (param i32) (result i32)
                    (if (result i32) (local.get 0) (then (i32.const 1)) (else (i32.const 2)))))"
             ),
-            "0: local.get 0\n1: i32.eqz\n2: br_if -> 5\n3: i32.const 1\n\
-             4: br -> 6 (stack 0, keep 1 values)\n5: i32.const 2\n6: end\n"
+            "0: local.get 0\n1: i32.eqz\n2: br_if -> 5 [2, else 2]\n3: i32.const 1\n\
+             4: br -> 6 [1] (stack 0, keep 1 values)\n5: i32.const 2\n6: end\n"
         );
     }
 
@@ -884,8 +964,96 @@ mod tests {
                    (if (i32.eqz (local.get 0)) (then (return (i32.const 0))))
                    (i32.const 1)))"
             ),
-            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6\n4: i32.const 0\n5: return\n\
+            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6 [2, else 2]\n4: i32.const 0\n5: return\n\
              6: i32.const 1\n7: end\n"
+        );
+    }
+
+    /// The cost of the function's first run, and its listing.
+    fn metered(source: &str) -> (u32, String) {
+        (compile_first_func(source).entry_cost, listing(source))
+    }
+
+    #[test]
+    fn runs_cost_their_ops_up_to_the_next_exit() {
+        assert_eq!(metered("(module (func))"), (1, "0: end\n".into()));
+        assert_eq!(
+            metered("(module (func (result i32) (i32.const 7)))"),
+            (2, "0: i32.const 7\n1: end\n".into())
+        );
+        // Nested blocks don't compound: the entry run falls through both
+        // labels, and a target reached by falling through is inside it.
+        assert_eq!(
+            metered("(module (func (param i32) (block (block (br_if 1 (local.get 0))) (nop)) (nop)))"),
+            (
+                4,
+                "0: label (end -> 5)\n1: label (end -> 4)\n2: local.get 0\n3: br_if -> 5 [2, else 3]\n\
+                 4: nop\n5: nop\n6: end\n"
+                    .into()
+            )
+        );
+        // A br_if to the function label lands on the final end.
+        assert_eq!(
+            metered("(module (func (param i32) (br_if 0 (local.get 0)) (nop)))"),
+            (2, "0: local.get 0\n1: br_if -> 3 [1, else 2]\n2: nop\n3: end\n".into())
+        );
+    }
+
+    #[test]
+    fn loops_charge_from_the_op_after_their_label() {
+        // The back edge lands on the inner block's label, not the loop's.
+        assert_eq!(
+            metered("(module (func (loop (block (br 1)))))"),
+            (
+                3,
+                "0: label (end -> 3)\n1: label (end -> 3)\n2: br -> 1 [2]\n3: end\n".into()
+            )
+        );
+        assert_eq!(
+            metered("(module (func (loop (br 0))))"),
+            (2, "0: label (end -> 2)\n1: br -> 1 [1]\n2: end\n".into())
+        );
+    }
+
+    #[test]
+    fn unreachable_ends_a_run() {
+        assert_eq!(
+            metered("(module (func (block (unreachable)) (i32.const 1) (drop)))"),
+            (
+                2,
+                "0: label (end -> 2)\n1: unreachable\n2: i32.const 1\n3: drop\n4: end\n".into()
+            )
+        );
+    }
+
+    #[test]
+    fn br_table_entries_cost_the_run_each_lands_in() {
+        assert_eq!(
+            metered("(module (func (param i32) (block (block (br_table 0 1 (local.get 0))) (nop) (nop))))"),
+            (
+                4,
+                "0: label (end -> 6)\n1: label (end -> 4)\n2: local.get 0\n3: br_table [4 [3]] default -> 6 [1]\n\
+                 4: nop\n5: nop\n6: end\n"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn an_unreachable_skip_past_the_else_is_never_charged_into() {
+        // The then-body returns, leaving the skip-else br dead; the run
+        // before it stops at the return.
+        assert_eq!(
+            metered(
+                "(module (func (param i32) (result i32)
+                   (if (result i32) (local.get 0) (then (return (i32.const 1))) (else (i32.const 2)))))"
+            ),
+            (
+                3,
+                "0: local.get 0\n1: i32.eqz\n2: br_if -> 6 [2, else 2]\n3: i32.const 1\n4: return\n\
+                 5: br -> 7 [1] (stack 0, keep 1 values)\n6: i32.const 2\n7: end\n"
+                    .into()
+            )
         );
     }
 
@@ -901,7 +1069,7 @@ mod tests {
                        (br_table 0 1 0)))))"
             ),
             "0: label (end -> 5)\n1: label (end -> 5)\n2: i32.const 10\n3: local.get 0\n\
-             4: br_table [5, 5] default -> 5\n5: end\n"
+             4: br_table [5 [1], 5 [1]] default -> 5 [1] (stack 0, keep 1 values)\n5: end\n"
         );
     }
 }

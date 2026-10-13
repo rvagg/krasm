@@ -5,6 +5,9 @@
 //! goes; the flat engine trusts validation and the typed compiler. Agreement
 //! on every result and trap is evidence that the flat engine's assumptions
 //! hold, including the shared instruction signature tables.
+//!
+//! With `instruction-profile`, each flat call is also checked against the
+//! budget it should need: exactly the ops the profile counts.
 
 use krasm::parser::module::{ExportIndex, ValueType};
 use krasm::{EngineKind, RuntimeError, Store, ValidatedModule, Value};
@@ -30,6 +33,8 @@ pub fn compare_engines(module: &ValidatedModule, mut args: impl FnMut(&[ValueTyp
         (Err(s), Err(f)) => return assert_same_trap(&s, &f, "instantiation"),
         (s, f) => panic!("engines disagree on instantiation: structured {s:?}, flat {f:?}"),
     };
+    #[cfg(feature = "instruction-profile")]
+    let mut oracle = budget::Oracle::new(module);
 
     for export in &module.exports.exports {
         let ExportIndex::Function(func_idx) = export.index else {
@@ -40,7 +45,13 @@ pub fn compare_engines(module: &ValidatedModule, mut args: impl FnMut(&[ValueTyp
         };
         let args = args(&func_type.parameters);
         let s = structured.invoke_export(structured_id, &export.name, args.clone(), Some(BUDGET));
-        let f = flat.invoke_export(flat_id, &export.name, args, Some(BUDGET));
+        #[cfg(feature = "instruction-profile")]
+        let before = budget::executed(flat, flat_id);
+        let f = flat.invoke_export(flat_id, &export.name, args.clone(), Some(BUDGET));
+        #[cfg(feature = "instruction-profile")]
+        if !exhausted(&f) {
+            oracle.check(&export.name, args, &f, budget::executed(flat, flat_id) - before);
+        }
         match (&s, &f) {
             // Exhaustion depends on how each engine counts; state may differ after it.
             _ if exhausted(&s) || exhausted(&f) => return,
@@ -76,5 +87,70 @@ fn same_value(s: &Value, f: &Value) -> bool {
         (Value::F32(s), Value::F32(f)) => s.to_bits() == f.to_bits(),
         (Value::F64(s), Value::F64(f)) => s.to_bits() == f.to_bits(),
         _ => s == f,
+    }
+}
+
+#[cfg(feature = "instruction-profile")]
+mod budget {
+    use krasm::{EngineKind, RuntimeError, Store, ValidatedModule, Value};
+
+    /// Ops the instance has executed, from its profile.
+    pub fn executed(store: &Store, id: usize) -> u64 {
+        let instance = store.get_instance(id).expect("instance exists");
+        let profile = instance.instruction_profile().expect("flat instances are profiled");
+        profile.functions.iter().flat_map(|f| f.counts).sum()
+    }
+
+    /// Replays the calls made so far on fresh flat instances, under exact
+    /// budgets, so each replay starts from the state the original call saw.
+    pub struct Oracle<'m> {
+        module: &'m ValidatedModule,
+        calls: Vec<(String, Vec<Value>)>,
+    }
+
+    impl<'m> Oracle<'m> {
+        pub fn new(module: &'m ValidatedModule) -> Self {
+            Oracle {
+                module,
+                calls: Vec::new(),
+            }
+        }
+
+        /// The state after the calls so far, with no budget applied.
+        fn replay(&self) -> (Store, usize) {
+            let mut store = Store::new();
+            store.set_engine(EngineKind::Flat);
+            let id = store.create_instance(self.module, None).expect("instantiated before");
+            for (name, args) in &self.calls {
+                let _ = store.invoke_export(id, name, args.clone(), None);
+            }
+            (store, id)
+        }
+
+        /// A call that executed `count` ops exhausts under one less: every
+        /// charge pays for ops before they run. One that completed also
+        /// completes again under exactly `count`.
+        pub fn check(&mut self, name: &str, args: Vec<Value>, outcome: &Result<Vec<Value>, RuntimeError>, count: u64) {
+            if let Some(short_budget) = count.checked_sub(1) {
+                let (mut store, id) = self.replay();
+                let short = store.invoke_export(id, name, args.clone(), Some(short_budget));
+                assert!(
+                    matches!(short, Err(RuntimeError::InstructionBudgetExhausted)),
+                    "{name} under {short_budget} gave {short:?}, expected exhaustion"
+                );
+            }
+            if let Ok(expected) = outcome {
+                let (mut store, id) = self.replay();
+                match store.invoke_export(id, name, args.clone(), Some(count)) {
+                    Ok(results) => assert!(
+                        results.len() == expected.len()
+                            && results.iter().zip(expected).all(|(a, b)| super::same_value(a, b)),
+                        "{name} returned {results:?} under its exact budget {count}, {expected:?} without"
+                    ),
+                    Err(error) => panic!("{name} failed under its exact budget {count}: {error}"),
+                }
+            }
+            self.calls.push((name.to_string(), args));
+        }
     }
 }

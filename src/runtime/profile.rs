@@ -1,9 +1,10 @@
 //! Cumulative flat-bytecode dispatch profiles, enabled by `instruction-profile`.
 //!
 //! Counts are dispatch attempts, not timings. A trapping operation is counted;
-//! an operation rejected by the instruction budget is not. Floating constants
-//! serialise as their unsigned IEEE bit patterns, preserving NaN payloads and
-//! signed zero. Bump `op_format_version` when the serialised Op contract changes.
+//! the operations of a run rejected by the instruction budget are not.
+//! Floating constants serialise as their unsigned IEEE bit patterns,
+//! preserving NaN payloads and signed zero. Bump `op_format_version` when the
+//! serialised Op contract changes.
 
 use super::bytecode::{CompiledFunction, Op};
 use crate::parser::module::{ExportIndex, Module, Positional};

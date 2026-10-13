@@ -15,6 +15,10 @@ arbitrary = { version = "1", features = ["derive"] }
 [dependencies.krasm]
 path = ".."
 
+[features]
+# Check the flat engine's instruction budget against profiled op counts.
+instruction-profile = ["krasm/instruction-profile"]
+
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]

@@ -59,9 +59,9 @@ fuzz/                    cargo-fuzz targets and dictionaries
 - WebAssembly 2.0 binary parser, WAT parser, encoder, interpreter, disassembler, and CLI.
 - 427+ instructions implemented, including all 236 SIMD instructions.
 - Native `.wast` runner passes 148 spec files (90 core + 58 SIMD, pinned to `wg-2.0`, 2025-08-28)
-  and 6 regression files, each on both engines.
-- Test inventory: 940 unit tests, 82 encoder tests, 148 dump tests, 308 wast runs, 46 WASI tests,
-  7 host-boundary tests, 2 validation tests, 14 doctests.
+  and 8 regression files, each on both engines.
+- Test inventory: 952 unit tests, 82 encoder tests, 148 dump tests, 312 wast runs, 46 WASI tests,
+  11 instruction-budget tests, 7 host-boundary tests, 2 validation tests, 14 doctests.
 - WASI preview1: 46 imports registered; implemented calls plus NOSYS stubs where appropriate.
 - AssemblyScript support: `env.abort` with UTF-16 string extraction.
 - No external `wat` crate dependency; use `krasm::wat::parse()`.
@@ -121,6 +121,8 @@ cargo +nightly fuzz run parse_wat -- -max_total_time=60 -dict=fuzz/wat.dict
 Targets: `parse_module`, `execute_module`, `generate_module`, `lex_wat`, `parse_wat`.
 `execute_module` and `generate_module` run every export on both engines and fail on any difference
 in results or trap kind; `-a` keeps debug assertions, including the flat executor's frame check.
+`--features instruction-profile` (as `check.sh -f` runs them) also replays each completed flat call
+under exactly the ops its profile counts, which must complete, and one fewer, which must exhaust.
 Commit fuzz source files and dictionaries; ignore `fuzz/target/`, `fuzz/corpus/`, and `fuzz/artifacts/`.
 
 ## Benchmarks

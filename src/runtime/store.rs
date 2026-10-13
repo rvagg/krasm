@@ -890,9 +890,13 @@ impl<T> Store<T> {
     /// This is the recommended way to invoke functions when cross-module calls may occur.
     ///
     /// `Some(n)` allows up to `n` interpreter operations in this instance;
-    /// attempting the next returns `RuntimeError::InstructionBudgetExhausted`.
+    /// exceeding it returns `RuntimeError::InstructionBudgetExhausted`.
     /// Counts are engine-dependent: flat execution includes bytecode labels
-    /// and function ends. Calls and suspension preserve the remaining budget.
+    /// and function ends. It charges each straight-line run of operations
+    /// before starting it, calls included, so a call completes exactly when
+    /// its operations fit, but exhaustion comes early by the operations still
+    /// to run in the current run of each waiting caller.
+    /// Calls and suspension preserve the remaining budget.
     /// Host work and execution in other instances are not charged.
     /// `None` disables the limit; the budget is cleared after execution.
     pub fn invoke_export(
@@ -902,25 +906,16 @@ impl<T> Store<T> {
         args: Vec<Value>,
         instruction_budget: Option<u64>,
     ) -> Result<Vec<Value>, RuntimeError> {
-        // Set instruction budget on the instance if specified
-        if let Some(instance) = self.instances.get_mut(instance_id) {
-            instance.set_instruction_budget(instruction_budget);
-        }
-
-        let func_addr = {
-            let instance = self
-                .get_instance(instance_id)
-                .ok_or_else(|| RuntimeError::Trap(format!("instance {instance_id} not found")))?;
-            instance.get_function_addr(name)?
-        };
+        let instance = (self.instances.get_mut(instance_id))
+            .ok_or_else(|| RuntimeError::Trap(format!("instance {instance_id} not found")))?;
+        let func_addr = instance.get_function_addr(name)?;
+        instance.set_instruction_budget(instruction_budget);
 
         let result = self.execute(func_addr, args);
 
-        // Clear the budget after execution
         if let Some(instance) = self.instances.get_mut(instance_id) {
             instance.set_instruction_budget(None);
         }
-
         result
     }
 
@@ -1904,36 +1899,6 @@ mod tests {
             store.invoke_export(id, "indirect", vec![], None).unwrap(),
             vec![Value::I32(3)]
         );
-    }
-
-    #[test]
-    fn flat_engine_budget_survives_host_calls() {
-        let mut store = Store::with_data(0u32);
-        store.set_engine(EngineKind::Flat);
-        let tick = store.wrap_with_caller(|caller: &mut Caller<'_, u32>| {
-            *caller.data_mut() += 1;
-        });
-        let mut imports = ImportObject::new();
-        imports.add_function("env", "tick", tick);
-        let module = crate::wat::parse(
-            "(module
-                (import \"env\" \"tick\" (func $tick))
-                (func (export \"run\") (result i32)
-                    (call $tick) (call $tick) (i32.const 7)))",
-        )
-        .unwrap();
-        let id = store.create_instance(&module, Some(&imports)).unwrap();
-        assert!(matches!(
-            store.invoke_export(id, "run", vec![], Some(1)),
-            Err(RuntimeError::InstructionBudgetExhausted)
-        ));
-        // The first call is charged before suspension; the second never runs.
-        assert_eq!(*store.data(), 1);
-        assert_eq!(
-            store.invoke_export(id, "run", vec![], None).unwrap(),
-            vec![Value::I32(7)]
-        );
-        assert_eq!(*store.data(), 3);
     }
 
     #[test]

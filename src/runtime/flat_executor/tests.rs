@@ -844,6 +844,52 @@ fn the_stack_limit_traps_and_leaves_the_executor_usable() {
 }
 
 #[test]
+fn stack_exhaustion_is_reported_before_budget_exhaustion() {
+    // Each call costs 2 (call, end). Under exactly enough budget for every
+    // call that fits, the next call meets both limits at once.
+    let recurse = compile_wat("(module (func $f (call $f)))");
+    let enough = 2 + 2 * MAX_CALL_DEPTH as u64;
+    let mut executor = FlatExecutor::new();
+    executor.set_instruction_budget(Some(enough));
+    let error = executor.invoke(&recurse, 0, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::CallStackOverflow));
+    executor.set_instruction_budget(Some(enough - 1));
+    let error = executor.invoke(&recurse, 0, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::InstructionBudgetExhausted));
+
+    // A frame beyond the byte limit, entered with no budget to spare.
+    let locals = "i64 ".repeat(100);
+    let big = compile_wat(&format!("(module (func $big (local {locals})) (func (call $big)))"));
+    let mut executor = FlatExecutor::new();
+    executor.set_max_stack_words(64);
+    executor.set_instruction_budget(Some(0));
+    let error = executor.invoke(&big, 0, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::CallStackOverflow));
+    // The caller's run (call, end) uses the whole budget.
+    executor.set_instruction_budget(Some(2));
+    let error = executor.invoke(&big, 1, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::CallStackOverflow));
+    executor.set_instruction_budget(Some(1));
+    let error = executor.invoke(&big, 1, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::InstructionBudgetExhausted));
+}
+
+#[test]
+fn exhaustion_leaves_the_executor_usable() {
+    let funcs = compile_wat("(module (func (result i32) (local i64) i32.const 1 i32.const 2 i32.add))");
+    let mut executor = FlatExecutor::new();
+    executor.set_instruction_budget(Some(3));
+    let error = executor.invoke(&funcs, 0, &[], None).unwrap_err();
+    assert!(matches!(error, RuntimeError::InstructionBudgetExhausted));
+    assert_eq!(executor.sp, 0);
+    executor.set_instruction_budget(Some(4));
+    assert_eq!(
+        expect_complete(executor.invoke(&funcs, 0, &[], None).unwrap()),
+        vec![Value::I32(3)]
+    );
+}
+
+#[test]
 fn traps_clear_the_stack() {
     let mut executor = FlatExecutor::new();
     let valid = compile_wat("(module (func (result i32) i32.const 9))");
