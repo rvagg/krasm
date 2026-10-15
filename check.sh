@@ -6,11 +6,14 @@ set -e  # Exit on error
 FUZZ_DURATION=60  # Default fuzz duration in seconds
 RUN_FUZZ=false
 FUZZ_TARGET="parse_module"  # Default fuzz target
+RUN_MIRI=false
 
 usage() {
-    echo "Usage: $0 [-f [duration]] [-t target] [-h]"
+    echo "Usage: $0 [-f [duration]] [-t target] [-m] [-h]"
     echo "  -f [duration]  Run fuzzing after checks (default: ${FUZZ_DURATION}s)"
     echo "  -t target      Fuzz target: parse_module, execute_module, generate_module (default: $FUZZ_TARGET)"
+    echo "  -m             Run the flat executor's unit tests under Miri, with Stacked"
+    echo "                 and Tree Borrows, after checks (slow: about 20 minutes)"
     echo "  -h             Show this help message"
     echo ""
     echo "Fuzz targets:"
@@ -20,7 +23,7 @@ usage() {
     exit 0
 }
 
-while getopts "f:t:h" opt; do
+while getopts "f:t:mh" opt; do
     case $opt in
         f)
             RUN_FUZZ=true
@@ -30,6 +33,9 @@ while getopts "f:t:h" opt; do
             ;;
         t)
             FUZZ_TARGET="$OPTARG"
+            ;;
+        m)
+            RUN_MIRI=true
             ;;
         h)
             usage
@@ -161,6 +167,19 @@ sub/greeting.txt"
 fi
 
 echo -e "\n=== All checks passed! ==="
+
+# Miri checks the flat executor's raw stack and memory pointers against
+# Rust's aliasing models, which its SAFETY comments rely on.
+if $RUN_MIRI; then
+    if ! cargo +nightly miri --version &> /dev/null; then
+        echo "Miri not installed. Install with: rustup +nightly component add miri"
+        exit 1
+    fi
+    echo -e "\n=== Running flat executor tests under Miri (Stacked Borrows) ==="
+    cargo +nightly miri test --lib flat_executor
+    echo -e "\n=== Running flat executor tests under Miri (Tree Borrows) ==="
+    MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --lib flat_executor
+fi
 
 if $RUN_FUZZ; then
     echo -e "\n=== Running fuzzer ($FUZZ_TARGET) for ${FUZZ_DURATION}s ==="

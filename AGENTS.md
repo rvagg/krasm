@@ -82,6 +82,7 @@ krasm compile <file.wat> [-o out]    # WAT -> .wasm
 ./check.sh -f                        # Then fuzz parse_module for 60s
 ./check.sh -f 300                    # Then fuzz for 5 minutes
 ./check.sh -f 60 -t execute_module   # Fuzz another supported target
+./check.sh -m                        # Then the flat executor's tests under Miri (~20 min)
 cargo test                           # All tests
 cargo test <pattern>                 # Focused tests
 cargo test -- --nocapture            # Show println output
