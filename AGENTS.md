@@ -144,6 +144,8 @@ CommP benchmark input is `benches/commp_bench_500k.bin`; expected hash:
 - `python3 scripts/profile.py compare --cpu 4 --arm a=BIN_OR_DIR --arm b=...` (perf counters).
 - `python3 scripts/profile.py build --seeds 5 [--rev REV]` builds seeded layouts for `compare`.
 - Corpus workloads: `--registry target/corpus/registry.json --corpus qualified`.
+- External runtimes: `python3 scripts/prepare_runtimes.py` builds pinned Wasmtime and Wasmi under
+  `target/runtimes`; `python3 scripts/profile.py external --cpu 4 --krasm BIN` compares wall time.
 
 ## Public API Pointers
 - `krasm::wat::parse()` and `krasm::parser::parse()` return a `ValidatedModule`.

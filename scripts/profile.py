@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible timing, GDB sampling, flat-instruction capture, layout builds and counter comparison (Python 3.9+)."""
+"""Reproducible timing, GDB sampling, flat-instruction capture, layout builds, counter comparison and external runtime comparison (Python 3.9+)."""
 
 import argparse
 from collections import Counter
@@ -488,6 +488,29 @@ def run_compare(args, output):
     print(f"\nResults: {output}")
 
 
+def run_external(args, output):
+    from profile_external import external
+    if args.cpu not in os.sched_getaffinity(0):
+        raise RuntimeError(f"CPU {args.cpu} is not in the allowed affinity set")
+    if args.corpus:
+        names = workload_registry(args.registry)["corpora"].get(args.corpus)
+        if not names:
+            raise RuntimeError(f"unknown or empty corpus: {args.corpus}")
+    else:
+        names = args.workload or ["commp"]
+    workloads = [load_workload(name, args.registry) for name in names]
+    for workload in workloads:
+        verify_workload(workload)
+    affinity = os.sched_getaffinity(0)
+    os.sched_setaffinity(0, {args.cpu})
+    try:
+        external(args.krasm, args.runtimes, workloads, args.runs, output, args.cpu, ROOT,
+                 digest, validate_output, save_json)
+    finally:
+        os.sched_setaffinity(0, affinity)
+    print(f"\nResults: {output}")
+
+
 def run_build(args, output):
     manifest = build_layouts(ROOT, output, args.seeds, args.rev, args.features, digest, save_json)
     print(f"{len(manifest['layouts'])} layouts, linked by {manifest['linker']}")
@@ -543,6 +566,18 @@ def main():
                             help="directory of per-workload instruction captures for instructions per op")
     comparison.add_argument("--events", default=",".join(EVENTS), help="comma-separated perf events (at most five)")
     comparison.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-compare)")
+    outside = modes.add_parser("external", help="wall time against external runtimes from prepare_runtimes.py")
+    outside.add_argument("--krasm", type=Path, required=True, help="the krasm binary to measure")
+    outside.add_argument("--cpu", type=int, required=True, help="allowed logical CPU to pin execution to")
+    outside.add_argument("--registry", type=Path, default=WORKLOADS,
+                         help="workload registry JSON; artifact paths are relative to the repository root")
+    outside_selection = outside.add_mutually_exclusive_group()
+    outside_selection.add_argument("--workload", action="append", help="workload ID; repeat for several")
+    outside_selection.add_argument("--corpus", help="named corpus in the selected registry")
+    outside.add_argument("--runs", type=positive_int, default=5)
+    outside.add_argument("--runtimes", type=Path, default=ROOT / "target/runtimes/runtimes.json",
+                         help="manifest written by prepare_runtimes.py")
+    outside.add_argument("--output", type=Path, help="new artifact directory (default: target/profiles/<timestamp>-external)")
     analysis = modes.add_parser("analyse", help="rank instruction sequences in one or more captures")
     analysis.add_argument("captures", type=Path, nargs="+")
     analysis.add_argument("--top", type=positive_int, default=20, help="rows per length and view")
@@ -563,6 +598,9 @@ def main():
             return
         if args.mode == "build":
             run_build(args, output)
+            return
+        if args.mode == "external":
+            run_external(args, output)
             return
         if args.cpu is not None:
             if not hasattr(os, "sched_getaffinity"):

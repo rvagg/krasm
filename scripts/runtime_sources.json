@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "rust_version": "1.98.1",
+  "runtimes": {
+    "wasmtime": {
+      "version": "49.0.2",
+      "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.2/wasmtime-v49.0.2-x86_64-linux.tar.xz",
+      "archive": "wasmtime-v49.0.2-x86_64-linux.tar.xz",
+      "sha256": "a4d6e9e3a5a60f527cf7793d674c48930c80c2e8977995b8a275cad3254b9322",
+      "binary": "wasmtime-v49.0.2-x86_64-linux/wasmtime",
+      "licence": "Apache-2.0 WITH LLVM-exception"
+    },
+    "wasmi": {
+      "version": "2.0.0",
+      "crate": "wasmi_cli",
+      "url": "https://static.crates.io/crates/wasmi_cli/wasmi_cli-2.0.0.crate",
+      "archive": "wasmi_cli-2.0.0.crate",
+      "sha256": "cf3578023212857ec62be6bc82a2e1fca755b2738b6f8aa90339691197324f4f",
+      "licence": "MIT OR Apache-2.0",
+      "builds": {
+        "tail": [
+          "--features",
+          "simd"
+        ],
+        "loop": [
+          "--no-default-features",
+          "--features",
+          "stable,run,wasi,validate,simd,portable-dispatch"
+        ]
+      },
+      "binary": "wasmi"
+    }
+  }
+}
