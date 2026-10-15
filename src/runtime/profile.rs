@@ -39,7 +39,7 @@ pub struct FunctionProfile<'a> {
     pub function_index: usize,
     pub exports: Vec<&'a str>,
     pub is_start: bool,
-    pub ops: &'a [Op],
+    pub ops: Vec<&'a Op>,
     /// Indexed by PC in `ops`; cold instructions retain zero counts.
     pub counts: &'a [u64],
 }
@@ -65,7 +65,7 @@ impl<'a> InstructionProfile<'a> {
                         })
                         .collect(),
                     is_start: module.start.has_position() && module.start.start as usize == function_index,
-                    ops: &func.ops,
+                    ops: func.ops().collect(),
                     counts,
                 }
             })

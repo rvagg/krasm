@@ -1,9 +1,9 @@
 //! Flat bytecode representation for the WebAssembly interpreter.
 //!
 //! A linear sequence of `Op` values with pre-resolved branch targets. Each
-//! function compiles to a `CompiledFunction` containing a `Vec<Op>` that the
-//! flat executor (`flat_executor.rs`) walks with a program counter. Branch
-//! targets are absolute indices into the bytecode array.
+//! function compiles to a `CompiledFunction` whose ops, each paired with its
+//! handler, the flat executor (`flat_executor/`) walks with a program counter.
+//! Branch targets are absolute indices into the function's ops.
 //!
 //! Operands live in 64-bit words: a `v128` takes two, every other value one.
 //! Stack depths, branch arities and local indices all count words, and ops
@@ -669,9 +669,7 @@ pub enum Op {
 /// A compiled function ready for flat execution.
 #[derive(Debug, Clone)]
 pub struct CompiledFunction {
-    /// The flat bytecode for this function.
-    pub ops: Vec<Op>,
-    /// `ops` paired with their handlers, as the executor runs them.
+    /// The function's ops, each paired with the handler that executes it.
     pub(crate) code: Box<[super::flat_executor::Slot]>,
     /// Result types, for reading the entry function's results back out.
     pub result_types: Box<[ValueType]>,
@@ -688,6 +686,13 @@ pub struct CompiledFunction {
     pub entry_cost: u32,
 }
 
+impl CompiledFunction {
+    /// The function's flat bytecode, indexed by program counter.
+    pub fn ops(&self) -> impl ExactSizeIterator<Item = &Op> {
+        self.code.iter().map(|slot| slot.op())
+    }
+}
+
 impl fmt::Display for CompiledFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -695,7 +700,7 @@ impl fmt::Display for CompiledFunction {
             "CompiledFunction(param_words={}, local_words={}, result_words={}, max_stack_words={}, entry_cost={})",
             self.param_words, self.local_words, self.result_words, self.max_stack_words, self.entry_cost,
         )?;
-        for (i, op) in self.ops.iter().enumerate() {
+        for (i, op) in self.ops().enumerate() {
             writeln!(f, "  {i:4}: {op}")?;
         }
         Ok(())

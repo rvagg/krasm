@@ -33,6 +33,7 @@ fn loops_and_cold_branches_have_exact_counts() {
         function
             .ops
             .iter()
+            .copied()
             .zip(function.counts)
             .filter(|(op, _)| predicate(op))
             .map(|(_, count)| count)
@@ -73,6 +74,7 @@ fn recursion_host_resumes_and_repeated_invocations_accumulate() {
     let calls: Vec<_> = function
         .ops
         .iter()
+        .copied()
         .zip(function.counts)
         .filter_map(|(op, count)| {
             if let Op::Call { func_idx } = op {

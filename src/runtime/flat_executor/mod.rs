@@ -380,7 +380,7 @@ impl FlatExecutor {
 
     #[cfg(feature = "instruction-profile")]
     pub(crate) fn enable_instruction_profile(&mut self, funcs: &[CompiledFunction]) {
-        self.instruction_counts = Some(funcs.iter().map(|func| vec![0; func.ops.len()]).collect());
+        self.instruction_counts = Some(funcs.iter().map(|func| vec![0; func.code.len()]).collect());
     }
 
     #[cfg(feature = "instruction-profile")]
@@ -634,12 +634,18 @@ pub(crate) struct Slot {
     op: Op,
 }
 
+impl Slot {
+    pub(crate) fn op(&self) -> &Op {
+        &self.op
+    }
+}
+
 /// Pair each op with its handler, for execution.
-pub(crate) fn thread(ops: &[Op]) -> Box<[Slot]> {
-    ops.iter()
+pub(crate) fn thread(ops: Vec<Op>) -> Box<[Slot]> {
+    ops.into_iter()
         .map(|op| Slot {
-            handler: handler_for(op),
-            op: op.clone(),
+            handler: handler_for(&op),
+            op,
         })
         .collect()
 }

@@ -1049,8 +1049,7 @@ fn compiler_block_stack_depth() {
 
     // Find the Br op and check its metadata
     let br = compiled
-        .ops
-        .iter()
+        .ops()
         .find(|op| matches!(op, Op::Br { arity, .. } if *arity > 0))
         .expect("should have a Br with arity > 0");
     if let Op::Br { arity, stack_depth, .. } = br {

@@ -155,8 +155,7 @@ pub fn compile<'a>(
     let entry_cost = meter(&mut ctx.ops)?;
 
     Ok(CompiledFunction {
-        code: super::flat_executor::thread(&ctx.ops),
-        ops: ctx.ops,
+        code: super::flat_executor::thread(ctx.ops),
         result_types: ftype.return_types.clone().into_boxed_slice(),
         param_words: words_of(&ftype.parameters),
         local_words: words_of(&ctx.locals),
@@ -764,11 +763,7 @@ mod tests {
     /// The function's ops, one numbered line each.
     fn listing(source: &str) -> String {
         let cf = compile_first_func(source);
-        cf.ops
-            .iter()
-            .enumerate()
-            .map(|(i, op)| format!("{i}: {op}\n"))
-            .collect()
+        cf.ops().enumerate().map(|(i, op)| format!("{i}: {op}\n")).collect()
     }
 
     #[test]
