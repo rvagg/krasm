@@ -671,6 +671,8 @@ pub enum Op {
 pub struct CompiledFunction {
     /// The flat bytecode for this function.
     pub ops: Vec<Op>,
+    /// `ops` paired with their handlers, as the executor runs them.
+    pub(crate) code: Box<[super::flat_executor::Slot]>,
     /// Result types, for reading the entry function's results back out.
     pub result_types: Box<[ValueType]>,
     /// Words the parameters occupy: the first locals.

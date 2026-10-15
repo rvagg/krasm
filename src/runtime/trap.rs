@@ -26,3 +26,11 @@ impl From<Trap> for RuntimeError {
         }
     }
 }
+
+/// The flat engine's handlers return errors boxed, to fit in a register.
+impl From<Trap> for Box<RuntimeError> {
+    #[cold]
+    fn from(trap: Trap) -> Self {
+        Box::new(trap.into())
+    }
+}

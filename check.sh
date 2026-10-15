@@ -87,6 +87,7 @@ cargo fmt -- --check
 
 echo -e "\n=== Running clippy ==="
 cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --release --all-targets --all-features -- -D warnings
 
 echo -e "\n=== Checking documentation ==="
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --quiet
@@ -94,9 +95,15 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --quiet
 echo -e "\n=== Running tests ==="
 cargo test
 
+echo -e "\n=== Running tests with tail-call dispatch ==="
+cargo test --release
+RELEASE_KRASM=$(cargo build --release --bin krasm --message-format=json-render-diagnostics |
+    python3 -c 'import json, sys; print(*(m["executable"] for m in map(json.loads, sys.stdin) if m.get("executable")))')
+python3 -B scripts/check_dispatch.py "$RELEASE_KRASM"
+
 echo -e "\n=== Checking instruction profiling ==="
 cargo test --features instruction-profile
-python3 -B -m unittest discover -s scripts -p 'profile*_test.py'
+python3 -B -m unittest discover -s scripts -p '*_test.py'
 
 echo -e "\n=== Checking all features ==="
 cargo test --all-features

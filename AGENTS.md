@@ -97,7 +97,7 @@ RUST_BACKTRACE=1 cargo test <pattern>
    `context_signature` when its types come from an immediate. Validation and the compiler share it.
 5. Implement it as a pure function in `src/runtime/ops/*.rs`, returning `Result<_, Trap>` if it traps.
 6. Wire both engines: an arm in `src/runtime/executor.rs`, and an `Op` in `bytecode.rs` lowered in
-   `compiler/lower.rs` and dispatched in `flat_executor/mod.rs`.
+   `compiler/lower.rs` and given a handler in the `handlers!` list in `flat_executor/mod.rs`.
 7. Add focused tests, then run `./check.sh`.
 
 ## Test Infrastructure
@@ -143,6 +143,8 @@ CommP benchmark input is `benches/commp_bench_500k.bin`; expected hash:
   code placement, so compare them only across layout groups, never single builds.
 - `python3 scripts/profile.py compare --cpu 4 --arm a=BIN_OR_DIR --arm b=...` (perf counters).
 - `python3 scripts/profile.py build --seeds 5 [--rev REV]` builds seeded layouts for `compare`.
+- Optimised x86-64 builds without debug assertions dispatch by tail call; `KRASM_TRAMPOLINE=1`
+  at build time selects the trampoline instead, for comparing the two.
 - Corpus workloads: `--registry target/corpus/registry.json --corpus qualified`.
 - External runtimes: `python3 scripts/prepare_runtimes.py` builds pinned Wasmtime and Wasmi under
   `target/runtimes`; `python3 scripts/profile.py external --cpu 4 --krasm BIN` compares wall time.

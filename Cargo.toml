@@ -57,7 +57,7 @@ harness = false
 name = "execution"
 harness = false
 
-# Whole-program optimisation makes the dispatch loop's code generation far less
+# Whole-program optimisation makes the interpreter's code generation far less
 # sensitive to unrelated layout changes, and faster. See docs/PERFORMANCE_PROGRESS.md.
 [profile.release]
 lto = "fat"

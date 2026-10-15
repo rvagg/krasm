@@ -155,6 +155,7 @@ pub fn compile<'a>(
     let entry_cost = meter(&mut ctx.ops)?;
 
     Ok(CompiledFunction {
+        code: super::flat_executor::thread(&ctx.ops),
         ops: ctx.ops,
         result_types: ftype.return_types.clone().into_boxed_slice(),
         param_words: words_of(&ftype.parameters),
