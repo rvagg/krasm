@@ -312,14 +312,14 @@ fn run_costs_are_not_serialised() {
     let json = serde_json::to_value(&profile).unwrap();
     let ops = json["functions"][0]["ops"].as_array().unwrap();
     assert_eq!(
-        ops[2]["immediates"],
-        serde_json::json!({"target": 5, "arity": 0, "stack_depth": 0})
+        ops[1]["immediates"],
+        serde_json::json!({"target": 4, "arity": 0, "stack_depth": 0})
     );
     assert_eq!(
-        ops[4]["immediates"],
+        ops[3]["immediates"],
         serde_json::json!({
-            "targets": [{"pc": 5, "arity": 0, "stack_depth": 0}],
-            "default": {"pc": 5, "arity": 0, "stack_depth": 0}
+            "targets": [{"pc": 4, "arity": 0, "stack_depth": 0}],
+            "default": {"pc": 4, "arity": 0, "stack_depth": 0}
         })
     );
 }

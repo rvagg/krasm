@@ -43,7 +43,7 @@ mod lower;
 /// Loop labels don't need fixups because their target (the loop start) is
 /// already known when the branch is emitted.
 enum Fixup {
-    /// A Br, BrIf, or Label op at this position needs its target patched.
+    /// A Br or BrIf op at this position needs its target patched.
     Branch(usize),
     /// A BrTable op at `op_pos` needs one of its entries patched.
     /// `Some(i)` patches `targets[i].pc`, `None` patches `default.pc`.
@@ -413,12 +413,11 @@ impl<'a> CompileContext<'a> {
         pos
     }
 
-    /// Patch the target pc of a Br, BrIf or Label op, or of one br_table entry.
+    /// Patch the target pc of a Br or BrIf op, or of one br_table entry.
     fn apply_fixup(&mut self, fixup: &Fixup, target: u32) {
         match fixup {
             Fixup::Branch(pos) => match &mut self.ops[*pos] {
                 Op::Br { target: t, .. } | Op::BrIf { target: t, .. } => *t = target,
-                Op::Label { end_target } => *end_target = target,
                 _ => {}
             },
             Fixup::TableEntry { op_pos, index } => {
@@ -489,8 +488,7 @@ impl<'a> CompileContext<'a> {
                 let sd = self.depth_below(params.len())?;
                 self.check_top(sd, params, "block entry")?;
 
-                let label_pos = self.emit(Op::Label { end_target: 0 });
-                self.open_label(LabelTarget::End(vec![Fixup::Branch(label_pos)]), sd, results)?;
+                self.open_label(LabelTarget::End(Vec::new()), sd, results)?;
                 self.emit_body(body)?;
                 if self.reachable {
                     self.check_top(sd, results, "block end")?;
@@ -507,14 +505,11 @@ impl<'a> CompileContext<'a> {
                 self.check_top(sd, params, "loop entry")?;
 
                 // Branches restart the loop, carrying its params.
-                let loop_start = self.emit(Op::Label { end_target: 0 });
-                self.open_label(LabelTarget::Start(loop_start as u32 + 1), sd, params)?;
+                self.open_label(LabelTarget::Start(self.pos()), sd, params)?;
                 self.emit_body(body)?;
                 if self.reachable {
                     self.check_top(sd, results, "loop end")?;
                 }
-                let end = self.pos();
-                self.apply_fixup(&Fixup::Branch(loop_start), end);
                 self.labels.pop();
                 self.end_block(sd, results);
             }
@@ -899,13 +894,12 @@ mod tests {
         assert_eq!((cf.param_words, cf.result_words, cf.local_words), (1, 1, 5));
         assert_eq!(
             listing(source),
-            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6 [12, else 2]\n4: i32.const 0\n5: return\n\
+            "0: local.get 0\n1: i32.eqz\n2: i32.eqz\n3: br_if -> 6 [10, else 2]\n4: i32.const 0\n5: return\n\
              6: i32.const 0\n7: local.set 1\n8: i32.const 1\n9: local.set 2\n10: i32.const 1\n\
-             11: local.set 4\n12: label (end -> 31)\n13: label (end -> 31)\n14: local.get 4\n\
-             15: local.get 0\n16: i32.ge_u\n17: br_if -> 31 [2, else 13]\n18: local.get 1\n19: local.get 2\n\
-             20: i32.add\n21: local.set 3\n22: local.get 2\n23: local.set 1\n24: local.get 3\n\
-             25: local.set 2\n26: local.get 4\n27: i32.const 1\n28: i32.add\n29: local.set 4\n\
-             30: br -> 14 [4]\n31: local.get 2\n32: end\n"
+             11: local.set 4\n12: local.get 4\n13: local.get 0\n14: i32.ge_u\n15: br_if -> 29 [2, else 13]\n\
+             16: local.get 1\n17: local.get 2\n18: i32.add\n19: local.set 3\n20: local.get 2\n21: local.set 1\n\
+             22: local.get 3\n23: local.set 2\n24: local.get 4\n25: i32.const 1\n26: i32.add\n27: local.set 4\n\
+             28: br -> 12 [4]\n29: local.get 2\n30: end\n"
         );
     }
 
@@ -913,29 +907,22 @@ mod tests {
     fn noop_loop_branches_back_to_the_loop_body() {
         assert_eq!(
             listing(include_str!("../../benches/modules/noop_loop.wat")),
-            "0: label (end -> 11)\n1: label (end -> 11)\n2: local.get 1\n3: local.get 0\n\
-             4: i32.ge_u\n5: br_if -> 11 [2, else 5]\n6: local.get 1\n7: i32.const 1\n8: i32.add\n\
-             9: local.set 1\n10: br -> 2 [4]\n11: local.get 1\n12: end\n"
+            "0: local.get 1\n1: local.get 0\n2: i32.ge_u\n3: br_if -> 9 [2, else 5]\n4: local.get 1\n\
+             5: i32.const 1\n6: i32.add\n7: local.set 1\n8: br -> 0 [4]\n9: local.get 1\n10: end\n"
         );
     }
 
     #[test]
     fn block_branches_forward_and_loop_branches_back() {
-        assert_eq!(
-            listing("(module (func (block (br 0))))"),
-            "0: label (end -> 2)\n1: br -> 2 [1]\n2: end\n"
-        );
-        assert_eq!(
-            listing("(module (func (loop (br 0))))"),
-            "0: label (end -> 2)\n1: br -> 1 [1]\n2: end\n"
-        );
+        assert_eq!(listing("(module (func (block (br 0))))"), "0: br -> 1 [1]\n1: end\n");
+        assert_eq!(listing("(module (func (loop (br 0))))"), "0: br -> 0 [1]\n1: end\n");
     }
 
     #[test]
     fn branch_to_a_block_with_a_result_keeps_it() {
         assert_eq!(
             listing("(module (func (result i32) (block (result i32) (i32.const 42) (br 0))))"),
-            "0: label (end -> 3)\n1: i32.const 42\n2: br -> 3 [1] (stack 0, keep 1 values)\n3: end\n"
+            "0: i32.const 42\n1: br -> 2 [1] (stack 0, keep 1 values)\n2: end\n"
         );
     }
 
@@ -981,15 +968,13 @@ mod tests {
             metered("(module (func (result i32) (i32.const 7)))"),
             (2, "0: i32.const 7\n1: end\n".into())
         );
-        // Nested blocks don't compound: the entry run falls through both
-        // labels, and a target reached by falling through is inside it.
+        // Blocks emit no ops, and the inner block's end, reached by falling
+        // through, lies inside the fall-through run.
         assert_eq!(
             metered("(module (func (param i32) (block (block (br_if 1 (local.get 0))) (nop)) (nop)))"),
             (
-                4,
-                "0: label (end -> 5)\n1: label (end -> 4)\n2: local.get 0\n3: br_if -> 5 [2, else 3]\n\
-                 4: nop\n5: nop\n6: end\n"
-                    .into()
+                2,
+                "0: local.get 0\n1: br_if -> 3 [2, else 3]\n2: nop\n3: nop\n4: end\n".into()
             )
         );
         // A br_if to the function label lands on the final end.
@@ -1000,18 +985,15 @@ mod tests {
     }
 
     #[test]
-    fn loops_charge_from_the_op_after_their_label() {
-        // The back edge lands on the inner block's label, not the loop's.
+    fn loop_back_edges_charge_from_the_loop_body() {
+        // The back edge lands on the loop's first op: here, the branch itself.
         assert_eq!(
             metered("(module (func (loop (block (br 1)))))"),
-            (
-                3,
-                "0: label (end -> 3)\n1: label (end -> 3)\n2: br -> 1 [2]\n3: end\n".into()
-            )
+            (1, "0: br -> 0 [1]\n1: end\n".into())
         );
         assert_eq!(
-            metered("(module (func (loop (br 0))))"),
-            (2, "0: label (end -> 2)\n1: br -> 1 [1]\n2: end\n".into())
+            metered("(module (func (loop (nop) (br 0))))"),
+            (2, "0: nop\n1: br -> 0 [2]\n2: end\n".into())
         );
     }
 
@@ -1019,10 +1001,7 @@ mod tests {
     fn unreachable_ends_a_run() {
         assert_eq!(
             metered("(module (func (block (unreachable)) (i32.const 1) (drop)))"),
-            (
-                2,
-                "0: label (end -> 2)\n1: unreachable\n2: i32.const 1\n3: drop\n4: end\n".into()
-            )
+            (1, "0: unreachable\n1: i32.const 1\n2: drop\n3: end\n".into())
         );
     }
 
@@ -1031,10 +1010,8 @@ mod tests {
         assert_eq!(
             metered("(module (func (param i32) (block (block (br_table 0 1 (local.get 0))) (nop) (nop))))"),
             (
-                4,
-                "0: label (end -> 6)\n1: label (end -> 4)\n2: local.get 0\n3: br_table [4 [3]] default -> 6 [1]\n\
-                 4: nop\n5: nop\n6: end\n"
-                    .into()
+                2,
+                "0: local.get 0\n1: br_table [2 [3]] default -> 4 [1]\n2: nop\n3: nop\n4: end\n".into()
             )
         );
     }
@@ -1068,8 +1045,8 @@ mod tests {
                        (local.get 0)
                        (br_table 0 1 0)))))"
             ),
-            "0: label (end -> 5)\n1: label (end -> 5)\n2: i32.const 10\n3: local.get 0\n\
-             4: br_table [5 [1], 5 [1]] default -> 5 [1] (stack 0, keep 1 values)\n5: end\n"
+            "0: i32.const 10\n1: local.get 0\n\
+             2: br_table [3 [1], 3 [1]] default -> 3 [1] (stack 0, keep 1 values)\n3: end\n"
         );
     }
 }

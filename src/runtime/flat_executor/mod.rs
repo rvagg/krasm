@@ -378,7 +378,7 @@ impl FlatExecutor {
         self.instruction_counts.as_deref().unwrap_or_default()
     }
 
-    /// Limit unfused bytecode operations, including labels and function ends.
+    /// Limit unfused bytecode operations, including function ends.
     ///
     /// Each straight-line run of ops is charged in full where control enters
     /// it, and traps as exhausted instead of starting when the budget cannot
@@ -1437,7 +1437,7 @@ impl FlatExecutor {
                     // `return` can leave operands beneath its results; validation
                     // guarantees the function's final `end` leaves exactly them.
                     Op::Return | Op::End => return_to_caller!(),
-                    Op::Nop | Op::Label { .. } => {
+                    Op::Nop => {
                         pc += 1;
                     }
 

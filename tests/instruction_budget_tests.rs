@@ -2,7 +2,7 @@
 //! ops is charged in full where control enters it.
 //!
 //! Expected counts are derived by hand from the compiled bytecode, one unit
-//! per op including labels and the final `end`. A call completes under a
+//! per op including the final `end`. A call completes under a
 //! budget exactly when its count fits, so each count is checked from both
 //! sides: the count completes and one less exhausts.
 
@@ -36,7 +36,7 @@ fn assert_count(store: &mut Store, id: usize, name: &str, args: &[Value], expect
 
 #[test]
 fn loops_cost_their_entry_and_each_iteration() {
-    // Entry run: two labels and the exit test (6). Each iteration falls
+    // Entry run: the exit test (4). Each iteration falls
     // through the br_if (5) and branches back to the test (4); leaving
     // lands on the final local.get and end (2).
     let (mut store, id) = flat(include_str!("../benches/modules/noop_loop.wat"));
@@ -47,12 +47,12 @@ fn loops_cost_their_entry_and_each_iteration() {
             "run",
             &[Value::I32(n)],
             &[Value::I32(n)],
-            8 + 9 * n as u64,
+            6 + 9 * n as u64,
         );
     }
 
     // n = 0 returns after the entry run (4) and the early return (2).
-    // Otherwise: entry (4), setup to the first exit test (12), n - 1
+    // Otherwise: entry (4), setup to the first exit test (10), n - 1
     // iterations of 13 + 4, and the exit (2).
     let (mut store, id) = flat(include_str!("../benches/modules/fib_iterative.wat"));
     assert_count(&mut store, id, "fib", &[Value::I32(0)], &[Value::I32(0)], 6);
@@ -63,7 +63,7 @@ fn loops_cost_their_entry_and_each_iteration() {
             "fib",
             &[Value::I32(n)],
             &[Value::I32(fib)],
-            17 * n as u64 + 1,
+            17 * n as u64 - 1,
         );
     }
 }
@@ -85,18 +85,18 @@ fn each_branch_charges_the_run_it_lands_in() {
               (return (i32.const 20)))
             (nop) (i32.const 30)))",
     );
-    // Entry: label, local.get, br_if (3). Taken: const, end (2). Not taken:
-    // three nops, const, end (5).
-    assert_count(&mut store, id, "skip", &[Value::I32(1)], &[Value::I32(1)], 5);
-    assert_count(&mut store, id, "skip", &[Value::I32(0)], &[Value::I32(1)], 8);
+    // Entry: local.get, br_if (2). Taken: const, end (2). Not taken: three
+    // nops, const, end (5).
+    assert_count(&mut store, id, "skip", &[Value::I32(1)], &[Value::I32(1)], 4);
+    assert_count(&mut store, id, "skip", &[Value::I32(0)], &[Value::I32(1)], 7);
     // Entry: local.get, i32.eqz, br_if (3). Then: nop, const, br (3) and the
     // end it lands on (1). Else: const, end (2).
     assert_count(&mut store, id, "choose", &[Value::I32(1)], &[Value::I32(1)], 7);
     assert_count(&mut store, id, "choose", &[Value::I32(0)], &[Value::I32(2)], 5);
-    // Entry: three labels, local.get, br_table (5), then the landing run:
+    // Entry: local.get, br_table (2), then the landing run:
     // $a nop, nop, const, return (4); $b const, return (2); $c and the
     // default nop, const, end (3).
-    for (index, result, count) in [(0, 10, 9), (1, 20, 7), (2, 30, 8), (7, 30, 8), (-1, 30, 8)] {
+    for (index, result, count) in [(0, 10, 6), (1, 20, 4), (2, 30, 5), (7, 30, 5), (-1, 30, 5)] {
         assert_count(
             &mut store,
             id,
@@ -198,13 +198,13 @@ fn waiting_callers_have_paid_for_their_tails() {
 
 #[test]
 fn unreachable_ends_its_run() {
-    // label, unreachable: the nops after the block are not charged.
+    // unreachable alone: the nops after the block are not charged.
     let (mut store, id) = flat("(module (func (export \"trap\") (block (unreachable)) (nop) (nop) (nop)))");
     assert!(matches!(
-        store.invoke_export(id, "trap", vec![], Some(2)),
+        store.invoke_export(id, "trap", vec![], Some(1)),
         Err(RuntimeError::Trap(message)) if message == "unreachable"
     ));
-    assert!(exhausted(store.invoke_export(id, "trap", vec![], Some(1))));
+    assert!(exhausted(store.invoke_export(id, "trap", vec![], Some(0))));
 }
 
 #[test]

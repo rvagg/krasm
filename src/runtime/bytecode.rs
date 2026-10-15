@@ -604,20 +604,10 @@ pub enum Op {
     },
     /// Return from the current function.
     Return,
-    /// No operation. Used as a placeholder (e.g. after block/loop markers
-    /// that have been compiled away).
+    /// Wasm `nop`.
     Nop,
     /// End of function. The executor stops when it reaches this.
     End,
-
-    // -- Block bookkeeping --
-    /// Marks the start of a block's scope. At runtime this is a no-op; it
-    /// exists so that bytecode dumps show the control flow structure, and
-    /// future compilation tiers can identify basic block boundaries.
-    /// `end_target` points to the instruction after the block's End.
-    Label {
-        end_target: u32,
-    },
 
     /// Unreachable trap.
     Unreachable,
@@ -1214,7 +1204,6 @@ impl fmt::Display for Op {
             Op::Return => write!(f, "return"),
             Op::Nop => write!(f, "nop"),
             Op::End => write!(f, "end"),
-            Op::Label { end_target } => write!(f, "label (end -> {end_target})"),
             Op::Unreachable => write!(f, "unreachable"),
             Op::Drop => write!(f, "drop"),
             Op::DropV128 => write!(f, "drop.v128"),
