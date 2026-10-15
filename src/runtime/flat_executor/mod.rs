@@ -77,8 +77,11 @@
 
 mod words;
 
+use std::ptr::NonNull;
+
 use super::bytecode::{CompiledFunction, Op, value_words};
 use super::instance::SegmentState;
+use super::memory::Memory;
 use super::ops;
 use super::store::{FuncAddr, GlobalAddr, MemoryAddr, Resources, TableAddr};
 use super::value::Value;
@@ -101,8 +104,8 @@ pub struct ExecContext<'a> {
     /// space). `Op::Call { func_idx }` values below `num_imported` suspend
     /// execution with `ExecutionOutcome::NeedsExternalCall`; values at or
     /// above index into the compiled `funcs` slice after subtracting
-    /// `num_imported`. call_indirect scans this slice to map a table
-    /// funcref back to a callable.
+    /// `num_imported`. call_indirect maps a table funcref back to a callable
+    /// through it.
     pub functions: &'a [FuncEntry],
     /// Number of imported functions (a prefix of `functions`).
     pub num_imported: usize,
@@ -173,28 +176,10 @@ struct CallFrame {
 }
 
 impl ExecContext<'_> {
-    /// Resolve module-local memory index 0 to the memory instance.
-    fn memory(&self) -> Result<&super::memory::Memory, RuntimeError> {
-        let addr = self
-            .memory_addrs
-            .first()
-            .ok_or_else(|| RuntimeError::MemoryError("no memory".to_string()))?;
-        self.resources
-            .memories
-            .get(addr.0)
-            .ok_or_else(|| RuntimeError::MemoryError("invalid memory address".to_string()))
-    }
-
-    /// Resolve module-local memory index 0 to a mutable memory instance.
-    fn memory_mut(&mut self) -> Result<&mut super::memory::Memory, RuntimeError> {
-        let addr = self
-            .memory_addrs
-            .first()
-            .ok_or_else(|| RuntimeError::MemoryError("no memory".to_string()))?;
-        self.resources
-            .memories
-            .get_mut(addr.0)
-            .ok_or_else(|| RuntimeError::MemoryError("invalid memory address".to_string()))
+    /// Module-local memory 0, if the module has one.
+    fn memory(&mut self) -> Option<&mut Memory> {
+        let addr = self.memory_addrs.first()?;
+        self.resources.memories.get_mut(addr.0)
     }
 
     /// The global at module-local `index`.
@@ -247,6 +232,20 @@ impl ExecContext<'_> {
         self.types
             .get(type_idx as usize)
             .ok_or(RuntimeError::InvalidFunctionType)
+    }
+
+    /// Find a funcref in this module's function index space. The Store
+    /// allocates a module's defined functions consecutively, so the offset
+    /// from the first gives the index; imports are scanned.
+    fn module_func_idx(&self, addr: FuncAddr) -> Option<usize> {
+        let (imported, defined) = self.functions.split_at(self.num_imported);
+        if let Some(first) = defined.first() {
+            let offset = addr.0.wrapping_sub(first.addr.0);
+            if defined.get(offset).is_some_and(|entry| entry.addr == addr) {
+                return Some(self.num_imported + offset);
+            }
+        }
+        imported.iter().position(|entry| entry.addr == addr)
     }
 }
 
@@ -566,6 +565,12 @@ impl FlatExecutor {
             instruction_counts,
         } = self;
 
+        // SAFETY: the memory stays in place until `run` returns: `memory.grow`
+        // resizes its contents, not the instance, and the loop reaches tables
+        // and globals without touching the Store's memories, so this pointer
+        // is the only path to it.
+        let memory: Option<NonNull<Memory>> = ctx.as_mut().and_then(|c| c.memory()).map(NonNull::from);
+
         // The registers (see the module docs): `pc` indexes the current
         // function's `ops`; `fp`, `base` and `sp`, below, point into `stack`.
         // Few values live across the loop, so each can stay in a register.
@@ -651,11 +656,21 @@ impl FlatExecutor {
                 pc += 1;
             }};
         }
-        // Pure operations on linear memory, which read (mem_op) or write
-        // (mem_op_mut) it: as `pure_op`, with the memory as first argument.
+        // The module's memory, or a trap if it has none.
+        macro_rules! memory {
+            () => {
+                match memory {
+                    Some(mut memory) => memory.as_mut(),
+                    None => return Err(RuntimeError::MemoryError("no memory".to_string())),
+                }
+            };
+        }
+
+        // Pure operations on linear memory: as `pure_op`, with the memory as
+        // first argument.
         macro_rules! mem_op {
             ($adapter:ident, |$($p:ident),*| $f:path $(, $arg:expr)*) => {{
-                let memory = require_ctx!(ctx).memory()?;
+                let memory = memory!();
                 mem_op!(@ $adapter, memory, |$($p),*| $f $(, $arg)*)
             }};
             (@ unary, $m:ident, |$a:ident| $f:path $(, $arg:expr)*) => {{
@@ -682,13 +697,6 @@ impl FlatExecutor {
                 pc += 1;
             }};
         }
-        macro_rules! mem_op_mut {
-            ($adapter:ident, |$($p:ident),*| $f:path $(, $arg:expr)*) => {{
-                let memory = require_ctx!(ctx).memory_mut()?;
-                mem_op!(@ $adapter, memory, |$($p),*| $f $(, $arg)*)
-            }};
-        }
-
         // Keep the top `arity` words, moved down to `depth` above the
         // operand base, and jump to `target`.
         macro_rules! branch {
@@ -1206,31 +1214,31 @@ impl FlatExecutor {
                     Op::V128Load64Lane { memarg, lane } => {
                         mem_op!(try_binary, |addr, v| ops::simd::v128_load64_lane, memarg, *lane)
                     }
-                    Op::I32Store(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i32_store, m),
-                    Op::I32Store8(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i32_store8, m),
-                    Op::I32Store16(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i32_store16, m),
-                    Op::I64Store(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i64_store, m),
-                    Op::I64Store8(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i64_store8, m),
-                    Op::I64Store16(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i64_store16, m),
-                    Op::I64Store32(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::i64_store32, m),
-                    Op::F32Store(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::f32_store, m),
-                    Op::F64Store(m) => mem_op_mut!(try_binary, |addr, value| ops::memory::f64_store, m),
-                    Op::V128Store(m) => mem_op_mut!(try_binary, |addr, value| ops::simd::v128_store, m),
+                    Op::I32Store(m) => mem_op!(try_binary, |addr, value| ops::memory::i32_store, m),
+                    Op::I32Store8(m) => mem_op!(try_binary, |addr, value| ops::memory::i32_store8, m),
+                    Op::I32Store16(m) => mem_op!(try_binary, |addr, value| ops::memory::i32_store16, m),
+                    Op::I64Store(m) => mem_op!(try_binary, |addr, value| ops::memory::i64_store, m),
+                    Op::I64Store8(m) => mem_op!(try_binary, |addr, value| ops::memory::i64_store8, m),
+                    Op::I64Store16(m) => mem_op!(try_binary, |addr, value| ops::memory::i64_store16, m),
+                    Op::I64Store32(m) => mem_op!(try_binary, |addr, value| ops::memory::i64_store32, m),
+                    Op::F32Store(m) => mem_op!(try_binary, |addr, value| ops::memory::f32_store, m),
+                    Op::F64Store(m) => mem_op!(try_binary, |addr, value| ops::memory::f64_store, m),
+                    Op::V128Store(m) => mem_op!(try_binary, |addr, value| ops::simd::v128_store, m),
                     Op::V128Store8Lane { memarg, lane } => {
-                        mem_op_mut!(try_binary, |addr, v| ops::simd::v128_store8_lane, memarg, *lane)
+                        mem_op!(try_binary, |addr, v| ops::simd::v128_store8_lane, memarg, *lane)
                     }
                     Op::V128Store16Lane { memarg, lane } => {
-                        mem_op_mut!(try_binary, |addr, v| ops::simd::v128_store16_lane, memarg, *lane)
+                        mem_op!(try_binary, |addr, v| ops::simd::v128_store16_lane, memarg, *lane)
                     }
                     Op::V128Store32Lane { memarg, lane } => {
-                        mem_op_mut!(try_binary, |addr, v| ops::simd::v128_store32_lane, memarg, *lane)
+                        mem_op!(try_binary, |addr, v| ops::simd::v128_store32_lane, memarg, *lane)
                     }
                     Op::V128Store64Lane { memarg, lane } => {
-                        mem_op_mut!(try_binary, |addr, v| ops::simd::v128_store64_lane, memarg, *lane)
+                        mem_op!(try_binary, |addr, v| ops::simd::v128_store64_lane, memarg, *lane)
                     }
-                    Op::MemoryGrow => mem_op_mut!(unary, |delta| ops::memory::memory_grow),
-                    Op::MemoryCopy => mem_op_mut!(try_ternary, |dest, src, len| ops::memory::memory_copy),
-                    Op::MemoryFill => mem_op_mut!(try_ternary, |dest, value, len| ops::memory::memory_fill),
+                    Op::MemoryGrow => mem_op!(unary, |delta| ops::memory::memory_grow),
+                    Op::MemoryCopy => mem_op!(try_ternary, |dest, src, len| ops::memory::memory_copy),
+                    Op::MemoryFill => mem_op!(try_ternary, |dest, value, len| ops::memory::memory_fill),
                     // -- Constants --
                     Op::I32Const(v) => {
                         push(&mut sp, *v);
@@ -1322,7 +1330,7 @@ impl FlatExecutor {
                     }
 
                     Op::MemorySize => {
-                        push(&mut sp, ops::memory::memory_size(require_ctx!(ctx).memory()?));
+                        push(&mut sp, ops::memory::memory_size(memory!()));
                         pc += 1;
                     }
 
@@ -1397,13 +1405,15 @@ impl FlatExecutor {
                         };
                         let expected = c.func_type(*type_idx)?;
 
-                        match c.functions.iter().position(|e| e.addr == func_addr) {
+                        match c.module_func_idx(func_addr) {
                             Some(module_idx) => {
                                 // The funcref belongs to this module: the
                                 // signature check happens here, before any
-                                // arguments are consumed.
-                                let actual = c.func_type(c.functions[module_idx].type_idx)?;
-                                if expected != actual {
+                                // arguments are consumed. Equal indices are
+                                // equal types; different ones may still match.
+                                let actual_idx = c.functions[module_idx].type_idx;
+                                let actual = c.func_type(actual_idx)?;
+                                if actual_idx != *type_idx && expected != actual {
                                     return Err(RuntimeError::IndirectCallTypeMismatch {
                                         expected: format!("{expected:?}"),
                                         actual: format!("{actual:?}"),
@@ -1543,16 +1553,8 @@ impl FlatExecutor {
                         pc += 1;
                     }
                     Op::MemoryInit { data_idx } => {
+                        let memory = memory!();
                         let c = require_ctx!(ctx);
-                        let addr = c
-                            .memory_addrs
-                            .first()
-                            .ok_or_else(|| RuntimeError::MemoryError("no memory".to_string()))?;
-                        let memory = c
-                            .resources
-                            .memories
-                            .get_mut(addr.0)
-                            .ok_or_else(|| RuntimeError::MemoryError("invalid memory address".to_string()))?;
                         let length: i32 = pop(&mut sp);
                         let src_offset: i32 = pop(&mut sp);
                         let dest_addr: i32 = pop(&mut sp);
