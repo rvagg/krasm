@@ -18,7 +18,7 @@
 //!
 //! Four registers track execution:
 //!
-//! - `pc`: the next op to run in the current function.
+//! - `pc`: the slot of the next op to run, in the current function's code.
 //! - `fp`: the frame's first word. Each local sits at a fixed offset from it,
 //!   which the compiler emits as the local's index.
 //! - `base`: the first operand word. Branch depths count from here.
@@ -29,17 +29,18 @@
 //!
 //! Each op has its own handler, and each function's code pairs every op with
 //! its handler (see [`Slot`]). A handler takes `pc`, `sp` and `fp`, with the
-//! function's code and its memory, as arguments that stay in machine
-//! registers; `base` and everything else wait in a [`Machine`] behind the
-//! first argument. In optimised builds a handler ends by calling the next op's
+//! module's memory, as arguments that stay in machine registers; `base`, the
+//! current function's code and everything else wait in a [`Machine`] behind
+//! the first argument. In optimised builds a handler ends by calling the next op's
 //! handler in tail position, which compiles to a jump: every op dispatches
 //! from its own branch, which the processor predicts from the ops before it.
 //!
 //! A call copies nothing: the caller's arguments, on top of its operands,
 //! become the callee's parameters, so the callee's `fp` is `sp` less its
 //! parameter words. A return copies the results down to `fp` and leaves `sp`
-//! just above them. `call_stack` holds each waiting caller's `pc`, `fp` and
-//! `base`, as word indices, so the stack can grow and move.
+//! just above them. `call_stack` holds each waiting caller's `pc` as an op
+//! index, and its `fp` and `base` as word indices, so frames outlive a run and
+//! the stack can grow and move.
 //!
 //! # Instruction budget
 //!
@@ -605,6 +606,7 @@ impl FlatExecutor {
             budget: instruction_budget,
             activation,
             func_idx: frame.func_idx,
+            code: func.code.as_ptr(),
             base,
             outcome: None,
             #[cfg(any(trampoline, debug_assertions))]
@@ -622,7 +624,7 @@ impl FlatExecutor {
         // SAFETY: `pc` stays inside the code: every function ends in an
         // `End`, the compiler checks each branch target, and a call resumes
         // at the op after it, which is never the last.
-        unsafe { machine.drive(func.code.as_ptr(), frame.pc, sp, fp, memory) }.map_err(|error| *error)?;
+        unsafe { machine.drive(machine.code.add(frame.pc), sp, fp, memory) }.map_err(|error| *error)?;
         Ok(machine.outcome.take().expect("a handler stopped without an outcome"))
     }
 }
@@ -650,7 +652,7 @@ pub(crate) fn thread(ops: Vec<Op>) -> Box<[Slot]> {
         .collect()
 }
 
-/// Execute the op at `pc` in `code`, then the ones after it, until the
+/// Execute the op at `pc`, then the ones after it, until the
 /// activation completes or suspends, recording how in the machine.
 ///
 /// The registers (see the module docs) travel as arguments, which the calling
@@ -664,7 +666,6 @@ pub(crate) fn thread(ops: Vec<Op>) -> Box<[Slot]> {
 type Handler = unsafe fn(
     &mut Machine<'_, '_>,
     *const Slot,
-    usize,
     *mut Word,
     *mut Word,
     Option<NonNull<Memory>>,
@@ -674,8 +675,7 @@ type Handler = unsafe fn(
 #[cfg(any(trampoline, debug_assertions))]
 #[derive(Clone, Copy)]
 struct Registers {
-    code: *const Slot,
-    pc: usize,
+    pc: *const Slot,
     sp: *mut Word,
     fp: *mut Word,
 }
@@ -693,8 +693,10 @@ struct Machine<'r, 'c> {
     max_stack_words: usize,
     budget: &'r mut u64,
     activation: Activation,
-    /// The function `code` belongs to.
+    /// The current function.
     func_idx: usize,
+    /// The current function's first slot, where its branch targets count from.
+    code: *const Slot,
     /// The current frame's first operand word.
     base: *mut Word,
     /// Set by the handler that completes or suspends the activation.
@@ -708,18 +710,17 @@ struct Machine<'r, 'c> {
 
 impl Machine<'_, '_> {
     /// # Safety
-    /// `pc` must index `code`, and the registers must describe the current
-    /// frame (see [`FlatExecutor::run`]).
+    /// `pc` must point into the current function's code, and the registers
+    /// must describe the current frame (see [`FlatExecutor::run`]).
     #[cfg(not(any(trampoline, debug_assertions)))]
     unsafe fn drive(
         &mut self,
-        code: *const Slot,
-        pc: usize,
+        pc: *const Slot,
         sp: *mut Word,
         fp: *mut Word,
         memory: Option<NonNull<Memory>>,
     ) -> Result<(), Box<RuntimeError>> {
-        unsafe { ((*code.add(pc)).handler)(self, code, pc, sp, fp, memory) }
+        unsafe { ((*pc).handler)(self, pc, sp, fp, memory) }
     }
 
     /// The trampoline: each handler leaves its successor's registers in
@@ -730,15 +731,14 @@ impl Machine<'_, '_> {
     #[cfg(any(trampoline, debug_assertions))]
     unsafe fn drive(
         &mut self,
-        code: *const Slot,
-        pc: usize,
+        pc: *const Slot,
         sp: *mut Word,
         fp: *mut Word,
         memory: Option<NonNull<Memory>>,
     ) -> Result<(), Box<RuntimeError>> {
-        self.next = Some(Registers { code, pc, sp, fp });
-        while let Some(Registers { code, pc, sp, fp }) = self.next.take() {
-            unsafe { ((*code.add(pc)).handler)(self, code, pc, sp, fp, memory)? };
+        self.next = Some(Registers { pc, sp, fp });
+        while let Some(Registers { pc, sp, fp }) = self.next.take() {
+            unsafe { ((*pc).handler)(self, pc, sp, fp, memory)? };
         }
         Ok(())
     }
@@ -771,13 +771,12 @@ macro_rules! handlers {
         fn handler_for(op: &Op) -> Handler {
             match op {
                 $($op => |machine: &mut Machine<'_, '_>,
-                          code: *const Slot,
-                          $pc: usize,
+                          $pc: *const Slot,
                           $sp: *mut Word,
                           $fp: *mut Word,
                           memory: Option<NonNull<Memory>>|
                  -> Result<(), Box<RuntimeError>> {
-                    let (mut code, mut $pc, mut $sp, mut $fp) = (code, $pc, $sp, $fp);
+                    let (mut $pc, mut $sp, mut $fp) = ($pc, $sp, $fp);
 
                     // Pay for the run about to start, or trap without starting it.
                     macro_rules! charge {
@@ -798,6 +797,13 @@ macro_rules! handlers {
                         };
                     }
 
+                    // Index of the op `pc` points at, in the current function.
+                    macro_rules! op_index {
+                        () => {
+                            $pc.offset_from(machine.code) as usize
+                        };
+                    }
+
                     // Pure operations: pop the operands, push `$d f(operands.., args..)`.
                     // A `try_` form propagates the operation's trap.
                     macro_rules! pure_op {
@@ -809,31 +815,31 @@ macro_rules! handlers {
                         (unary, |$d a:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d a $d(, $d arg)*));
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (binary, |$d a:ident, $d b:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d b = pop(&mut $sp);
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d a, $d b $d(, $d arg)*));
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (ternary, |$d a:ident, $d b:ident, $d c:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d c = pop(&mut $sp);
                             let $d b = pop(&mut $sp);
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d a, $d b, $d c $d(, $d arg)*));
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (try_unary, |$d a:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d a $d(, $d arg)*)?);
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (try_binary, |$d a:ident, $d b:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d b = pop(&mut $sp);
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d a, $d b $d(, $d arg)*)?);
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                     }
 
@@ -857,25 +863,25 @@ macro_rules! handlers {
                         (@ unary, $d m:ident, |$d a:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d m, $d a $d(, $d arg)*));
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (@ try_unary, $d m:ident, |$d a:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d m, $d a $d(, $d arg)*)?);
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (@ try_binary, $d m:ident, |$d a:ident, $d b:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d b = pop(&mut $sp);
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d m, $d a, $d b $d(, $d arg)*)?);
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                         (@ try_ternary, $d m:ident, |$d a:ident, $d b:ident, $d c:ident| $d f:path $d(, $d arg:expr)*) => {{
                             let $d c = pop(&mut $sp);
                             let $d b = pop(&mut $sp);
                             let $d a = pop(&mut $sp);
                             push(&mut $sp, $d f($d m, $d a, $d b, $d c $d(, $d arg)*)?);
-                            $pc += 1;
+                            $pc = $pc.add(1);
                         }};
                     }
 
@@ -890,7 +896,7 @@ macro_rules! handlers {
                                 arity => dest.copy_from($sp.sub(arity), arity),
                             }
                             $sp = dest.add($d arity as usize);
-                            $pc = $d target as usize;
+                            $pc = machine.code.add($d target as usize);
                         }};
                     }
 
@@ -907,7 +913,7 @@ macro_rules! handlers {
                             }
                             machine.call_stack.push(CallFrame {
                                 func_idx: machine.func_idx,
-                                pc: $pc + 1,
+                                pc: op_index!() + 1,
                                 fp: index!($fp),
                                 base: index!(machine.base),
                             });
@@ -928,8 +934,8 @@ macro_rules! handlers {
                                 .write_bytes(0, (callee.local_words - callee.param_words) as usize);
                             $sp = machine.base;
                             machine.func_idx = local_idx;
-                            code = callee.code.as_ptr();
-                            $pc = 0;
+                            machine.code = callee.code.as_ptr();
+                            $pc = machine.code;
                         }};
                     }
 
@@ -938,7 +944,7 @@ macro_rules! handlers {
                         ($d addr:expr, $d ftype:expr, $d expected:expr) => {{
                             let frame = CallFrame {
                                 func_idx: machine.func_idx,
-                                pc: $pc + 1,
+                                pc: op_index!() + 1,
                                 fp: index!($fp),
                                 base: index!(machine.base),
                             };
@@ -973,8 +979,8 @@ macro_rules! handlers {
                                 return Ok(());
                             };
                             machine.func_idx = frame.func_idx;
-                            code = machine.funcs[frame.func_idx].code.as_ptr();
-                            $pc = frame.pc;
+                            machine.code = machine.funcs[frame.func_idx].code.as_ptr();
+                            $pc = machine.code.add(frame.pc);
                             let start = machine.stack.as_mut_ptr();
                             $fp = start.add(frame.fp);
                             machine.base = start.add(frame.base);
@@ -982,7 +988,7 @@ macro_rules! handlers {
                     }
 
                     // SAFETY: see `FlatExecutor::run` for the registers'
-                    // invariants; `code` holds this handler's own op at `pc`.
+                    // invariants; `pc` points at this handler's own op.
                     unsafe {
                         debug_assert!(
                             machine.base <= $sp
@@ -992,25 +998,27 @@ macro_rules! handlers {
                             "operand stack outside its frame"
                         );
                         debug_assert!(
-                            $pc < machine.funcs[machine.func_idx].code.len(),
+                            machine.code == machine.funcs[machine.func_idx].code.as_ptr()
+                                && machine.code <= $pc
+                                && op_index!() < machine.funcs[machine.func_idx].code.len(),
                             "pc outside its function"
                         );
                         #[cfg(feature = "instruction-profile")]
                         if let Some(counts) = machine.instruction_counts {
-                            counts[machine.func_idx][$pc] += 1;
+                            counts[machine.func_idx][op_index!()] += 1;
                         }
                         {
-                            let ($op) = &(*code.add($pc)).op else {
+                            let ($op) = &(*$pc).op else {
                                 std::hint::unreachable_unchecked()
                             };
                             let $ctx = &mut machine.ctx;
                             $effect;
                         }
                         #[cfg(not(any(trampoline, debug_assertions)))]
-                        return ((*code.add($pc)).handler)(machine, code, $pc, $sp, $fp, memory);
+                        return ((*$pc).handler)(machine, $pc, $sp, $fp, memory);
                         #[cfg(any(trampoline, debug_assertions))]
                         {
-                            machine.next = Some(Registers { code, pc: $pc, sp: $sp, fp: $fp });
+                            machine.next = Some(Registers { pc: $pc, sp: $sp, fp: $fp });
                             Ok(())
                         }
                     }
@@ -1457,75 +1465,75 @@ handlers! {
     // -- Constants --
     Op::I32Const(v) => {
         push(&mut sp, *v);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::I64Const(v) => {
         push(&mut sp, *v);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::F32Const(v) => {
         push(&mut sp, *v);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::F64Const(v) => {
         push(&mut sp, *v);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::V128Const(v) => {
         push(&mut sp, *v);
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- Locals, read and written in place in the frame --
     Op::LocalGet { index } => {
         *sp = *fp.add(*index as usize);
         sp = sp.add(1);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::LocalSet { index } => {
         sp = sp.sub(1);
         *fp.add(*index as usize) = *sp;
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::LocalTee { index } => {
         *fp.add(*index as usize) = *sp.sub(1);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::LocalGetV128 { index } => {
         sp.copy_from_nonoverlapping(fp.add(*index as usize), 2);
         sp = sp.add(2);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::LocalSetV128 { index } => {
         sp = sp.sub(2);
         fp.add(*index as usize).copy_from_nonoverlapping(sp, 2);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::LocalTeeV128 { index } => {
         fp.add(*index as usize).copy_from_nonoverlapping(sp.sub(2), 2);
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- Globals, stored tagged --
     Op::GlobalGet { index } => {
         let value = *require_ctx!(ctx).global(*index)?;
         push_value(&mut sp, value);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::GlobalSet { index } => {
         let global = require_ctx!(ctx).global(*index)?;
         *global = pop_value(&mut sp, global.typ());
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- Parametric --
     Op::Drop => {
         sp = sp.sub(1);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::DropV128 => {
         sp = sp.sub(2);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::Select => {
         let condition: i32 = pop(&mut sp);
@@ -1533,7 +1541,7 @@ handlers! {
         if condition == 0 {
             *sp.sub(1) = *sp;
         }
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::SelectV128 => {
         let condition: i32 = pop(&mut sp);
@@ -1541,12 +1549,12 @@ handlers! {
         if condition == 0 {
             sp.sub(2).copy_from_nonoverlapping(sp, 2);
         }
-        pc += 1;
+        pc = pc.add(1);
     },
 
     Op::MemorySize => {
         push(&mut sp, ops::memory::memory_size(memory!()));
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- Control flow --
@@ -1572,7 +1580,7 @@ handlers! {
             branch!(*target, *arity, *stack_depth);
         } else {
             charge!(*fallthrough_cost);
-            pc += 1;
+            pc = pc.add(1);
         }
     },
     Op::BrTable { targets, default } => {
@@ -1655,18 +1663,18 @@ handlers! {
     // guarantees the function's final `end` leaves exactly them.
     Op::Return | Op::End => return_to_caller!(),
     Op::Nop => {
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- References: 0 is null --
     Op::RefNull(_) => {
         push(&mut sp, 0i64);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::RefIsNull => {
         let reference: i64 = pop(&mut sp);
         push(&mut sp, i32::from(reference == 0));
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::RefFunc { func_idx } => {
         let c = require_ctx!(ctx);
@@ -1675,7 +1683,7 @@ handlers! {
             .get(*func_idx as usize)
             .ok_or(RuntimeError::FunctionIndexOutOfBounds(*func_idx))?;
         push_value(&mut sp, Value::FuncRef(Some(entry.addr)));
-        pc += 1;
+        pc = pc.add(1);
     },
 
     // -- Tables and bulk memory --
@@ -1684,19 +1692,19 @@ handlers! {
         let idx: i32 = pop(&mut sp);
         let value = c.table(*table_idx)?.get(idx as u32)?;
         push_value(&mut sp, value);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableSet { table_idx } => {
         let table = require_ctx!(ctx).table_mut(*table_idx)?;
         let value = pop_value(&mut sp, table.ref_type().into());
         let idx: i32 = pop(&mut sp);
         table.set(idx as u32, Some(value))?;
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableSize { table_idx } => {
         let size = require_ctx!(ctx).table(*table_idx)?.size();
         push(&mut sp, size as i32);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableGrow { table_idx } => {
         let table = require_ctx!(ctx).table_mut(*table_idx)?;
@@ -1704,7 +1712,7 @@ handlers! {
         let init_value = pop_value(&mut sp, table.ref_type().into());
         let result = table.grow(delta as u32, Some(init_value))?;
         push(&mut sp, result as i32);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableFill { table_idx } => {
         let table = require_ctx!(ctx).table_mut(*table_idx)?;
@@ -1712,7 +1720,7 @@ handlers! {
         let value = pop_value(&mut sp, table.ref_type().into());
         let start = pop::<i32>(&mut sp) as u32;
         table.fill(start, count, Some(value))?;
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableCopy { dst_table, src_table } => {
         let c = require_ctx!(ctx);
@@ -1732,7 +1740,7 @@ handlers! {
             let (left, right) = c.resources.tables.split_at_mut(src_addr);
             left[dst_addr].copy_from(dst_idx, &right[0], src_idx, count)?;
         }
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::TableInit { elem_idx, table_idx } => {
         let c = require_ctx!(ctx);
@@ -1757,7 +1765,7 @@ handlers! {
             .get_mut(addr.0)
             .ok_or(RuntimeError::TableIndexOutOfBounds(*table_idx))?;
         table.init(dst_idx, src_segment, src_idx, count)?;
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::ElemDrop { elem_idx } => {
         let c = require_ctx!(ctx);
@@ -1767,7 +1775,7 @@ handlers! {
             .get_mut(*elem_idx as usize)
             .ok_or(RuntimeError::ElementIndexOutOfBounds(*elem_idx))?;
         segment.clear();
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::MemoryInit { data_idx } => {
         let memory = memory!();
@@ -1784,12 +1792,12 @@ handlers! {
             c.data_segments,
             &c.segments.dropped_data,
         )?;
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::DataDrop { data_idx } => {
         let c = require_ctx!(ctx);
         c.segments.dropped_data.insert(*data_idx);
-        pc += 1;
+        pc = pc.add(1);
     },
     Op::Unreachable => {
         return Err(RuntimeError::Trap("unreachable".to_string()).into());
