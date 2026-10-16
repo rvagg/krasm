@@ -290,6 +290,14 @@ struct SuspendedState {
     expected_results: Box<[ValueType]>,
 }
 
+/// Build and box a handler's error out of line, so that nothing the handler
+/// holds stays live across the allocation and its hot path saves no registers.
+#[cold]
+#[inline(never)]
+fn fail(error: impl FnOnce() -> RuntimeError) -> Box<RuntimeError> {
+    Box::new(error())
+}
+
 /// Grow `stack` to at least `len` words, or fail if that passes `max`.
 fn reserve(stack: &mut Vec<Word>, len: usize, max: usize) -> Result<(), RuntimeError> {
     if len > stack.len() {
@@ -784,7 +792,7 @@ macro_rules! handlers {
                             let cost = u64::from($d cost);
                             debug_assert!(cost > 0, "a run holds at least its exit");
                             if *machine.budget < cost {
-                                return Err(RuntimeError::InstructionBudgetExhausted.into());
+                                return Err(fail(|| RuntimeError::InstructionBudgetExhausted));
                             }
                             *machine.budget -= cost;
                         }};
@@ -848,7 +856,7 @@ macro_rules! handlers {
                         () => {
                             match memory {
                                 Some(mut memory) => memory.as_mut(),
-                                None => return Err(RuntimeError::MemoryError("no memory".to_string()).into()),
+                                None => return Err(fail(|| RuntimeError::MemoryError("no memory".to_string()))),
                             }
                         };
                     }
@@ -906,10 +914,10 @@ macro_rules! handlers {
                         ($d local:expr, $d module_idx:expr) => {{
                             let local_idx: usize = $d local;
                             let Some(callee) = machine.funcs.get(local_idx) else {
-                                return Err(RuntimeError::FunctionIndexOutOfBounds($d module_idx).into());
+                                return Err(fail(move || RuntimeError::FunctionIndexOutOfBounds($d module_idx)));
                             };
                             if machine.call_stack.len() >= MAX_CALL_DEPTH {
-                                return Err(RuntimeError::CallStackOverflow.into());
+                                return Err(fail(|| RuntimeError::CallStackOverflow));
                             }
                             machine.call_stack.push(CallFrame {
                                 func_idx: machine.func_idx,

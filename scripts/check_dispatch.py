@@ -14,7 +14,8 @@ import re
 import subprocess
 import sys
 
-HANDLER = "flat_executor::handler_for::{closure"
+# A handler closure itself, not a function instantiated for one, such as `fail`.
+HANDLER = re.compile(r"\S*flat_executor::handler_for::\{closure#\d+\} as ")
 MIN_HANDLERS = 100
 MIN_JUMPING = 0.9
 
@@ -60,7 +61,7 @@ def stray_calls(body):
 
 def check(disassembly):
     """Problems with the handlers in this disassembly, as messages."""
-    handlers = {name: body for name, body in functions(disassembly).items() if HANDLER in name}
+    handlers = {name: body for name, body in functions(disassembly).items() if HANDLER.match(name)}
     if len(handlers) < MIN_HANDLERS:
         return [f"found {len(handlers)} handlers, expected at least {MIN_HANDLERS}: stripped, or renamed?"]
     stray = [

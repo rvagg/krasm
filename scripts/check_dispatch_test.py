@@ -59,6 +59,10 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("{closure#100}", problems[0])
 
+    def test_functions_instantiated_for_a_handler_are_not_handlers(self):
+        failing = "0000000000002000 <krasm::runtime::flat_executor::fail::<krasm::runtime::flat_executor::handler_for::{closure#1}::{closure#0}>>:\n   2000:\tret\n"
+        self.assertEqual(check(disassembly(*[JUMPING] * 100) + failing), [])
+
     def test_too_few_handlers_fail(self):
         self.assertIn("found 99 handlers", check(disassembly(*[JUMPING] * 99))[0])
 
