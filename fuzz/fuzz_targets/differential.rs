@@ -94,11 +94,14 @@ fn same_value(s: &Value, f: &Value) -> bool {
 mod budget {
     use krasm::{EngineKind, RuntimeError, Store, ValidatedModule, Value};
 
-    /// Ops the instance has executed, from its profile.
+    /// Budget the instance has spent: each op's count times its weight.
     pub fn executed(store: &Store, id: usize) -> u64 {
         let instance = store.get_instance(id).expect("instance exists");
         let profile = instance.instruction_profile().expect("flat instances are profiled");
-        profile.functions.iter().flat_map(|f| f.counts).sum()
+        (profile.functions.iter())
+            .flat_map(|f| f.ops.iter().zip(f.counts))
+            .map(|(op, count)| u64::from(op.weight()) * count)
+            .sum()
     }
 
     /// Replays the calls made so far on fresh flat instances, under exact

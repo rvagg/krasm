@@ -178,10 +178,44 @@ fn profile_preserves_float_bits_and_memory_immediates() {
     assert!(structured.get_instance(id).unwrap().instruction_profile().is_none());
 }
 
-/// Ops the instance has executed so far, from its profile.
+#[test]
+fn ops_record_whether_they_exit_their_weight_and_targets() {
+    let mut store = Store::new();
+    let id = instantiate(
+        &mut store,
+        r#"(module
+      (func (export "run") (param i32)
+        (block (block (br_table 1 0 1 (local.get 0))) (nop))
+        (loop (br_if 0 (local.get 0)))))"#,
+        None,
+    );
+    let profile = store.get_instance(id).unwrap().instruction_profile().unwrap();
+    let json = serde_json::to_value(&profile).unwrap();
+    let ops = json["functions"][0]["ops"].as_array().unwrap();
+    let properties = |pc: usize| {
+        (
+            ops[pc]["opcode"].clone(),
+            ops[pc]["exits"].clone(),
+            ops[pc]["targets"].clone(),
+        )
+    };
+    let expected = |opcode: &str, exits: bool, targets: &[u32]| (opcode.into(), exits.into(), targets.into());
+    assert_eq!(properties(0), expected("LocalGet", false, &[]));
+    assert_eq!(properties(1), expected("BrTable", true, &[3, 2, 3]));
+    assert_eq!(properties(2), expected("Nop", false, &[]));
+    assert_eq!(properties(4), expected("BrIf", true, &[3]));
+    assert_eq!(properties(5), expected("End", true, &[]));
+    assert!(ops.iter().all(|op| op["weight"] == 1));
+    assert_eq!(json["op_format_version"], 2);
+}
+
+/// Budget the instance has spent so far: each op's count times its weight.
 fn executed(store: &Store, id: usize) -> u64 {
     let profile = store.get_instance(id).unwrap().instruction_profile().unwrap();
-    profile.functions.iter().flat_map(|f| f.counts).sum()
+    (profile.functions.iter())
+        .flat_map(|f| f.ops.iter().zip(f.counts))
+        .map(|(op, count)| u64::from(op.weight()) * count)
+        .sum()
 }
 
 /// The profile counts the ops a call executes; a budget of exactly that
@@ -315,7 +349,7 @@ fn run_costs_are_not_serialised() {
     let ops = json["functions"][0]["ops"].as_array().unwrap();
     assert_eq!(
         ops[1]["immediates"],
-        serde_json::json!({"target": 4, "arity": 0, "stack_depth": 0})
+        serde_json::json!({"target": {"pc": 4, "arity": 0, "stack_depth": 0}})
     );
     assert_eq!(
         ops[3]["immediates"],

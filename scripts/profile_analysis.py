@@ -5,13 +5,15 @@ import hashlib
 import json
 from pathlib import Path
 
-# Control operations are counted in totals, but excluded from fusion candidates.
-BARRIERS = {"Br", "BrIf", "BrTable", "Call", "CallIndirect", "Return", "End", "Label", "Unreachable"}
+# Calls leave the function, so, like ops that exit a run, they end the
+# sequences mined for fusion. Both are counted in totals.
+CALLS = {"Call", "CallIndirect"}
+BARRIERS = "ops that exit a run, calls, and branch targets"
 LOCAL_OPS = {"LocalGet", "LocalSet", "LocalTee"}
 
 
 def validate_profile(profile):
-    if (profile.get("schema_version"), profile.get("op_format_version"), profile.get("count_semantics")) != (1, 1, "dispatch-attempts"):
+    if (profile.get("schema_version"), profile.get("op_format_version"), profile.get("count_semantics")) != (1, 2, "dispatch-attempts"):
         raise ValueError("unsupported instruction profile schema, Op format or count semantics")
     seen = set()
     for function in profile["functions"]:
@@ -22,29 +24,33 @@ def validate_profile(profile):
         ops, counts = function["ops"], function["counts"]
         if len(ops) != len(counts) or any(type(count) is not int or count < 0 for count in counts):
             raise ValueError("invalid per-PC counts")
-        if any(not isinstance(op.get("opcode"), str) for op in ops):
+        if any(not valid_op(op) for op in ops):
             raise ValueError("invalid Op record")
+
+
+def valid_op(op):
+    targets = op.get("targets")
+    return (isinstance(op.get("opcode"), str) and type(op.get("exits")) is bool
+            and type(op.get("weight")) is int and op["weight"] > 0
+            and isinstance(targets, list) and all(type(pc) is int for pc in targets))
+
+
+def barrier(op):
+    return op["exits"] or op["opcode"] in CALLS
 
 
 def regions(ops):
     """Exclude control operations and split at every possible entry point."""
     leaders = {0, len(ops)}
     for pc, op in enumerate(ops):
-        name, immediate = op["opcode"], op.get("immediates", {})
-        if name in {"Br", "BrIf"}:
-            leaders.add(immediate["target"])
-        elif name == "BrTable":
-            leaders.update(target["pc"] for target in immediate["targets"])
-            leaders.add(immediate["default"]["pc"])
-        elif name == "Label":
-            leaders.add(immediate["end_target"])
-        if name in BARRIERS:
+        leaders.update(op["targets"])
+        if barrier(op):
             leaders.update((pc, pc + 1))
     if any(type(pc) is not int or not 0 <= pc <= len(ops) for pc in leaders):
         raise ValueError("branch target outside function")
     boundaries = sorted(leaders)
     for start, end in zip(boundaries, boundaries[1:]):
-        if start < end and ops[start]["opcode"] not in BARRIERS:
+        if start < end and not barrier(ops[start]):
             yield start, end
 
 
@@ -119,7 +125,7 @@ def aggregate(workloads, top=20):
         "schema_version": 1,
         "method": "per-candidate non-overlapping dispatch reduction; not predicted speedup; candidates cannot be summed",
         "weighting": "equal families, then equal workloads within each family; absent patterns contribute zero",
-        "barriers": sorted(BARRIERS),
+        "barriers": BARRIERS,
         "families": dict(families),
         "workloads": [],
         "aggregate": {},

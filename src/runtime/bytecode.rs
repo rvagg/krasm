@@ -11,9 +11,9 @@
 //!
 //! The instruction budget is charged per run: the ops from where control
 //! lands (a function's first op, a branch target, or the op after a `br_if`
-//! that falls through) to the next `br`, `br_if`, `br_table`, `return`, `end`
-//! or `unreachable`, inclusive. Calls do not end a run. Each run's cost is
-//! its op count, carried by the op or function that enters it.
+//! that falls through) to the next op that [exits](Op::exits), inclusive.
+//! Calls do not end a run. Each run's cost is the sum of its ops'
+//! [weights](Op::weight), carried by the op or function that enters it.
 
 use crate::parser::instruction::MemArg;
 use crate::parser::module::ValueType;
@@ -24,7 +24,8 @@ pub fn value_words(value_type: ValueType) -> u32 {
     if value_type == ValueType::V128 { 2 } else { 1 }
 }
 
-/// Branch target with stack cleanup metadata.
+/// Where a branch lands, the stack cleanup on the way, and the run cost
+/// charged on arrival.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "instruction-profile", derive(serde::Serialize))]
 pub struct BrTarget {
@@ -562,23 +563,14 @@ pub enum Op {
     // word depth to restore to before pushing kept words back.
     // For branches that don't cross block boundaries (e.g. compiler-internal
     // skip-then jumps), arity=0 and the cleanup is a no-op.
-    /// Unconditional jump to `target` (absolute index in bytecode), charging
-    /// `cost` for the run that starts there.
+    /// Unconditional jump to `target`.
     Br {
-        target: u32,
-        arity: u16,
-        stack_depth: u32,
-        #[cfg_attr(feature = "instruction-profile", serde(skip))]
-        cost: u32,
+        target: BrTarget,
     },
-    /// Pop i32; if non-zero, jump to `target` and charge `cost`, otherwise
-    /// continue and charge `fallthrough_cost`.
+    /// Pop i32; if non-zero, jump to `target`, otherwise continue and charge
+    /// `fallthrough_cost`.
     BrIf {
-        target: u32,
-        arity: u16,
-        stack_depth: u32,
-        #[cfg_attr(feature = "instruction-profile", serde(skip))]
-        cost: u32,
+        target: BrTarget,
         #[cfg_attr(feature = "instruction-profile", serde(skip))]
         fallthrough_cost: u32,
     },
@@ -684,6 +676,45 @@ pub struct CompiledFunction {
     pub max_stack_words: u32,
     /// Instruction budget charged on entry: the cost of the run at op 0.
     pub entry_cost: u32,
+}
+
+impl Op {
+    /// Whether the op ends a run: control leaves it by branching, returning
+    /// or trapping, never by falling through unconditionally.
+    pub fn exits(&self) -> bool {
+        matches!(
+            self,
+            Op::Br { .. } | Op::BrIf { .. } | Op::BrTable { .. } | Op::Return | Op::End | Op::Unreachable
+        )
+    }
+
+    /// Instruction budget units the op is charged: the ops of the unfused
+    /// lowering it stands for.
+    pub fn weight(&self) -> u32 {
+        1
+    }
+
+    /// The targets the op can branch to, in order: a `br_table`'s entries,
+    /// then its default.
+    #[cfg(any(test, feature = "instruction-profile"))]
+    pub fn targets(&self) -> impl Iterator<Item = &BrTarget> {
+        let (entries, last): (&[BrTarget], _) = match self {
+            Op::Br { target } | Op::BrIf { target, .. } => (&[], Some(target)),
+            Op::BrTable { targets, default } => (targets, Some(default)),
+            _ => (&[], None),
+        };
+        entries.iter().chain(last)
+    }
+
+    /// [`Op::targets`], to fill in.
+    pub fn targets_mut(&mut self) -> impl Iterator<Item = &mut BrTarget> {
+        let (entries, last): (&mut [BrTarget], _) = match self {
+            Op::Br { target } | Op::BrIf { target, .. } => (&mut [], Some(target)),
+            Op::BrTable { targets, default } => (targets, Some(default)),
+            _ => (&mut [], None),
+        };
+        entries.iter_mut().chain(last)
+    }
 }
 
 impl CompiledFunction {
@@ -1174,24 +1205,16 @@ impl fmt::Display for Op {
             Op::MemoryGrow => write!(f, "memory.grow"),
             Op::MemoryCopy => write!(f, "memory.copy"),
             Op::MemoryFill => write!(f, "memory.fill"),
-            Op::Br {
-                target,
-                arity,
-                stack_depth,
-                cost,
-            } => {
-                write!(f, "br -> {target} [{cost}]")?;
-                write_keep(f, *arity, *stack_depth)
+            Op::Br { target } => {
+                write!(f, "br -> {} [{}]", target.pc, target.cost)?;
+                write_keep(f, target.arity, target.stack_depth)
             }
             Op::BrIf {
                 target,
-                arity,
-                stack_depth,
-                cost,
                 fallthrough_cost,
             } => {
-                write!(f, "br_if -> {target} [{cost}, else {fallthrough_cost}]")?;
-                write_keep(f, *arity, *stack_depth)
+                write!(f, "br_if -> {} [{}, else {fallthrough_cost}]", target.pc, target.cost)?;
+                write_keep(f, target.arity, target.stack_depth)
             }
             Op::BrTable { targets, default } => {
                 write!(f, "br_table [")?;

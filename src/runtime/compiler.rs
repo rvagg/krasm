@@ -42,12 +42,11 @@ mod lower;
 ///
 /// Loop labels don't need fixups because their target (the loop start) is
 /// already known when the branch is emitted.
-enum Fixup {
-    /// A Br or BrIf op at this position needs its target patched.
-    Branch(usize),
-    /// A BrTable op at `op_pos` needs one of its entries patched.
-    /// `Some(i)` patches `targets[i].pc`, `None` patches `default.pc`.
-    TableEntry { op_pos: usize, index: Option<usize> },
+struct Fixup {
+    /// Position of the branch op.
+    op: usize,
+    /// Index into the op's [`Op::targets`].
+    entry: usize,
 }
 
 /// A label on the compile-time stack: where its branches go, the operand
@@ -150,7 +149,7 @@ pub fn compile<'a>(
     if ctx.reachable {
         ctx.check_top(0, &ftype.return_types, "function end")?;
     }
-    ctx.close_label();
+    ctx.close_label()?;
     ctx.ops.push(Op::End);
     let entry_cost = meter(&mut ctx.ops)?;
 
@@ -180,15 +179,14 @@ fn meter(ops: &mut [Op]) -> Result<u32> {
     // ahead of a branch, so only loop back edges wait for a second look.
     let mut run_costs = vec![0u32; ops.len()];
     let mut back_edges = Vec::new();
-    let mut next = 0;
+    let mut next = 0u32;
     for (pc, op) in ops.iter_mut().enumerate().rev() {
-        let exit = matches!(
-            op,
-            Op::Br { .. } | Op::BrIf { .. } | Op::BrTable { .. } | Op::Return | Op::End | Op::Unreachable
-        );
-        next = if exit { 1 } else { next + 1 };
+        // Only an op that exits can branch.
+        let exits = op.exits();
+        let rest = if exits { 0 } else { next };
+        next = (rest.checked_add(op.weight())).ok_or_else(|| invalid(format!("run at {pc} costs too much")))?;
         run_costs[pc] = next;
-        if !fill_landing_costs(op, pc, &run_costs)? {
+        if exits && !fill_landing_costs(op, pc, &run_costs)? {
             back_edges.push(pc);
         }
     }
@@ -203,31 +201,18 @@ fn meter(ops: &mut [Op]) -> Result<u32> {
 /// Copy into the branch op at `pc` the cost of each run it can land in, and
 /// report whether `run_costs` knew them all.
 fn fill_landing_costs(op: &mut Op, pc: usize, run_costs: &[u32]) -> Result<bool> {
-    let mut known = true;
-    let mut fill = |slot: &mut u32, target: u32| -> Result<()> {
-        let cost = (run_costs.get(target as usize).copied())
-            .ok_or_else(|| invalid(format!("branch target {target} is outside the function")))?;
-        known &= cost != 0;
-        *slot = cost;
-        Ok(())
+    let cost_at = |target: u32| {
+        (run_costs.get(target as usize).copied())
+            .ok_or_else(|| invalid(format!("branch target {target} is outside the function")))
     };
-    match op {
-        Op::Br { target, cost, .. } => fill(cost, *target)?,
-        Op::BrIf {
-            target,
-            cost,
-            fallthrough_cost,
-            ..
-        } => {
-            fill(cost, *target)?;
-            fill(fallthrough_cost, pc as u32 + 1)?;
-        }
-        Op::BrTable { targets, default } => {
-            for target in targets.iter_mut().chain([default]) {
-                fill(&mut target.cost, target.pc)?;
-            }
-        }
-        _ => {}
+    let mut known = true;
+    for target in op.targets_mut() {
+        target.cost = cost_at(target.pc)?;
+        known &= target.cost != 0;
+    }
+    if let Op::BrIf { fallthrough_cost, .. } = op {
+        *fallthrough_cost = cost_at(pc as u32 + 1)?;
+        known &= *fallthrough_cost != 0;
     }
     Ok(known)
 }
@@ -413,22 +398,12 @@ impl<'a> CompileContext<'a> {
         pos
     }
 
-    /// Patch the target pc of a Br or BrIf op, or of one br_table entry.
-    fn apply_fixup(&mut self, fixup: &Fixup, target: u32) {
-        match fixup {
-            Fixup::Branch(pos) => match &mut self.ops[*pos] {
-                Op::Br { target: t, .. } | Op::BrIf { target: t, .. } => *t = target,
-                _ => {}
-            },
-            Fixup::TableEntry { op_pos, index } => {
-                if let Op::BrTable { targets, default } = &mut self.ops[*op_pos] {
-                    match index {
-                        Some(i) => targets[*i].pc = target,
-                        None => default.pc = target,
-                    }
-                }
-            }
-        }
+    /// Point the branch target `fixup` names at `target`.
+    fn apply_fixup(&mut self, fixup: &Fixup, target: u32) -> Result {
+        let entry = (self.ops.get_mut(fixup.op)).and_then(|op| op.targets_mut().nth(fixup.entry));
+        let entry = entry.ok_or_else(|| invalid(format!("op {} has no branch target {}", fixup.op, fixup.entry)))?;
+        entry.pc = target;
+        Ok(())
     }
 
     /// Push a label, checking its arity fits in a branch op.
@@ -445,7 +420,7 @@ impl<'a> CompileContext<'a> {
     }
 
     /// Pop the innermost label, pointing its forward branches here.
-    fn close_label(&mut self) {
+    fn close_label(&mut self) -> Result {
         let end = self.pos();
         if let Some(Label {
             target: LabelTarget::End(fixups),
@@ -453,9 +428,10 @@ impl<'a> CompileContext<'a> {
         }) = self.labels.pop()
         {
             for fixup in &fixups {
-                self.apply_fixup(fixup, end);
+                self.apply_fixup(fixup, end)?;
             }
         }
+        Ok(())
     }
 
     /// Continue after a block: reachable, with `types` above `depth`.
@@ -493,7 +469,7 @@ impl<'a> CompileContext<'a> {
                 if self.reachable {
                     self.check_top(sd, results, "block end")?;
                 }
-                self.close_label();
+                self.close_label()?;
                 // Reached by fall-through or by a branch to the label: either
                 // way the block's results sit above sd.
                 self.end_block(sd, results);
@@ -529,13 +505,18 @@ impl<'a> CompileContext<'a> {
 
                 // Skip the then-body when the condition is 0, keeping the params.
                 self.emit(Op::I32Eqz);
-                let skip_then = self.emit(Op::BrIf {
-                    target: 0,
-                    arity: 0,
-                    stack_depth: self.words,
-                    cost: 0,
-                    fallthrough_cost: 0,
-                });
+                let skip_then = Fixup {
+                    op: self.emit(Op::BrIf {
+                        target: BrTarget {
+                            pc: 0,
+                            arity: 0,
+                            stack_depth: self.words,
+                            cost: 0,
+                        },
+                        fallthrough_cost: 0,
+                    }),
+                    entry: 0,
+                };
                 self.open_label(LabelTarget::End(Vec::new()), sd, results)?;
                 self.emit_body(then_branch)?;
                 if self.reachable {
@@ -546,22 +527,27 @@ impl<'a> CompileContext<'a> {
                     // The then-body jumps past the else, carrying the results.
                     let label = &self.labels[self.labels.len() - 1];
                     let skip_else = self.emit(Op::Br {
-                        target: 0,
-                        arity: label.word_arity,
-                        stack_depth: label.word_depth,
-                        cost: 0,
+                        target: BrTarget {
+                            pc: 0,
+                            arity: label.word_arity,
+                            stack_depth: label.word_depth,
+                            cost: 0,
+                        },
                     });
                     if let Some(Label {
                         target: LabelTarget::End(fixups),
                         ..
                     }) = self.labels.last_mut()
                     {
-                        fixups.push(Fixup::Branch(skip_else));
+                        fixups.push(Fixup {
+                            op: skip_else,
+                            entry: 0,
+                        });
                     }
                     // The skip enters the else with the params on the stack,
                     // however the then-body ended.
                     let else_start = self.pos();
-                    self.apply_fixup(&Fixup::Branch(skip_then), else_start);
+                    self.apply_fixup(&skip_then, else_start)?;
                     self.end_block(sd, params);
                     self.emit_body(else_body)?;
                     if self.reachable {
@@ -574,9 +560,9 @@ impl<'a> CompileContext<'a> {
                         return Err(invalid(format!("if without else turns {params:?} into {results:?}")));
                     }
                     let end = self.pos();
-                    self.apply_fixup(&Fixup::Branch(skip_then), end);
+                    self.apply_fixup(&skip_then, end)?;
                 }
-                self.close_label();
+                self.close_label()?;
                 self.end_block(sd, results);
             }
         }
@@ -683,39 +669,45 @@ impl<'a> CompileContext<'a> {
         if self.label_index(depth)? == 0 {
             return self.emit_return();
         }
-        let BrTarget {
-            pc, arity, stack_depth, ..
-        } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
-        self.emit(Op::Br {
-            target: pc,
-            arity,
-            stack_depth,
-            cost: 0,
-        });
+        let target = self.branch_target(
+            depth,
+            Fixup {
+                op: self.ops.len(),
+                entry: 0,
+            },
+        )?;
+        self.emit(Op::Br { target });
         self.reachable = false;
         Ok(())
     }
 
     fn emit_br_if(&mut self, depth: u32) -> Result {
-        let BrTarget {
-            pc, arity, stack_depth, ..
-        } = self.branch_target(depth, Fixup::Branch(self.ops.len()))?;
+        let target = self.branch_target(
+            depth,
+            Fixup {
+                op: self.ops.len(),
+                entry: 0,
+            },
+        )?;
         self.emit(Op::BrIf {
-            target: pc,
-            arity,
-            stack_depth,
-            cost: 0,
+            target,
             fallthrough_cost: 0,
         });
         Ok(())
     }
 
     fn emit_br_table(&mut self, labels: &[u32], default: u32) -> Result {
-        let op_pos = self.ops.len();
+        let op = self.ops.len();
         let targets = (labels.iter().enumerate())
-            .map(|(i, depth)| self.branch_target(*depth, Fixup::TableEntry { op_pos, index: Some(i) }))
+            .map(|(entry, depth)| self.branch_target(*depth, Fixup { op, entry }))
             .collect::<Result<_>>()?;
-        let default = self.branch_target(default, Fixup::TableEntry { op_pos, index: None })?;
+        let default = self.branch_target(
+            default,
+            Fixup {
+                op,
+                entry: labels.len(),
+            },
+        )?;
         self.emit(Op::BrTable { targets, default });
         self.reachable = false;
         Ok(())

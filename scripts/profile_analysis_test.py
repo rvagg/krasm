@@ -4,15 +4,18 @@ import unittest
 from profile_analysis import aggregate, mine, pattern, regions
 
 
-def op(name, immediate=None):
-    value = {"opcode": name}
+EXITS = {"Br", "BrIf", "BrTable", "Return", "End", "Unreachable"}
+
+
+def op(name, immediate=None, targets=()):
+    value = {"opcode": name, "exits": name in EXITS, "weight": 1, "targets": list(targets)}
     if immediate is not None:
         value["immediates"] = immediate
     return value
 
 
 def profile(ops, counts):
-    return {"schema_version": 1, "op_format_version": 1, "count_semantics": "dispatch-attempts",
+    return {"schema_version": 1, "op_format_version": 2, "count_semantics": "dispatch-attempts",
             "functions": [{"function_index": 0, "ops": ops, "counts": counts}]}
 
 
@@ -26,13 +29,12 @@ class SequenceAnalysisTests(unittest.TestCase):
         self.assertNotIn(("I32Const", "I32Const"), patterns)
 
     def test_branch_entries_and_calls_break_sequences(self):
-        ops = [op("I32Const", 0), op("BrIf", {"target": 4}), op("I32Const", 1), op("Drop"),
+        ops = [op("I32Const", 0), op("BrIf", targets=[4]), op("I32Const", 1), op("Drop"),
                op("I32Const", 2), op("Drop"), op("Call", {"func_idx": 9}), op("I32Const", 3), op("Drop"), op("End")]
         _, patterns = mine(profile(ops, [100, 100, 40, 40, 100, 100, 100, 100, 100, 100]), False)
         self.assertEqual(set(patterns), {("I32Const", "Drop")})
         self.assertEqual(patterns[("I32Const", "Drop")]["executions"], 240)
-        self.assertEqual(list(regions([op("BrTable", {"targets": [{"pc": 2}], "default": {"pc": 4}})] + [op("Nop")] * 5)), [(1, 2), (2, 4), (4, 6)])
-        self.assertEqual(list(regions([op("Label", {"end_target": 3})] + [op("Nop")] * 4)), [(1, 3), (3, 5)])
+        self.assertEqual(list(regions([op("BrTable", targets=[2, 4])] + [op("Nop")] * 5)), [(1, 2), (2, 4), (4, 6)])
 
     def test_trapped_prefix_does_not_count_unreached_suffix(self):
         ops = [op("I32Const", 10), op("LocalGet", {"index": 0}), op("I32DivU"), op("I32Const", 1), op("I32Add")]
@@ -74,7 +76,11 @@ class SequenceAnalysisTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             aggregate([a, a])
         invalid = copy.deepcopy(a)
-        invalid["profile"]["op_format_version"] = 2
+        invalid["profile"]["op_format_version"] = 1
+        with self.assertRaises(ValueError):
+            aggregate([invalid])
+        invalid = copy.deepcopy(a)
+        del invalid["profile"]["functions"][0]["ops"][0]["exits"]
         with self.assertRaises(ValueError):
             aggregate([invalid])
 

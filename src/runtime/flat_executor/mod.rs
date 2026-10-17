@@ -1566,26 +1566,18 @@ handlers! {
     },
 
     // -- Control flow --
-    Op::Br {
-        target,
-        arity,
-        stack_depth,
-        cost,
-    } => {
-        charge!(*cost);
-        branch!(*target, *arity, *stack_depth);
+    Op::Br { target } => {
+        charge!(target.cost);
+        branch!(target.pc, target.arity, target.stack_depth);
     },
     Op::BrIf {
         target,
-        arity,
-        stack_depth,
-        cost,
         fallthrough_cost,
     } => {
         let condition: i32 = pop(&mut sp);
         if condition != 0 {
-            charge!(*cost);
-            branch!(*target, *arity, *stack_depth);
+            charge!(target.cost);
+            branch!(target.pc, target.arity, target.stack_depth);
         } else {
             charge!(*fallthrough_cost);
             pc = pc.add(1);

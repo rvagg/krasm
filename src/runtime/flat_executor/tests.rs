@@ -1047,16 +1047,14 @@ fn compiler_block_stack_depth() {
     let funcs = compile_wat(source);
     let compiled = &funcs[0];
 
-    // Find the Br op and check its metadata
-    let br = compiled
-        .ops()
-        .find(|op| matches!(op, Op::Br { arity, .. } if *arity > 0))
+    let target = (compiled.ops())
+        .filter(|op| matches!(op, Op::Br { .. }))
+        .flat_map(Op::targets)
+        .find(|target| target.arity > 0)
         .expect("should have a Br with arity > 0");
-    if let Op::Br { arity, stack_depth, .. } = br {
-        assert_eq!(*arity, 1, "block result arity");
-        // After i32.const 0 + drop, stack depth is 0 at block entry
-        assert_eq!(*stack_depth, 0, "stack depth at block entry");
-    }
+    assert_eq!(target.arity, 1, "block result arity");
+    // After i32.const 0 + drop, stack depth is 0 at block entry
+    assert_eq!(target.stack_depth, 0, "stack depth at block entry");
 }
 
 #[test]

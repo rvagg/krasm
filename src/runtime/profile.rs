@@ -3,8 +3,10 @@
 //! Counts are dispatch attempts, not timings. A trapping operation is counted;
 //! the operations of a run rejected by the instruction budget are not.
 //! Floating constants serialise as their unsigned IEEE bit patterns,
-//! preserving NaN payloads and signed zero. Bump `op_format_version` when the
-//! serialised Op contract changes.
+//! preserving NaN payloads and signed zero. Each op also records whether it
+//! [exits](Op::exits) a run, its [weight](Op::weight) and the pcs of its
+//! [targets](Op::targets), so tools need not know which opcodes branch. Bump
+//! `op_format_version` when the serialised Op contract changes.
 
 use super::bytecode::{CompiledFunction, Op};
 use crate::parser::module::{ExportIndex, Module, Positional};
@@ -39,6 +41,7 @@ pub struct FunctionProfile<'a> {
     pub function_index: usize,
     pub exports: Vec<&'a str>,
     pub is_start: bool,
+    #[serde(serialize_with = "ops_with_properties")]
     pub ops: Vec<&'a Op>,
     /// Indexed by PC in `ops`; cold instructions retain zero counts.
     pub counts: &'a [u64],
@@ -72,11 +75,30 @@ impl<'a> InstructionProfile<'a> {
             .collect();
         Self {
             schema_version: 1,
-            op_format_version: 1,
+            op_format_version: 2,
             count_semantics: "dispatch-attempts",
             functions,
         }
     }
+}
+
+/// An op as serialised: its opcode and immediates, then its properties.
+#[derive(Serialize)]
+struct ProfiledOp<'a> {
+    #[serde(flatten)]
+    op: &'a Op,
+    exits: bool,
+    weight: u32,
+    targets: Vec<u32>,
+}
+
+fn ops_with_properties<S: Serializer>(ops: &[&Op], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(ops.iter().map(|op| ProfiledOp {
+        op,
+        exits: op.exits(),
+        weight: op.weight(),
+        targets: op.targets().map(|target| target.pc).collect(),
+    }))
 }
 
 pub(crate) fn f32_bits<S: Serializer>(value: &f32, serializer: S) -> Result<S::Ok, S::Error> {
