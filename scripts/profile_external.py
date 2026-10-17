@@ -20,7 +20,7 @@ import time
 
 from profile_counters import base_event, orders, parse_perf_csv
 
-EVENTS = ("instructions:u", "cycles:u")
+EVENTS = ("instructions:u", "cycles:u", "branches:u", "branch-misses:u")
 
 
 def runtime_commands(krasm, manifest, root):
@@ -112,12 +112,13 @@ def external(krasm, manifest_path, workloads, runs, output, cpu, root, digest, v
 def print_workload(name, stats):
     krasm = stats["krasm"]["wall_ms"]["median"]
     print(f"\n{name}")
-    print(f"  {'runtime':13} {'wall ms (median, min-max)':>28} {'cycles':>9} {'instructions':>15}  krasm/runtime")
+    print(f"  {'runtime':13} {'wall ms (median, min-max)':>28} {'cycles':>9} {'instructions':>15} {'branch misses':>14}  krasm/runtime")
     for label, stat in stats.items():
         wall = stat["wall_ms"]
         span = f"{wall['median']:,.1f} ({wall['min']:,.1f}-{wall['max']:,.1f})"
         print(f"  {label:13} {span:>28} {stat['cycles:u']['median'] / 1e6:8,.0f}M "
-              f"{stat['instructions:u']['median']:15,.0f}  {krasm / wall['median']:8.2f}x")
+              f"{stat['instructions:u']['median']:15,.0f} {stat['branch-misses:u']['median']:14,.0f}  "
+              f"{krasm / wall['median']:8.2f}x")
 
 
 def print_summary(report):
