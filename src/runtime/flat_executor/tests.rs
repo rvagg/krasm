@@ -1083,6 +1083,41 @@ fn simd_bitselect_preserves_outer_stack_for_branch() {
     assert_eq!(result, vec![Value::I32(99)]);
 }
 
+#[test]
+fn branches_keep_their_results_at_every_arity() {
+    // Each arity class has its own handler. The word below the results is
+    // discarded, so every copy overlaps its source.
+    let v128 = |bytes: u8| Value::V128([bytes; 16]);
+    let cases = [
+        ("", "", vec![]),
+        ("i32", "(i32.const 1)", vec![Value::I32(1)]),
+        (
+            "i64 i32",
+            "(i64.const 2) (i32.const 3)",
+            vec![Value::I64(2), Value::I32(3)],
+        ),
+        (
+            "v128",
+            "(v128.const i8x16 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4)",
+            vec![v128(4)],
+        ),
+        (
+            "i32 v128",
+            "(i32.const 5) (v128.const i8x16 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6)",
+            vec![Value::I32(5), v128(6)],
+        ),
+    ];
+    for (results, values, expected) in cases {
+        for branch in ["(br 0)", "(i32.const 1) (br_if 0) (unreachable)"] {
+            let source = format!(
+                "(module (func (result {results})
+                    (block (result {results}) (i32.const 99) {values} {branch})))"
+            );
+            assert_eq!(compile_and_run(&source, &[]), expected, "{results} by {branch}");
+        }
+    }
+}
+
 // ================================================================
 // Function call tests
 // ================================================================

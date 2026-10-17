@@ -139,8 +139,10 @@ CommP benchmark input is `benches/commp_bench_500k.bin`; expected hash:
 `c1bb8f1985dbf4bf34d06c7190d10a916d228dccd668ba87a10cb1cf0cf3b523`.
 
 ## Performance Measurement
-- Instructions retired decide mechanical changes; cycles and wall time vary 10-25% with
-  code placement, so compare them only across layout groups, never single builds.
+- Instructions retired decide changes that leave the executed handler set unchanged; changes
+  that split, add or reselect handlers are judged on cycles and branch misses.
+- Cycles and wall time vary 10-25% with code placement, so compare them only across layout
+  groups, never single builds.
 - `python3 scripts/profile.py compare --cpu 4 --arm a=BIN_OR_DIR --arm b=...` (perf counters).
 - `python3 scripts/profile.py build --seeds 5 [--rev REV]` builds seeded layouts for `compare`.
 - Optimised x86-64 builds without debug assertions dispatch by tail call; `KRASM_TRAMPOLINE=1`
