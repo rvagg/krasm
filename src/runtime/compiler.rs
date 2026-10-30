@@ -27,27 +27,12 @@ use crate::parser::instruction::signature::{Signature, context_signature, fixed_
 use crate::parser::instruction::{BlockType, Instruction, InstructionKind};
 use crate::parser::module::{FunctionType, Locals, Module, ValueType};
 use crate::parser::structured::{StructuredFunction, StructuredInstruction};
+use emit::{Emitter, Fixup};
 use lower::lower;
 use std::fmt;
 
+mod emit;
 mod lower;
-
-/// A forward branch whose target is not yet known at the time of emission.
-///
-/// When the compiler emits a branch into a block, the block's end position
-/// hasn't been determined yet. The branch is emitted with `target: 0` as a
-/// placeholder, and a Fixup is recorded in the block's label. When the block
-/// ends and we know the target position, all accumulated fixups are applied
-/// to write the real target into the emitted ops.
-///
-/// Loop labels don't need fixups because their target (the loop start) is
-/// already known when the branch is emitted.
-struct Fixup {
-    /// Position of the branch op.
-    op: usize,
-    /// Index into the op's [`Op::targets`].
-    entry: usize,
-}
 
 /// A label on the compile-time stack: where its branches go, the operand
 /// depth they unwind to, and the types they carry (a block's results, or a
@@ -131,7 +116,7 @@ pub fn compile<'a>(
         })
         .collect();
     let mut ctx = CompileContext {
-        ops: Vec::new(),
+        emitter: Emitter::default(),
         labels: Vec::new(),
         stack: Vec::new(),
         words: 0,
@@ -150,11 +135,11 @@ pub fn compile<'a>(
         ctx.check_top(0, &ftype.return_types, "function end")?;
     }
     ctx.close_label()?;
-    ctx.ops.push(Op::End);
-    let entry_cost = meter(&mut ctx.ops)?;
+    ctx.op(Op::End);
+    let (ops, entry_cost) = ctx.emitter.finish()?;
 
     Ok(CompiledFunction {
-        code: super::flat_executor::thread(ctx.ops),
+        code: super::flat_executor::thread(ops),
         result_types: ftype.return_types.clone().into_boxed_slice(),
         param_words: words_of(&ftype.parameters),
         local_words: words_of(&ctx.locals),
@@ -164,61 +149,8 @@ pub fn compile<'a>(
     })
 }
 
-/// Fill in each branch's run costs (see [`super::bytecode`]) and return the
-/// cost of the run at op 0.
-///
-/// Every op that follows an exit is either a branch target or never runs, and
-/// the ops after a call belong to the caller's run, so charging runs where
-/// control lands pays for each op executed exactly once.
-fn meter(ops: &mut [Op]) -> Result<u32> {
-    if u32::try_from(ops.len()).is_err() {
-        return Err(invalid(format!("{} ops exceed the supported function size", ops.len())));
-    }
-    // Ops from each position to the next exit, inclusive, and zero until
-    // known. The final `End` is an exit. Filling backwards knows every run
-    // ahead of a branch, so only loop back edges wait for a second look.
-    let mut run_costs = vec![0u32; ops.len()];
-    let mut back_edges = Vec::new();
-    let mut next = 0u32;
-    for (pc, op) in ops.iter_mut().enumerate().rev() {
-        // Only an op that exits can branch.
-        let exits = op.exits();
-        let rest = if exits { 0 } else { next };
-        next = (rest.checked_add(op.weight())).ok_or_else(|| invalid(format!("run at {pc} costs too much")))?;
-        run_costs[pc] = next;
-        if exits && !fill_landing_costs(op, pc, &run_costs)? {
-            back_edges.push(pc);
-        }
-    }
-    for pc in back_edges {
-        if !fill_landing_costs(&mut ops[pc], pc, &run_costs)? {
-            return Err(invalid(format!("branch at {pc} lands in a run of no ops")));
-        }
-    }
-    (run_costs.first().copied()).ok_or_else(|| invalid("function has no ops"))
-}
-
-/// Copy into the branch op at `pc` the cost of each run it can land in, and
-/// report whether `run_costs` knew them all.
-fn fill_landing_costs(op: &mut Op, pc: usize, run_costs: &[u32]) -> Result<bool> {
-    let cost_at = |target: u32| {
-        (run_costs.get(target as usize).copied())
-            .ok_or_else(|| invalid(format!("branch target {target} is outside the function")))
-    };
-    let mut known = true;
-    for target in op.targets_mut() {
-        target.cost = cost_at(target.pc)?;
-        known &= target.cost != 0;
-    }
-    if let Op::BrIf { fallthrough_cost, .. } = op {
-        *fallthrough_cost = cost_at(pc as u32 + 1)?;
-        known &= *fallthrough_cost != 0;
-    }
-    Ok(known)
-}
-
 struct CompileContext<'a> {
-    ops: Vec<Op>,
+    emitter: Emitter,
     /// Compile-time label stack. Innermost label is last.
     labels: Vec<Label<'a>>,
     /// Types of the operand stack's values, top last. Its length is the depth.
@@ -380,30 +312,11 @@ impl<'a> CompileContext<'a> {
         (self.labels.len().checked_sub(1 + depth as usize)).ok_or_else(|| invalid(format!("unknown label {depth}")))
     }
 
-    /// Current emit position (index of the next op to be pushed).
-    fn pos(&self) -> u32 {
-        self.ops.len() as u32
-    }
-
-    /// Emit an op; the one-line arm form for mechanical 1:1 instruction mappings.
+    /// Emit an op; the one-line arm form for mechanical 1:1 instruction
+    /// mappings. Operand types follow the source instruction
+    /// (`apply_types`), not the ops emitted for it.
     fn op(&mut self, op: Op) {
-        self.emit(op);
-    }
-
-    /// Emit an op and return its position. Operand types follow the source
-    /// instruction (`apply_types`), not the ops emitted for it.
-    fn emit(&mut self, op: Op) -> usize {
-        let pos = self.ops.len();
-        self.ops.push(op);
-        pos
-    }
-
-    /// Point the branch target `fixup` names at `target`.
-    fn apply_fixup(&mut self, fixup: &Fixup, target: u32) -> Result {
-        let entry = (self.ops.get_mut(fixup.op)).and_then(|op| op.targets_mut().nth(fixup.entry));
-        let entry = entry.ok_or_else(|| invalid(format!("op {} has no branch target {}", fixup.op, fixup.entry)))?;
-        entry.pc = target;
-        Ok(())
+        self.emitter.emit(op);
     }
 
     /// Push a label, checking its arity fits in a branch op.
@@ -421,14 +334,14 @@ impl<'a> CompileContext<'a> {
 
     /// Pop the innermost label, pointing its forward branches here.
     fn close_label(&mut self) -> Result {
-        let end = self.pos();
+        let end = self.emitter.pos();
         if let Some(Label {
             target: LabelTarget::End(fixups),
             ..
         }) = self.labels.pop()
         {
             for fixup in &fixups {
-                self.apply_fixup(fixup, end)?;
+                self.emitter.patch(fixup, end)?;
             }
         }
         Ok(())
@@ -481,7 +394,7 @@ impl<'a> CompileContext<'a> {
                 self.check_top(sd, params, "loop entry")?;
 
                 // Branches restart the loop, carrying its params.
-                self.open_label(LabelTarget::Start(self.pos()), sd, params)?;
+                self.open_label(LabelTarget::Start(self.emitter.pos()), sd, params)?;
                 self.emit_body(body)?;
                 if self.reachable {
                     self.check_top(sd, results, "loop end")?;
@@ -504,9 +417,9 @@ impl<'a> CompileContext<'a> {
                 self.check_top(sd, params, "if entry")?;
 
                 // Skip the then-body when the condition is 0, keeping the params.
-                self.emit(Op::I32Eqz);
+                self.op(Op::I32Eqz);
                 let skip_then = Fixup {
-                    op: self.emit(Op::BrIf {
+                    op: self.emitter.emit(Op::BrIf {
                         target: BrTarget {
                             pc: 0,
                             arity: 0,
@@ -525,29 +438,12 @@ impl<'a> CompileContext<'a> {
 
                 if let Some(else_body) = else_branch {
                     // The then-body jumps past the else, carrying the results.
-                    let label = &self.labels[self.labels.len() - 1];
-                    let skip_else = self.emit(Op::Br {
-                        target: BrTarget {
-                            pc: 0,
-                            arity: label.word_arity,
-                            stack_depth: label.word_depth,
-                            cost: 0,
-                        },
-                    });
-                    if let Some(Label {
-                        target: LabelTarget::End(fixups),
-                        ..
-                    }) = self.labels.last_mut()
-                    {
-                        fixups.push(Fixup {
-                            op: skip_else,
-                            entry: 0,
-                        });
+                    if self.reachable {
+                        self.emit_br(0)?;
                     }
                     // The skip enters the else with the params on the stack,
                     // however the then-body ended.
-                    let else_start = self.pos();
-                    self.apply_fixup(&skip_then, else_start)?;
+                    self.emitter.patch(&skip_then, self.emitter.pos())?;
                     self.end_block(sd, params);
                     self.emit_body(else_body)?;
                     if self.reachable {
@@ -559,8 +455,7 @@ impl<'a> CompileContext<'a> {
                     if params != results {
                         return Err(invalid(format!("if without else turns {params:?} into {results:?}")));
                     }
-                    let end = self.pos();
-                    self.apply_fixup(&skip_then, end)?;
+                    self.emitter.patch(&skip_then, self.emitter.pos())?;
                 }
                 self.close_label()?;
                 self.end_block(sd, results);
@@ -619,31 +514,34 @@ impl<'a> CompileContext<'a> {
         Ok(())
     }
 
-    /// Resolve a branch `depth` labels out: check the operands it carries,
-    /// record `fixup` if its target is still unknown, and return the target.
-    fn branch_target(&mut self, depth: u32, fixup: Fixup) -> Result<BrTarget> {
-        let index = self.label_index(depth)?;
-        let Label {
-            stack_depth,
-            types,
-            word_depth,
-            word_arity,
-            ..
-        } = self.labels[index];
-        self.check_branch(stack_depth, types)?;
-        let pc = match &mut self.labels[index].target {
-            LabelTarget::Start(start) => *start,
-            LabelTarget::End(fixups) => {
-                fixups.push(fixup);
-                0
-            }
+    /// The target of a branch `depth` labels out, after checking the operands
+    /// it carries. A block end is not yet known; [`Self::defer_forward`]
+    /// records where to patch it once the branch is emitted.
+    fn branch_target(&self, depth: u32) -> Result<BrTarget> {
+        let label = &self.labels[self.label_index(depth)?];
+        self.check_branch(label.stack_depth, label.types)?;
+        let pc = match label.target {
+            LabelTarget::Start(start) => start,
+            LabelTarget::End(_) => 0,
         };
         Ok(BrTarget {
             pc,
-            arity: word_arity,
-            stack_depth: word_depth,
+            arity: label.word_arity,
+            stack_depth: label.word_depth,
             cost: 0,
         })
+    }
+
+    /// Record a fixup for each target of the op at `op` that lands on a block
+    /// end, given the label depth of each target in [`Op::targets`] order.
+    fn defer_forward(&mut self, op: usize, depths: impl IntoIterator<Item = u32>) -> Result {
+        for (entry, depth) in depths.into_iter().enumerate() {
+            let index = self.label_index(depth)?;
+            if let LabelTarget::End(fixups) = &mut self.labels[index].target {
+                fixups.push(Fixup { op, entry });
+            }
+        }
+        Ok(())
     }
 
     /// Check that a branch's operands are on top, above the depth it unwinds to.
@@ -660,7 +558,7 @@ impl<'a> CompileContext<'a> {
     /// `return`, or a `br` to the function body: leave with the results on top.
     fn emit_return(&mut self) -> Result {
         self.check_branch(0, self.labels[0].types)?;
-        self.emit(Op::Return);
+        self.op(Op::Return);
         self.reachable = false;
         Ok(())
     }
@@ -669,48 +567,32 @@ impl<'a> CompileContext<'a> {
         if self.label_index(depth)? == 0 {
             return self.emit_return();
         }
-        let target = self.branch_target(
-            depth,
-            Fixup {
-                op: self.ops.len(),
-                entry: 0,
-            },
-        )?;
-        self.emit(Op::Br { target });
+        let target = self.branch_target(depth)?;
+        let op = self.emitter.emit(Op::Br { target });
         self.reachable = false;
-        Ok(())
+        self.defer_forward(op, [depth])
     }
 
     fn emit_br_if(&mut self, depth: u32) -> Result {
-        let target = self.branch_target(
-            depth,
-            Fixup {
-                op: self.ops.len(),
-                entry: 0,
-            },
-        )?;
-        self.emit(Op::BrIf {
+        let target = self.branch_target(depth)?;
+        let op = self.emitter.emit(Op::BrIf {
             target,
             fallthrough_cost: 0,
         });
-        Ok(())
+        self.defer_forward(op, [depth])
     }
 
     fn emit_br_table(&mut self, labels: &[u32], default: u32) -> Result {
-        let op = self.ops.len();
-        let targets = (labels.iter().enumerate())
-            .map(|(entry, depth)| self.branch_target(*depth, Fixup { op, entry }))
+        let targets = (labels.iter())
+            .map(|depth| self.branch_target(*depth))
             .collect::<Result<_>>()?;
-        let default = self.branch_target(
-            default,
-            Fixup {
-                op,
-                entry: labels.len(),
-            },
-        )?;
-        self.emit(Op::BrTable { targets, default });
+        let default_target = self.branch_target(default)?;
+        let op = self.emitter.emit(Op::BrTable {
+            targets,
+            default: default_target,
+        });
         self.reachable = false;
-        Ok(())
+        self.defer_forward(op, labels.iter().copied().chain([default]))
     }
 }
 
@@ -1005,20 +887,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unreachable_skip_past_the_else_is_never_charged_into() {
-        // The then-body returns, leaving the skip-else br dead; the run
-        // before it stops at the return.
+    fn then_body_jumps_over_the_else_only_if_it_falls_through() {
         assert_eq!(
-            metered(
+            listing(
                 "(module (func (param i32) (result i32)
                    (if (result i32) (local.get 0) (then (return (i32.const 1))) (else (i32.const 2)))))"
             ),
-            (
-                3,
-                "0: local.get 0\n1: i32.eqz\n2: br_if -> 6 [2, else 2]\n3: i32.const 1\n4: return\n\
-                 5: br -> 7 [1] (stack 0, keep 1 values)\n6: i32.const 2\n7: end\n"
-                    .into()
-            )
+            "0: local.get 0\n1: i32.eqz\n2: br_if -> 5 [2, else 2]\n3: i32.const 1\n4: return\n\
+             5: i32.const 2\n6: end\n"
         );
     }
 
