@@ -2,5 +2,7 @@
 # Use conventional commits to determine version bumps
 # feat: -> minor, fix: -> patch, feat!:/fix!: -> major
 changelog_update = true
-git_tag_enable = true
-git_release_enable = true
+git_tag_enable = false
+git_release_enable = false
+publish = false
+dependencies_update = false

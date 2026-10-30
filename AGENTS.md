@@ -235,7 +235,7 @@ beyond what the test shows.
    suite in debug, release and each feature set, the dispatch check, the
    profiling scripts' own tests, the SIMD CommP example and the WASI
    example programs. Prerequisites: stable Rust with the `wasm32-wasip1`
-   target, Node.js and npm, Python 3.9+.
+   target, Node.js and npm, Python 3.12+.
 4. Both engines, always. An instruction, trap or host-boundary behaviour
    that lands in one engine lands in the other in the same change, with the
    pure operation in `ops/` shared between them.
@@ -376,13 +376,14 @@ write the case up before writing code.
 
 ## Commits and pull requests
 
-Conventional commits drive release-plz: on every push to `master` it opens
-or updates a release PR with the version bump and changelog; merging that PR
-tags the release and publishes to crates.io. The commit type is therefore a
-release decision: `feat` for new behaviour, `fix` for corrected behaviour,
-`perf` for a measured speedup, `!` on the type for anything an embedder must
-react to. release-plz sizes the bump from those types and the current `0.x`
-version.
+Conventional commits drive release-plz: pushes to `master` prepare version
+and changelog changes without publication credentials. A separate writer
+validates those metadata changes and opens or refreshes the release PR.
+Merging a PR does not create a release. Only an owner-created protected
+`vMAJOR.MINOR.PATCH` tag starts the publisher; preparation must never tag or
+publish. `feat` means new behaviour, `fix` corrected behaviour, `perf` a
+measured speedup, and `!` anything an embedder must react to. Release-plz
+sizes the bump from those types and the current `0.x` version.
 
 - Subject: imperative, lower case, no trailing period, under 72 characters.
   Scopes in use: `runtime`, `flat`, `compiler`, `bytecode`, `ops`,
