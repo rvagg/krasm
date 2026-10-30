@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "krasm"
-version = "0.0.2"
+version = "0.0.1"
 dependencies = [
  "base64",
  "byteorder",
