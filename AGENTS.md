@@ -385,6 +385,13 @@ publish. `feat` means new behaviour, `fix` corrected behaviour, `perf` a
 measured speedup, and `!` anything an embedder must react to. Release-plz
 sizes the bump from those types and the current `0.x` version.
 
+Leave the release PR open for the owner-operated `release-repo krasm` command.
+The tag workflow runs checks and packages the crate in separate jobs, then
+`rvagg/waxseal/crates` publishes through `publish.yml` and the `release` environment.
+When retrying a run, use "Re-run all jobs": artifact names include the run attempt.
+If a registry version or GitHub draft already exists, inspect it and finish that
+release manually.
+
 - Subject: imperative, lower case, no trailing period, under 72 characters.
   Scopes in use: `runtime`, `flat`, `compiler`, `bytecode`, `ops`,
   `validate`, `parser`, `encoder`, `wat`, `wast`, `wasi`, `store`, `simd`,

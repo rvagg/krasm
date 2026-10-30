@@ -4,27 +4,95 @@ on:
   push:
     tags: ['v*']
 
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  publish:
-    name: Publish
+  package:
+    if: github.repository == 'rvagg/krasm' && github.ref_type == 'tag' && github.actor == 'rvagg'
     runs-on: ubuntu-latest
-    environment: release
+    timeout-minutes: 60
     permissions:
-      id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Rust
+      - name: Checkout approved tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          [[ "$GITHUB_REF" == "refs/tags/$tag" && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse "$GITHUB_REF^{commit}")" == "$GITHUB_SHA" ]]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+          python3 -I - "$tag" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+          package = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]
+          if package["name"] != "krasm" or package["version"] != sys.argv[1][1:]:
+              raise SystemExit("Cargo package name or version differs from the release tag")
+          PY
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-
-      - name: Authenticate with crates.io
-        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-        id: auth
-
-      - name: Publish to crates.io
-        run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Package crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          cargo package --locked
+          mkdir release-files
+          cp "target/package/krasm-${tag#v}.crate" release-files/
+      - name: Retain release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+          if-no-files-found: error
+          retention-days: 7
+  build:
+    if: github.repository == 'rvagg/krasm' && github.ref_type == 'tag' && github.actor == 'rvagg'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout approved tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-wasip1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Run checks
+        run: ./check.sh
+  publish:
+    needs: [package, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Publish release with Waxseal
+        uses: rvagg/waxseal/crates@09a823e7674972627353251f8bf596c6c2e6c940 # v0.2.0
