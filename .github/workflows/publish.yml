@@ -95,4 +95,4 @@ jobs:
       attestations: write
     steps:
       - name: Publish release with Waxseal
-        uses: rvagg/waxseal/crates@af598b158eb070bdbf899e7203d99f67733b01e4 # v0.2.2
+        uses: rvagg/waxseal/crates@668cf6879f78ac536e9552fa0595f183b794a8be # v0.2.3
