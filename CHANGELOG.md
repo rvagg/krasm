@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/rvagg/krasm/compare/v0.0.5...v0.0.6) - 2026-11-02
+
+### Other
+
+- *(deps)* bump rstest from 0.27.0 to 0.28.0 ([#64](https://github.com/rvagg/krasm/pull/64))
+- *(deps)* bump the cargo-minor-patch group with 2 updates ([#63](https://github.com/rvagg/krasm/pull/63))
+- *(deps)* bump the github-actions-minor-patch group with 6 updates ([#62](https://github.com/rvagg/krasm/pull/62))
+
 ## [0.0.5](https://github.com/rvagg/krasm/compare/v0.0.4...v0.0.5) - 2026-10-31
 
 ### Other
