@@ -30,11 +30,11 @@ jobs:
         with:
           toolchain: stable
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
           tool: cargo-semver-checks@0.51.0
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
+        uses: cargo-bins/cargo-binstall@5885714d0a40a14b2535c6ffc051fd8e49aa9665 # v1.27.0
         env:
           BINSTALL_VERSION: 1.26.0
       - name: Install release-plz
