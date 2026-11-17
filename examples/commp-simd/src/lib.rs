@@ -241,9 +241,9 @@ impl Stack {
         let mut concat = [0u8; 64];
         let lowest = n.trailing_zeros() as usize;
         let mut acc = compute_node_into(&self.nodes[lowest], &get_zero_comm(lowest + 1), &mut concat);
-        for level in lowest + 1..top {
+        for (level, node) in self.nodes.iter().enumerate().take(top).skip(lowest + 1) {
             acc = if n >> level & 1 == 1 {
-                compute_node_into(&self.nodes[level], &acc, &mut concat)
+                compute_node_into(node, &acc, &mut concat)
             } else {
                 compute_node_into(&acc, &get_zero_comm(level + 1), &mut concat)
             };
