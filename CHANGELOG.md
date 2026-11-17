@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/rvagg/krasm/compare/v0.0.6...v0.0.7) - 2026-11-17
+
+### Other
+
+- *(deps)* bump the github-actions-minor-patch group across 1 directory with 2 updates ([#68](https://github.com/rvagg/krasm/pull/68))
+- *(deps)* bump the github-actions-minor-patch group with 2 updates ([#66](https://github.com/rvagg/krasm/pull/66))
+
 ## [0.0.6](https://github.com/rvagg/krasm/compare/v0.0.5...v0.0.6) - 2026-11-02
 
 ### Other
